@@ -4,6 +4,7 @@ import { DateUtil } from '../common/utils/date.util';
 import { LATE_GRACE_MINUTES, WEEKLY_LATE_THRESHOLD_MIN } from '../common/constants';
 import { AttendanceStatus } from '@prisma/client';
 import dayjs from 'dayjs';
+import type { Dayjs } from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
 import isoWeek from 'dayjs/plugin/isoWeek';
@@ -267,7 +268,7 @@ export class AttendanceService {
   // PRIVATE HELPERS
   // ──────────────────────────────────────────
 
-  private async findTodaySchedule(employeeId: string, workDate: Date, eventTz: dayjs.Dayjs) {
+  private async findTodaySchedule(employeeId: string, workDate: Date, eventTz: Dayjs) {
     // Try today's schedule first
     let schedule = await this.prisma.schedule.findUnique({
       where: { employeeId_date: { employeeId, date: workDate } },

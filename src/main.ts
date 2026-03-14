@@ -1,9 +1,15 @@
+// Node.js 18 da global.crypto yo'q — @nestjs/schedule v6 uchun polyfill
+if (!global.crypto) {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  (global as any).crypto = require('crypto').webcrypto;
+}
+
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
 import { AllExceptionsFilter } from './common/filters/http-exception.filter';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
-import * as compression from 'compression';
+import compression from 'compression';
 import { join } from 'path';
 import { NestExpressApplication } from '@nestjs/platform-express';
 

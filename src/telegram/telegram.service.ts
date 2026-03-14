@@ -4,7 +4,6 @@ import { PrismaService } from '../prisma/prisma.service';
 import { Telegraf } from 'telegraf';
 import { AttendanceStatus } from '@prisma/client';
 import dayjs from 'dayjs';
-import 'dayjs/locale/uz';
 
 const TZ = process.env.TIMEZONE || 'Asia/Tashkent';
 

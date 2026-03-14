@@ -10,7 +10,7 @@ import { UpdateEmployeeDto } from './dto/update-employee.dto';
 import { QueryEmployeeDto } from './dto/query-employee.dto';
 import * as bcrypt from 'bcrypt';
 import * as ExcelJS from 'exceljs';
-import * as csv from 'csv-parser';
+import csv from 'csv-parser';
 import { Readable } from 'stream';
 
 @Injectable()

@@ -9,6 +9,7 @@ import {
 import { DateUtil } from '../common/utils/date.util';
 import { ShiftType, ScheduleStatus } from '@prisma/client';
 import dayjs from 'dayjs';
+import type { Dayjs } from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
 import isoWeek from 'dayjs/plugin/isoWeek';
@@ -213,7 +214,7 @@ export class SchedulesService {
   // ──────────────────────────────────────────
   // HELPER: resolve week of month (0-indexed)
   // ──────────────────────────────────────────
-  private getWeekOfMonth(date: dayjs.Dayjs, monthStart: dayjs.Dayjs): number {
+  private getWeekOfMonth(date: Dayjs, monthStart: Dayjs): number {
     const dayOfMonth = date.date();
     return Math.floor((dayOfMonth - 1) / 7);
   }

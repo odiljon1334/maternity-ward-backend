@@ -1,7 +1,10 @@
 import dayjs from 'dayjs';
+import type { Dayjs } from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
 import isoWeek from 'dayjs/plugin/isoWeek';
+
+export type { Dayjs };
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -10,19 +13,19 @@ dayjs.extend(isoWeek);
 export const TZ = process.env.TIMEZONE || 'Asia/Tashkent';
 
 export class DateUtil {
-  static now(): dayjs.Dayjs {
+  static now(): Dayjs {
     return dayjs().tz(TZ);
   }
 
-  static toTz(date: Date | string): dayjs.Dayjs {
+  static toTz(date: Date | string): Dayjs {
     return dayjs(date).tz(TZ);
   }
 
-  static startOfDay(date: Date | string | dayjs.Dayjs): Date {
+  static startOfDay(date: Date | string | Dayjs): Date {
     return dayjs(date).tz(TZ).startOf('day').toDate();
   }
 
-  static endOfDay(date: Date | string | dayjs.Dayjs): Date {
+  static endOfDay(date: Date | string | Dayjs): Date {
     return dayjs(date).tz(TZ).endOf('day').toDate();
   }
 
