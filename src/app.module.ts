@@ -15,6 +15,7 @@ import { PayrollModule } from './payroll/payroll.module';
 import { TelegramModule } from './telegram/telegram.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { CronModule } from './cron/cron.module';
+import { ReportsModule } from './reports/reports.module';
 
 @Module({
   imports: [
@@ -42,6 +43,7 @@ import { CronModule } from './cron/cron.module';
     TelegramModule,
     DashboardModule,
     CronModule,
+    ReportsModule,
   ],
 })
 export class AppModule {}
