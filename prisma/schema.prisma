@@ -1,0 +1,345 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────
+
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+  DIRECTOR
+  DEPARTMENT_HEAD
+  EMPLOYEE
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum Gender {
+  MALE
+  FEMALE
+}
+
+enum ShiftType {
+  DAYTIME   // 08:00 – 20:00
+  NIGHTTIME // 20:00 – 08:00 (overnight)
+  CUSTOM
+}
+
+enum ScheduleStatus {
+  WORKING
+  DAY_OFF
+  SICK
+  VACATION
+  HOLIDAY
+}
+
+enum AttendanceStatus {
+  PRESENT        // o'z vaqtida keldi
+  LATE           // 15 minutdan ko'p kechikdi
+  ABSENT         // kelmadi
+  EARLY_LEAVE    // erta ketdi
+  LATE_EARLY     // kech keldi VA erta ketdi
+}
+
+enum PayrollStatus {
+  DRAFT
+  APPROVED
+  PAID
+}
+
+enum Lang {
+  uz
+  ru
+  en
+  kaa
+}
+
+// ─────────────────────────────────────────────
+// USERS
+// ─────────────────────────────────────────────
+
+model User {
+  id           String     @id @default(uuid())
+  username     String     @unique
+  passwordHash String
+  role         UserRole
+  status       UserStatus @default(ACTIVE)
+  lang         Lang       @default(uz)
+  employee     Employee?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─────────────────────────────────────────────
+// DEPARTMENTS (Bo'limlar)
+// ─────────────────────────────────────────────
+
+model Department {
+  id          String  @id @default(uuid())
+  name        String
+  description String?
+  code        String  @unique
+
+  employees Employee[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─────────────────────────────────────────────
+// POSITIONS (Lavozimlar)
+// ─────────────────────────────────────────────
+
+model Position {
+  id   String @id @default(uuid())
+  name String @unique
+
+  employees Employee[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─────────────────────────────────────────────
+// EMPLOYEES (Hodimlar)
+// ─────────────────────────────────────────────
+
+model Employee {
+  id           String  @id @default(uuid())
+  employeeNo   String  @unique   // Hikvision face terminal ID
+  fullName     String
+  gender       Gender
+  phone        String?
+  email        String?
+  photoUrl     String?           // enroll pic
+  baseSalary   Decimal @db.Decimal(12, 2)
+
+  departmentId String
+  department   Department @relation(fields: [departmentId], references: [id])
+
+  positionId   String
+  position     Position   @relation(fields: [positionId], references: [id])
+
+  userId       String?    @unique
+  user         User?      @relation(fields: [userId], references: [id])
+
+  telegramChatId String?  // hodimning o'z Telegram chat ID
+
+  hiredAt      DateTime  @default(now())
+  firedAt      DateTime?
+
+  schedules    Schedule[]
+  attendances  AttendanceRecord[]
+  payrolls     PayrollRecord[]
+  weeklyStats  WeeklyAttendanceStat[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─────────────────────────────────────────────
+// SHIFT TEMPLATES (Smen shablonlari)
+// ─────────────────────────────────────────────
+
+model ShiftTemplate {
+  id          String    @id @default(uuid())
+  name        String    @unique
+  type        ShiftType
+  startTime   String               // "08:00"
+  endTime     String               // "20:00"
+  isOvernight Boolean  @default(false)
+  durationH   Int
+
+  // Kechikish policy
+  graceMinutes   Int    @default(15)  // 15 min kechikish kechirimladi
+
+  schedules      Schedule[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─────────────────────────────────────────────
+// SCHEDULES (Oylik grafik)
+// ─────────────────────────────────────────────
+
+model Schedule {
+  id          String         @id @default(uuid())
+  employeeId  String
+  employee    Employee       @relation(fields: [employeeId], references: [id])
+
+  shiftId     String?
+  shift       ShiftTemplate? @relation(fields: [shiftId], references: [id])
+
+  date        DateTime
+  status      ScheduleStatus @default(WORKING)
+  note        String?
+
+  attendance  AttendanceRecord?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([employeeId, date])
+}
+
+// ─────────────────────────────────────────────
+// ATTENDANCE RECORDS (Davomat)
+// ─────────────────────────────────────────────
+
+model AttendanceRecord {
+  id         String @id @default(uuid())
+
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id])
+
+  scheduleId String? @unique
+  schedule   Schedule? @relation(fields: [scheduleId], references: [id])
+
+  deviceId         String?
+  rawCheckInTime   DateTime?
+  rawCheckOutTime  DateTime?
+
+  checkIn          DateTime?
+  checkOut         DateTime?
+  expectedCheckIn  DateTime
+  expectedCheckOut DateTime
+
+  status           AttendanceStatus @default(ABSENT)
+
+  lateMinutes      Int  @default(0)
+  earlyLeaveMin    Int  @default(0)
+  overtimeMinutes  Int  @default(0)
+
+  workDate    DateTime
+  note        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([employeeId, workDate])
+}
+
+// ─────────────────────────────────────────────
+// WEEKLY ATTENDANCE STAT
+// Har hafta summary: kechikish >= 2 soat → kesish
+// ─────────────────────────────────────────────
+
+model WeeklyAttendanceStat {
+  id           String   @id @default(uuid())
+  employeeId   String
+  employee     Employee @relation(fields: [employeeId], references: [id])
+
+  weekStart    DateTime
+  weekEnd      DateTime
+
+  totalLateMin    Int   @default(0)
+  totalEarlyMin   Int   @default(0)
+  totalOvertime   Int   @default(0)
+  daysWorked      Int   @default(0)
+  daysAbsent      Int   @default(0)
+
+  // 2 soat (120 min) dan oshgan kechikish
+  penaltyLateMin  Int   @default(0)
+  deductionAmount Decimal @default(0) @db.Decimal(12, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([employeeId, weekStart])
+}
+
+// ─────────────────────────────────────────────
+// PAYROLL (Oylik maosh)
+// ─────────────────────────────────────────────
+
+model PayrollRecord {
+  id         String @id @default(uuid())
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id])
+
+  month      Int
+  year       Int
+
+  baseSalary       Decimal @db.Decimal(12, 2)
+  totalWorkDays    Int     @default(0)
+  totalAbsences    Int     @default(0)
+  totalLateMin     Int     @default(0)
+  totalEarlyMin    Int     @default(0)
+  totalOvertimeMin Int     @default(0)
+
+  absenceDeduction    Decimal @default(0) @db.Decimal(12, 2)
+  lateDeduction       Decimal @default(0) @db.Decimal(12, 2)
+  earlyLeaveDeduction Decimal @default(0) @db.Decimal(12, 2)
+
+  overtimeBonus    Decimal @default(0) @db.Decimal(12, 2)
+  manualBonus      Decimal @default(0) @db.Decimal(12, 2)
+  manualDeduction  Decimal @default(0) @db.Decimal(12, 2)
+
+  netSalary Decimal @db.Decimal(12, 2)
+  status    PayrollStatus @default(DRAFT)
+  note      String?
+
+  approvedAt DateTime?
+  paidAt     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([employeeId, month, year])
+}
+
+// ─────────────────────────────────────────────
+// SYSTEM SETTINGS
+// ─────────────────────────────────────────────
+
+model SystemSettings {
+  id    String @id @default(uuid())
+  key   String @unique
+  value String
+
+  updatedAt DateTime @updatedAt
+}
+
+// ─────────────────────────────────────────────
+// TELEGRAM SUBSCRIPTIONS
+// ─────────────────────────────────────────────
+
+model TelegramSubscription {
+  id         String   @id @default(uuid())
+  chatId     String   @unique
+  username   String?
+  role       UserRole @default(DIRECTOR)
+  isActive   Boolean  @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─────────────────────────────────────────────
+// AUDIT LOGS
+// ─────────────────────────────────────────────
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String?
+  action    String
+  entity    String
+  entityId  String?
+  details   Json?
+  ip        String?
+
+  createdAt DateTime @default(now())
+}
