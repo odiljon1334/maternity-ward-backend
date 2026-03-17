@@ -13,6 +13,7 @@ datasource db {
 
 enum UserRole {
   SUPER_ADMIN
+  ASSISTANT_ADMIN
   ADMIN
   DIRECTOR
   DEPARTMENT_HEAD
@@ -45,11 +46,11 @@ enum ScheduleStatus {
 }
 
 enum AttendanceStatus {
-  PRESENT        // o'z vaqtida keldi
-  LATE           // 15 minutdan ko'p kechikdi
-  ABSENT         // kelmadi
-  EARLY_LEAVE    // erta ketdi
-  LATE_EARLY     // kech keldi VA erta ketdi
+  PRESENT
+  LATE
+  ABSENT
+  EARLY_LEAVE
+  LATE_EARLY
 }
 
 enum PayrollStatus {
@@ -65,6 +66,51 @@ enum Lang {
   kaa
 }
 
+enum NotificationType {
+  PAYMENT
+  SYSTEM
+  ALERT
+}
+
+enum PaymentType {
+  MONTHLY
+  ANNUAL
+  OTHER
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  OVERDUE
+}
+
+// ─────────────────────────────────────────────
+// HOSPITAL (Tug'ruq xona — tenant)
+// ─────────────────────────────────────────────
+
+model Hospital {
+  id       String  @id @default(uuid())
+  name     String                      // "1-son tug'ruq xona"
+  address  String?
+  phone    String?
+  code     String  @unique             // "TUG-01"
+  logoUrl  String?
+  isActive  Boolean @default(true)
+  isBlocked Boolean @default(false)   // Manual admin blok
+
+  users         User[]
+  employees     Employee[]
+  departments   Department[]
+  positions     Position[]
+  shifts        ShiftTemplate[]
+  telegramSubs  TelegramSubscription[]
+  notifications Notification[]
+  payments      Payment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
 // ─────────────────────────────────────────────
 // USERS
 // ─────────────────────────────────────────────
@@ -76,6 +122,11 @@ model User {
   role         UserRole
   status       UserStatus @default(ACTIVE)
   lang         Lang       @default(uz)
+
+  // SUPER_ADMIN uchun null, boshqalari uchun majburiy
+  hospitalId   String?
+  hospital     Hospital?  @relation(fields: [hospitalId], references: [id])
+
   employee     Employee?
 
   createdAt DateTime @default(now())
@@ -83,48 +134,65 @@ model User {
 }
 
 // ─────────────────────────────────────────────
-// DEPARTMENTS (Bo'limlar)
+// DEPARTMENTS
 // ─────────────────────────────────────────────
 
 model Department {
   id          String  @id @default(uuid())
   name        String
   description String?
-  code        String  @unique
+  code        String
 
-  employees Employee[]
+  hospitalId  String
+  hospital    Hospital @relation(fields: [hospitalId], references: [id])
+
+  employees   Employee[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@unique([hospitalId, code])
 }
 
 // ─────────────────────────────────────────────
-// POSITIONS (Lavozimlar)
+// POSITIONS
 // ─────────────────────────────────────────────
 
 model Position {
   id   String @id @default(uuid())
-  name String @unique
+  name String
 
-  employees Employee[]
+  hospitalId String
+  hospital   Hospital @relation(fields: [hospitalId], references: [id])
+
+  employees  Employee[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@unique([hospitalId, name])
 }
 
 // ─────────────────────────────────────────────
-// EMPLOYEES (Hodimlar)
+// EMPLOYEES
 // ─────────────────────────────────────────────
 
 model Employee {
-  id           String  @id @default(uuid())
-  employeeNo   String  @unique   // Hikvision face terminal ID
-  fullName     String
-  gender       Gender
-  phone        String?
-  email        String?
-  photoUrl     String?           // enroll pic
-  baseSalary   Decimal @db.Decimal(12, 2)
+  id         String  @id @default(uuid())
+
+  // Hikvision terminal ID — rasm yuklananda auto-generate bo'ladi
+  // null bo'lishi mumkin (hali enroll qilinmagan)
+  employeeNo String? @unique
+
+  fullName   String
+  gender     Gender
+  phone      String?
+  email      String?
+  photoUrl   String?
+  baseSalary Decimal @db.Decimal(12, 2)
+
+  hospitalId   String
+  hospital     Hospital   @relation(fields: [hospitalId], references: [id])
 
   departmentId String
   department   Department @relation(fields: [departmentId], references: [id])
@@ -132,71 +200,84 @@ model Employee {
   positionId   String
   position     Position   @relation(fields: [positionId], references: [id])
 
-  userId       String?    @unique
-  user         User?      @relation(fields: [userId], references: [id])
+  userId         String?  @unique
+  user           User?    @relation(fields: [userId], references: [id])
 
-  telegramChatId String?  // hodimning o'z Telegram chat ID
+  telegramChatId String?
 
-  hiredAt      DateTime  @default(now())
-  firedAt      DateTime?
+  hiredAt  DateTime  @default(now())
+  firedAt  DateTime?
 
-  schedules    Schedule[]
-  attendances  AttendanceRecord[]
-  payrolls     PayrollRecord[]
-  weeklyStats  WeeklyAttendanceStat[]
+  schedules   Schedule[]
+  attendances AttendanceRecord[]
+  payrolls    PayrollRecord[]
+  weeklyStats WeeklyAttendanceStat[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([hospitalId])
+  @@index([hospitalId, firedAt])
 }
 
 // ─────────────────────────────────────────────
-// SHIFT TEMPLATES (Smen shablonlari)
+// SHIFT TEMPLATES
 // ─────────────────────────────────────────────
 
 model ShiftTemplate {
   id          String    @id @default(uuid())
-  name        String    @unique
+  name        String
   type        ShiftType
-  startTime   String               // "08:00"
-  endTime     String               // "20:00"
-  isOvernight Boolean  @default(false)
+  startTime   String
+  endTime     String
+  isOvernight Boolean   @default(false)
   durationH   Int
 
-  // Kechikish policy
-  graceMinutes   Int    @default(15)  // 15 min kechikish kechirimladi
+  graceMinutes  Int @default(15)
 
-  schedules      Schedule[]
+  // Tushlik vaqti (ixtiyoriy)
+  lunchStart    String?        // "12:00"
+  lunchEnd      String?        // "13:00"
+  lunchGraceMin Int @default(10) // tushlikdan qaytishda grace period
+
+  hospitalId String
+  hospital   Hospital @relation(fields: [hospitalId], references: [id])
+
+  schedules  Schedule[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@unique([hospitalId, name])
 }
 
 // ─────────────────────────────────────────────
-// SCHEDULES (Oylik grafik)
+// SCHEDULES
 // ─────────────────────────────────────────────
 
 model Schedule {
-  id          String         @id @default(uuid())
-  employeeId  String
-  employee    Employee       @relation(fields: [employeeId], references: [id])
+  id         String         @id @default(uuid())
+  employeeId String
+  employee   Employee       @relation(fields: [employeeId], references: [id])
 
-  shiftId     String?
-  shift       ShiftTemplate? @relation(fields: [shiftId], references: [id])
+  shiftId    String?
+  shift      ShiftTemplate? @relation(fields: [shiftId], references: [id])
 
-  date        DateTime
-  status      ScheduleStatus @default(WORKING)
-  note        String?
+  date       DateTime
+  status     ScheduleStatus @default(WORKING)
+  note       String?
 
-  attendance  AttendanceRecord?
+  attendance AttendanceRecord?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([employeeId, date])
+  @@index([date])
 }
 
 // ─────────────────────────────────────────────
-// ATTENDANCE RECORDS (Davomat)
+// ATTENDANCE RECORDS
 // ─────────────────────────────────────────────
 
 model AttendanceRecord {
@@ -208,51 +289,54 @@ model AttendanceRecord {
   scheduleId String? @unique
   schedule   Schedule? @relation(fields: [scheduleId], references: [id])
 
-  deviceId         String?
-  rawCheckInTime   DateTime?
-  rawCheckOutTime  DateTime?
+  deviceId        String?
+  rawCheckInTime  DateTime?
+  rawCheckOutTime DateTime?
 
   checkIn          DateTime?
   checkOut         DateTime?
   expectedCheckIn  DateTime
   expectedCheckOut DateTime
 
-  status           AttendanceStatus @default(ABSENT)
+  // Tushlik break (ixtiyoriy)
+  lunchOut     DateTime?   // tushlikka chiqqan vaqt
+  lunchIn      DateTime?   // tushlikdan qaytgan vaqt
+  lunchLateMin Int @default(0)  // tushlikdan kech qaytish minutlari
 
-  lateMinutes      Int  @default(0)
-  earlyLeaveMin    Int  @default(0)
-  overtimeMinutes  Int  @default(0)
+  status          AttendanceStatus @default(ABSENT)
+  lateMinutes     Int  @default(0)
+  earlyLeaveMin   Int  @default(0)
+  overtimeMinutes Int  @default(0)
 
-  workDate    DateTime
-  note        String?
+  workDate DateTime
+  note     String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@unique([employeeId, workDate])   // bir xodim, bir kunda — faqat bitta yozuv
   @@index([employeeId, workDate])
 }
 
 // ─────────────────────────────────────────────
 // WEEKLY ATTENDANCE STAT
-// Har hafta summary: kechikish >= 2 soat → kesish
 // ─────────────────────────────────────────────
 
 model WeeklyAttendanceStat {
-  id           String   @id @default(uuid())
-  employeeId   String
-  employee     Employee @relation(fields: [employeeId], references: [id])
+  id         String   @id @default(uuid())
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id])
 
-  weekStart    DateTime
-  weekEnd      DateTime
+  weekStart DateTime
+  weekEnd   DateTime
 
-  totalLateMin    Int   @default(0)
-  totalEarlyMin   Int   @default(0)
-  totalOvertime   Int   @default(0)
-  daysWorked      Int   @default(0)
-  daysAbsent      Int   @default(0)
+  totalLateMin  Int @default(0)
+  totalEarlyMin Int @default(0)
+  totalOvertime Int @default(0)
+  daysWorked    Int @default(0)
+  daysAbsent    Int @default(0)
 
-  // 2 soat (120 min) dan oshgan kechikish
-  penaltyLateMin  Int   @default(0)
+  penaltyLateMin  Int     @default(0)
   deductionAmount Decimal @default(0) @db.Decimal(12, 2)
 
   createdAt DateTime @default(now())
@@ -262,16 +346,16 @@ model WeeklyAttendanceStat {
 }
 
 // ─────────────────────────────────────────────
-// PAYROLL (Oylik maosh)
+// PAYROLL
 // ─────────────────────────────────────────────
 
 model PayrollRecord {
-  id         String @id @default(uuid())
+  id         String   @id @default(uuid())
   employeeId String
   employee   Employee @relation(fields: [employeeId], references: [id])
 
-  month      Int
-  year       Int
+  month Int
+  year  Int
 
   baseSalary       Decimal @db.Decimal(12, 2)
   totalWorkDays    Int     @default(0)
@@ -284,13 +368,13 @@ model PayrollRecord {
   lateDeduction       Decimal @default(0) @db.Decimal(12, 2)
   earlyLeaveDeduction Decimal @default(0) @db.Decimal(12, 2)
 
-  overtimeBonus    Decimal @default(0) @db.Decimal(12, 2)
-  manualBonus      Decimal @default(0) @db.Decimal(12, 2)
-  manualDeduction  Decimal @default(0) @db.Decimal(12, 2)
+  overtimeBonus   Decimal @default(0) @db.Decimal(12, 2)
+  manualBonus     Decimal @default(0) @db.Decimal(12, 2)
+  manualDeduction Decimal @default(0) @db.Decimal(12, 2)
 
-  netSalary Decimal @db.Decimal(12, 2)
-  status    PayrollStatus @default(DRAFT)
-  note      String?
+  netSalary  Decimal @db.Decimal(12, 2)
+  status     PayrollStatus @default(DRAFT)
+  note       String?
 
   approvedAt DateTime?
   paidAt     DateTime?
@@ -299,18 +383,24 @@ model PayrollRecord {
   updatedAt DateTime @updatedAt
 
   @@unique([employeeId, month, year])
+  @@index([month, year])
 }
 
 // ─────────────────────────────────────────────
-// SYSTEM SETTINGS
+// SYSTEM SETTINGS (global yoki hospital-level)
 // ─────────────────────────────────────────────
 
 model SystemSettings {
   id    String @id @default(uuid())
-  key   String @unique
+  key   String
   value String
 
+  // null = global sozlama, set = hospital-specific
+  hospitalId String?
+
   updatedAt DateTime @updatedAt
+
+  @@unique([key, hospitalId])
 }
 
 // ─────────────────────────────────────────────
@@ -318,14 +408,19 @@ model SystemSettings {
 // ─────────────────────────────────────────────
 
 model TelegramSubscription {
-  id         String   @id @default(uuid())
-  chatId     String   @unique
-  username   String?
-  role       UserRole @default(DIRECTOR)
-  isActive   Boolean  @default(true)
+  id       String   @id @default(uuid())
+  chatId   String
+  username String?
+  role     UserRole @default(DIRECTOR)
+  isActive Boolean  @default(true)
+
+  hospitalId String?
+  hospital   Hospital? @relation(fields: [hospitalId], references: [id])
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@unique([chatId, hospitalId])
 }
 
 // ─────────────────────────────────────────────
@@ -333,13 +428,59 @@ model TelegramSubscription {
 // ─────────────────────────────────────────────
 
 model AuditLog {
-  id        String   @id @default(uuid())
-  userId    String?
-  action    String
-  entity    String
-  entityId  String?
-  details   Json?
-  ip        String?
+  id         String  @id @default(uuid())
+  userId     String?
+  hospitalId String?
+  action     String
+  entity     String
+  entityId   String?
+  details    Json?
+  ip         String?
 
   createdAt DateTime @default(now())
+
+  @@index([hospitalId, createdAt])
+  @@index([userId, createdAt])
+  @@index([entity, entityId])
+}
+
+// ─────────────────────────────────────────────
+// NOTIFICATIONS (in-app, SUPER_ADMIN uchun)
+// ─────────────────────────────────────────────
+
+model Notification {
+  id         String           @id @default(uuid())
+  type       NotificationType @default(PAYMENT)
+  title      String
+  message    String
+  isRead     Boolean          @default(false)
+
+  hospitalId String?
+  hospital   Hospital?        @relation(fields: [hospitalId], references: [id], onDelete: Cascade)
+
+  metadata   Json?
+  createdAt  DateTime         @default(now())
+
+  @@index([hospitalId, isRead])
+}
+
+// ─────────────────────────────────────────────
+// PAYMENTS (kasalxona to'lovlari)
+// ─────────────────────────────────────────────
+
+model Payment {
+  id         String        @id @default(uuid())
+  hospitalId String
+  hospital   Hospital      @relation(fields: [hospitalId], references: [id], onDelete: Cascade)
+  payerName  String
+  amount     Decimal       @db.Decimal(12, 2)
+  type       PaymentType   @default(MONTHLY)
+  period     String?                           // "2026-03" — YYYY-MM
+  status     PaymentStatus @default(PAID)
+  paidAt     DateTime      @default(now())
+  note       String?
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+
+  @@index([hospitalId, period])
 }

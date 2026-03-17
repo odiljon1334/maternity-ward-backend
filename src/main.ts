@@ -10,13 +10,23 @@ import { AppModule } from './app.module';
 import { AllExceptionsFilter } from './common/filters/http-exception.filter';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
 import compression from 'compression';
+import helmet from 'helmet';
 import { join } from 'path';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import * as express from 'express';
 
 async function bootstrap() {
+  // bodyParser: false — raw body o'qish uchun (Hikvision multipart)
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     logger: ['error', 'warn', 'log'],
+    bodyParser: false,
   });
+
+  // Security headers
+  app.use(helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' }, // uploads uchun
+    contentSecurityPolicy: false, // API server uchun kerak emas
+  }));
 
   // CORS
   app.enableCors({
@@ -30,6 +40,16 @@ async function bootstrap() {
 
   // Compression
   app.use(compression());
+
+  // ✅ Hikvision webhook — raw Buffer (multipart/form-data, xml, json)
+  app.use(
+    /^\/(api\/v1\/hikvision|hikvision)/,
+    express.raw({ type: '*/*', limit: '25mb' }),
+  );
+
+  // JSON + urlencoded — barcha boshqa routelar uchun
+  app.use(express.json({ limit: '50mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
   // Static files (uploaded photos)
   app.useStaticAssets(join(process.cwd(), 'uploads'), { prefix: '/uploads' });

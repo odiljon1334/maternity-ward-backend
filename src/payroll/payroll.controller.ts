@@ -2,10 +2,12 @@ import {
   Body, Controller, Get, Param, Post, Put, Query,
   UseGuards, Res, StreamableFile,
 } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import { PayrollService } from './payroll.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
 import { Response } from 'express';
 
@@ -15,14 +17,22 @@ export class PayrollController {
   constructor(private readonly service: PayrollService) {}
 
   @Get()
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
-  findAll(@Query('month') month: string, @Query('year') year: string) {
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR, UserRole.ASSISTANT_ADMIN)
+  findAll(
+    @CurrentUser('hospitalId') jwtHospitalId: string | null,
+    @Query('month') month: string,
+    @Query('year') year: string,
+    @Query('targetHospitalId') targetHospitalId?: string,
+    @Query('departmentId') departmentId?: string,
+  ) {
     const now = new Date();
-    return this.service.findAll(+month || now.getMonth() + 1, +year || now.getFullYear());
+    const hospitalId = targetHospitalId || jwtHospitalId || undefined;
+    return this.service.findAll(+month || now.getMonth() + 1, +year || now.getFullYear(), hospitalId, departmentId);
   }
 
   @Get('preview/:employeeId')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  @SkipThrottle({ default: true, login: true })
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR, UserRole.ASSISTANT_ADMIN)
   preview(
     @Param('employeeId') employeeId: string,
     @Query('month') month: string,
@@ -33,7 +43,8 @@ export class PayrollController {
   }
 
   @Get(':employeeId')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  @SkipThrottle({ default: true, login: true })
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR, UserRole.ASSISTANT_ADMIN)
   findOne(
     @Param('employeeId') employeeId: string,
     @Query('month') month: string,
@@ -44,9 +55,14 @@ export class PayrollController {
   }
 
   @Post('generate')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN)
-  generate(@Body() body: { month: number; year: number }) {
-    return this.service.generateMonthlyPayroll(body.month, body.year);
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR, UserRole.ASSISTANT_ADMIN)
+  generate(
+    @CurrentUser('hospitalId') jwtHospitalId: string | null,
+    @Body() body: { month: number; year: number; departmentId?: string },
+    @Query('targetHospitalId') targetHospitalId?: string,
+  ) {
+    const hospitalId = targetHospitalId || jwtHospitalId || undefined;
+    return this.service.generateMonthlyPayroll(body.month, body.year, hospitalId, body.departmentId);
   }
 
   @Post('save/:employeeId')
@@ -71,16 +87,20 @@ export class PayrollController {
   }
 
   @Get('export/excel')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR, UserRole.ASSISTANT_ADMIN)
   async exportExcel(
+    @CurrentUser('hospitalId') jwtHospitalId: string | null,
     @Query('month') month: string,
     @Query('year') year: string,
+    @Query('targetHospitalId') targetHospitalId: string,
+    @Query('departmentId') departmentId: string,
     @Res({ passthrough: true }) res: Response,
   ): Promise<StreamableFile> {
     const now = new Date();
     const m = +month || now.getMonth() + 1;
     const y = +year || now.getFullYear();
-    const buffer = await this.service.exportExcel(m, y);
+    const hospitalId = targetHospitalId || jwtHospitalId || undefined;
+    const buffer = await this.service.exportExcel(m, y, hospitalId, departmentId);
     const filename = `maosh_${m}_${y}.xlsx`;
     res.set({
       'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

@@ -16,18 +16,20 @@ export class ReportsService {
     month: number;
     year: number;
     departmentId?: string;
+    hospitalId?: string;
   }): Promise<ExcelJS.Buffer> {
-    const { month, year, departmentId } = query;
+    const { month, year, departmentId, hospitalId } = query;
 
     const startDate = new Date(year, month - 1, 1);
     const endDate = new Date(year, month, 0, 23, 59, 59);
     const daysInMonth = endDate.getDate();
 
-    // Hodimlar
+    // Hodimlar — davomat bo'lmasa ham barchasi ko'rinadi
     const employees = await this.prisma.employee.findMany({
       where: {
         firedAt: null,
         ...(departmentId ? { departmentId } : {}),
+        ...(hospitalId ? { hospitalId } : {}),
       },
       include: {
         department: { select: { name: true } },
@@ -195,31 +197,47 @@ export class ReportsService {
     month: number;
     year: number;
     departmentId?: string;
+    hospitalId?: string;
   }): Promise<ExcelJS.Buffer> {
-    const { month, year, departmentId } = query;
+    const { month, year, departmentId, hospitalId } = query;
 
-    const records = await this.prisma.payrollRecord.findMany({
-      where: {
-        month,
-        year,
-        employee: {
-          firedAt: null,
-          ...(departmentId ? { departmentId } : {}),
-        },
-      },
+    const empWhere: any = {
+      firedAt: null,
+      ...(departmentId ? { departmentId } : {}),
+      ...(hospitalId ? { hospitalId } : {}),
+    };
+
+    // Barcha hodimlarni olish (payroll bo'lmasa ham)
+    const employees = await this.prisma.employee.findMany({
+      where: empWhere,
       include: {
-        employee: {
-          include: {
-            department: { select: { name: true } },
-            position: { select: { name: true } },
-          },
-        },
+        department: { select: { name: true } },
+        position: { select: { name: true } },
       },
-      orderBy: [
-        { employee: { department: { name: 'asc' } } },
-        { employee: { fullName: 'asc' } },
-      ],
+      orderBy: [{ department: { name: 'asc' } }, { fullName: 'asc' }],
     });
+
+    // Payroll yozuvi bo'lgan hodimlar uchun to'liq ma'lumot
+    const payrollRecords = await this.prisma.payrollRecord.findMany({
+      where: { month, year, employee: empWhere },
+      select: {
+        employeeId: true, totalWorkDays: true, totalAbsences: true, totalLateMin: true,
+        baseSalary: true, absenceDeduction: true, lateDeduction: true, earlyLeaveDeduction: true,
+        overtimeBonus: true, manualBonus: true, manualDeduction: true, netSalary: true, status: true,
+      },
+    });
+    const payMap = new Map(payrollRecords.map(p => [p.employeeId, p]));
+
+    // Barcha hodimlar uchun yozuv (payroll bo'lmasa bo'sh qiymatlar bilan)
+    const records = employees.map(emp => ({
+      employee: emp,
+      ...( payMap.get(emp.id) ?? {
+        totalWorkDays: 0, totalAbsences: 0, totalLateMin: 0,
+        baseSalary: emp.baseSalary ?? 0, absenceDeduction: 0, lateDeduction: 0,
+        earlyLeaveDeduction: 0, overtimeBonus: 0, manualBonus: 0, manualDeduction: 0,
+        netSalary: emp.baseSalary ?? 0, status: 'DRAFT',
+      }),
+    }));
 
     const workbook = new ExcelJS.Workbook();
     const monthName = dayjs(`${year}-${month}-01`).format('MMMM YYYY');
@@ -317,41 +335,54 @@ export class ReportsService {
   async generateWeeklyExcel(query: {
     weekStart: string; // YYYY-MM-DD (dushanba)
     departmentId?: string;
+    hospitalId?: string;
   }): Promise<ExcelJS.Buffer> {
     const start = dayjs(query.weekStart).startOf('day').toDate();
     const end = dayjs(query.weekStart).add(6, 'day').endOf('day').toDate();
 
+    const empWhere: any = {
+      firedAt: null,
+      ...(query.departmentId ? { departmentId: query.departmentId } : {}),
+      ...(query.hospitalId ? { hospitalId: query.hospitalId } : {}),
+    };
+
+    // 1) Barcha hodimlarni olish
+    const employees = await this.prisma.employee.findMany({
+      where: empWhere,
+      include: {
+        department: { select: { name: true } },
+        position: { select: { name: true } },
+      },
+      orderBy: [{ department: { name: 'asc' } }, { fullName: 'asc' }],
+    });
+
+    // 2) Hafta davomidagi mavjud davomat yozuvlari
     const records = await this.prisma.attendanceRecord.findMany({
       where: {
         workDate: { gte: start, lte: end },
-        employee: {
-          firedAt: null,
-          ...(query.departmentId ? { departmentId: query.departmentId } : {}),
-        },
+        employee: empWhere,
       },
-      include: {
-        employee: {
-          include: {
-            department: { select: { name: true } },
-            position: { select: { name: true } },
-          },
-        },
-      },
-      orderBy: [
-        { employee: { department: { name: 'asc' } } },
-        { workDate: 'asc' },
-      ],
+      orderBy: [{ employee: { fullName: 'asc' } }, { workDate: 'asc' }],
     });
+
+    // Map: employeeId → Map<dateStr, record>
+    const recMap = new Map<string, Map<string, typeof records[0]>>();
+    for (const r of records) {
+      const ds = dayjs(r.workDate).format('YYYY-MM-DD');
+      if (!recMap.has(r.employeeId)) recMap.set(r.employeeId, new Map());
+      recMap.get(r.employeeId)!.set(ds, r);
+    }
 
     const workbook = new ExcelJS.Workbook();
     const label = `${dayjs(start).format('DD.MM')}-${dayjs(end).format('DD.MM.YYYY')}`;
     const sheet = workbook.addWorksheet(`Haftalik ${label}`);
 
-    const cols = [
-      '№', 'F.I.O', "Bo'lim", 'Sana', 'Smen',
-      'Kelish vaqti', 'Ketish vaqti', 'Holat',
-      'Kechikish (min)', 'Erta ketish (min)', 'Qo\'shimcha ish (min)',
-    ];
+    // Ustunlar — hafta kunlari
+    const weekDays: string[] = [];
+    for (let i = 0; i < 7; i++) weekDays.push(dayjs(start).add(i, 'day').format('YYYY-MM-DD'));
+
+    const dayLabels = weekDays.map((d) => dayjs(d).format('ddd DD.MM'));
+    const cols = ['№', 'F.I.O', "Bo'lim", 'Lavozim', ...dayLabels, 'Keldi', 'Kelmadi', 'Kechikdi'];
 
     const headerRow = sheet.addRow(cols);
     headerRow.eachCell((cell) => {
@@ -361,36 +392,65 @@ export class ReportsService {
       cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
     });
     headerRow.height = 35;
-    [4, 26, 18, 12, 14, 14, 14, 14, 14, 14, 14].forEach((w, i) => {
-      sheet.getColumn(i + 1).width = w;
-    });
 
-    const fmt = (d?: Date | null) => d ? dayjs(d).format('HH:mm') : '—';
-    const statusUz: Record<string, string> = {
-      PRESENT: 'Keldi', LATE: 'Kechikdi', ABSENT: 'Kelmadi',
-      EARLY_LEAVE: 'Erta ketdi', LATE_EARLY: 'Kech+Erta',
+    const statusSymbol: Record<string, string> = {
+      PRESENT: '✓', LATE: 'K', ABSENT: '—', EARLY_LEAVE: 'E', LATE_EARLY: 'KE',
+    };
+    const statusColor: Record<string, string> = {
+      PRESENT: 'FFE8F5E9', LATE: 'FFFFF9C4', ABSENT: 'FFFFEBEE', EARLY_LEAVE: 'FFFFF3E0', LATE_EARLY: 'FFFCE4EC',
     };
 
-    records.forEach((r, idx) => {
-      const row = sheet.addRow([
-        idx + 1,
-        r.employee.fullName,
-        r.employee.department.name,
-        dayjs(r.workDate).format('DD.MM.YYYY (ddd)'),
-        dayjs(r.expectedCheckIn).hour() < 14 ? 'Kunduzgi' : 'Kechki',
-        fmt(r.checkIn),
-        fmt(r.checkOut),
-        statusUz[r.status] || r.status,
-        r.lateMinutes || 0,
-        r.earlyLeaveMin || 0,
-        r.overtimeMinutes || 0,
-      ]);
+    employees.forEach((emp, idx) => {
+      const dayMap = recMap.get(emp.id) ?? new Map();
+      let came = 0, absent = 0, late = 0;
 
-      row.eachCell((cell, c) => {
-        cell.alignment = { horizontal: c === 2 ? 'left' : 'center', vertical: 'middle' };
+      const dayCells = weekDays.map((ds) => {
+        const dow = dayjs(ds).day(); // 0=Sun, 6=Sat
+        if (dow === 0 || dow === 6) return { val: '○', color: 'FFF5F5F5' };
+        const rec = dayMap.get(ds);
+        if (!rec) { absent++; return { val: '—', color: 'FFFFEBEE' }; }
+        if (rec.status === 'PRESENT' || rec.status === 'EARLY_LEAVE' || rec.status === 'LATE' || rec.status === 'LATE_EARLY') came++;
+        if (rec.status === 'ABSENT') absent++;
+        if (rec.status === 'LATE' || rec.status === 'LATE_EARLY') late++;
+        return { val: statusSymbol[rec.status] || '?', color: statusColor[rec.status] || 'FFFFFFFF' };
+      });
+
+      const row = sheet.addRow([idx + 1, emp.fullName, emp.department.name, emp.position.name, ...dayCells.map(c => c.val), came, absent, late]);
+
+      dayCells.forEach((c, di) => {
+        const cell = row.getCell(5 + di);
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: c.color } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
         cell.border = { top: { style: 'hair' }, left: { style: 'hair' }, bottom: { style: 'hair' }, right: { style: 'hair' } };
       });
+
+      [1, 2, 3, 4].forEach((c) => {
+        row.getCell(c).alignment = { horizontal: c === 2 ? 'left' : 'center', vertical: 'middle' };
+        row.getCell(c).border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+      });
+      // Summary cells
+      [5 + 7, 5 + 8, 5 + 9].forEach((c) => {
+        row.getCell(c).alignment = { horizontal: 'center', vertical: 'middle' };
+        row.getCell(c).font = { bold: true };
+      });
+      if (idx % 2 === 0) {
+        [1, 2, 3, 4].forEach(c => {
+          row.getCell(c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFAFAFA' } };
+        });
+      }
       row.height = 18;
+    });
+
+    // Legend
+    const lgRow = sheet.addRow([]);
+    lgRow.getCell(1).value = 'Belgilar:';
+    lgRow.getCell(1).font = { bold: true };
+    lgRow.getCell(2).value = '✓=Keldi  K=Kechikdi  E=Erta ketdi  —=Kelmadi  ○=Dam olish';
+    sheet.mergeCells(lgRow.number, 2, lgRow.number, 8);
+
+    // Column widths
+    [4, 26, 18, 18, ...Array(7).fill(10), 7, 7, 7].forEach((w, i) => {
+      sheet.getColumn(i + 1).width = w;
     });
 
     return workbook.xlsx.writeBuffer() as Promise<ExcelJS.Buffer>;

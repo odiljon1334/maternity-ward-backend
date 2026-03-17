@@ -6,7 +6,7 @@ const prisma = new PrismaClient();
 async function main() {
   console.log('🌱 Seeding database...\n');
 
-  // ─── 1. Super Admin ───────────────────────────────────────
+  // ─── 1. Super Admin (no hospital) ─────────────────────────
   const adminHash = await bcrypt.hash('Admin@12345', 10);
   const superAdmin = await prisma.user.upsert({
     where: { username: 'superadmin' },
@@ -18,43 +18,67 @@ async function main() {
       status: 'ACTIVE',
     },
   });
-  console.log(`✅ Super Admin: ${superAdmin.username}`);
+  console.log(`✅ Super Admin: ${superAdmin.username} / Admin@12345`);
 
-  // ─── 2. Default Departments ───────────────────────────────
-  const departments = [
-    { name: 'Tug\'ruq xona', code: 'MATERNITY', description: 'Asosiy tug\'ruq bo\'limi' },
-    { name: 'Reanimatsiya', code: 'ICU', description: 'Intensiv davolash bo\'limi' },
-    { name: 'Akusherlik bo\'limi', code: 'OBSTETRICS', description: 'Akusherlik va ginekologiya' },
-    { name: 'Yangi tug\'ilganlar', code: 'NEONATAL', description: 'Chaqaloqlar bo\'limi' },
-    { name: 'Ma\'muriyat', code: 'ADMIN', description: 'Ma\'muriy xodimlar' },
+  // ─── 2. Hospitals ─────────────────────────────────────────
+  const hospitalData = [
+    { name: "1-son Tug'ruq xona", code: 'TUG-01', address: 'Toshkent sh., Chilonzor tumani', phone: '+998711234501' },
+    { name: "2-son Tug'ruq xona", code: 'TUG-02', address: 'Toshkent sh., Yunusobod tumani', phone: '+998711234502' },
+    { name: "3-son Tug'ruq xona", code: 'TUG-03', address: 'Toshkent sh., Mirzo Ulugbek tumani', phone: '+998711234503' },
   ];
 
-  for (const dept of departments) {
-    await prisma.department.upsert({
-      where: { code: dept.code },
+  const hospitals: Record<string, string> = {};
+  for (const h of hospitalData) {
+    const hosp = await prisma.hospital.upsert({
+      where: { code: h.code },
       update: {},
-      create: dept,
+      create: { ...h, isActive: true },
     });
+    hospitals[h.code] = hosp.id;
+    console.log(`✅ Hospital: ${h.name} (${h.code})`);
+  }
+
+  const demoId = hospitals['TUG-01'];
+
+  // ─── 3. Departments for demo hospital (TUG-01) ────────────
+  const departments = [
+    { name: "Tug'ruq xona", code: 'MATERNITY', description: "Asosiy tug'ruq bo'limi" },
+    { name: 'Reanimatsiya',  code: 'ICU',       description: 'Intensiv davolash bo\'limi' },
+    { name: "Akusherlik bo'limi", code: 'OBSTETRICS', description: 'Akusherlik va ginekologiya' },
+    { name: "Yangi tug'ilganlar", code: 'NEONATAL',   description: "Chaqaloqlar bo'limi" },
+    { name: "Ma'muriyat",   code: 'ADMIN',      description: "Ma'muriy xodimlar" },
+  ];
+
+  const deptIds: Record<string, string> = {};
+  for (const dept of departments) {
+    const d = await prisma.department.upsert({
+      where: { hospitalId_code: { hospitalId: demoId, code: dept.code } },
+      update: {},
+      create: { ...dept, hospitalId: demoId },
+    });
+    deptIds[dept.code] = d.id;
     console.log(`✅ Department: ${dept.name}`);
   }
 
-  // ─── 3. Default Positions ─────────────────────────────────
-  const positions = [
+  // ─── 4. Positions for demo hospital (TUG-01) ──────────────
+  const positionNames = [
     'Direktor', 'Bosh vrach', 'Vrach-akusher', 'Vrach-ginekolog',
     'Vrach-neonatolog', 'Bosh hamshira', 'Hamshira', 'Akusherka',
-    'Laborant', 'Registrator', 'Xo\'jalik bo\'limi', 'Qorovul',
+    'Laborant', 'Registrator', "Xo'jalik bo'limi", 'Qorovul',
   ];
 
-  for (const name of positions) {
-    await prisma.position.upsert({
-      where: { name },
+  const posIds: Record<string, string> = {};
+  for (const name of positionNames) {
+    const p = await prisma.position.upsert({
+      where: { hospitalId_name: { hospitalId: demoId, name } },
       update: {},
-      create: { name },
+      create: { name, hospitalId: demoId },
     });
+    posIds[name] = p.id;
     console.log(`✅ Position: ${name}`);
   }
 
-  // ─── 4. Shift Templates ───────────────────────────────────
+  // ─── 5. Shift Templates for demo hospital (TUG-01) ────────
   const shifts = [
     {
       name: 'Kunduzgi smen',
@@ -78,69 +102,66 @@ async function main() {
 
   for (const shift of shifts) {
     await prisma.shiftTemplate.upsert({
-      where: { name: shift.name },
+      where: { hospitalId_name: { hospitalId: demoId, name: shift.name } },
       update: shift,
-      create: shift,
+      create: { ...shift, hospitalId: demoId },
     });
     console.log(`✅ Shift: ${shift.name} (${shift.startTime}–${shift.endTime})`);
   }
 
-  // ─── 5. System Settings ──────────────────────────────────
+  // ─── 6. System Settings (global) ──────────────────────────
   const settings = [
-    { key: 'late_grace_minutes', value: '15' },
+    { key: 'late_grace_minutes',       value: '15' },
     { key: 'weekly_late_threshold_min', value: '120' },
-    { key: 'overtime_rate', value: '1.5' },
-    { key: 'hospital_name', value: 'Tug\'ruq xona' },
-    { key: 'hospital_city', value: 'Toshkent' },
+    { key: 'overtime_rate',            value: '1.5' },
   ];
 
   for (const s of settings) {
-    await prisma.systemSettings.upsert({
-      where: { key: s.key },
-      update: { value: s.value },
-      create: s,
+    const existing = await prisma.systemSettings.findFirst({
+      where: { key: s.key, hospitalId: null },
     });
+    if (existing) {
+      await prisma.systemSettings.update({ where: { id: existing.id }, data: { value: s.value } });
+    } else {
+      await prisma.systemSettings.create({ data: { key: s.key, value: s.value, hospitalId: null } });
+    }
   }
-  console.log(`✅ System settings configured`);
+  console.log('✅ System settings configured');
 
-  // ─── 6. Demo Director ────────────────────────────────────
-  const deptMaternity = await prisma.department.findUnique({ where: { code: 'MATERNITY' } });
-  const posDirector = await prisma.position.findUnique({ where: { name: 'Direktor' } });
+  // ─── 7. Demo Director for TUG-01 ──────────────────────────
+  const dirHash = await bcrypt.hash('Director@123', 10);
+  const dirUser = await prisma.user.upsert({
+    where: { username: 'director1' },
+    update: {},
+    create: {
+      username: 'director1',
+      passwordHash: dirHash,
+      role: 'DIRECTOR',
+      status: 'ACTIVE',
+      hospitalId: demoId,
+    },
+  });
 
-  if (deptMaternity && posDirector) {
-    const dirHash = await bcrypt.hash('Director@123', 10);
-    const dirUser = await prisma.user.upsert({
-      where: { username: 'director' },
-      update: {},
-      create: {
-        username: 'director',
-        passwordHash: dirHash,
-        role: 'DIRECTOR',
-        status: 'ACTIVE',
-      },
-    });
-
-    await prisma.employee.upsert({
-      where: { employeeNo: 'EMP001' },
-      update: {},
-      create: {
-        employeeNo: 'EMP001',
-        fullName: 'Aziz Karimov',
-        gender: 'MALE',
-        phone: '+998901234567',
-        departmentId: deptMaternity.id,
-        positionId: posDirector.id,
-        baseSalary: 5_000_000,
-        userId: dirUser.id,
-      },
-    });
-    console.log(`✅ Demo Director: ${dirUser.username} / Director@123`);
-  }
+  await prisma.employee.upsert({
+    where: { userId: dirUser.id },
+    update: {},
+    create: {
+      fullName: 'Aziz Karimov',
+      gender: 'MALE',
+      phone: '+998901234567',
+      departmentId: deptIds['ADMIN'],
+      positionId: posIds['Direktor'],
+      baseSalary: 5_000_000,
+      hospitalId: demoId,
+      userId: dirUser.id,
+    },
+  });
+  console.log(`✅ Demo Director: director1 / Director@123 (TUG-01)`);
 
   console.log('\n✅ Seeding completed!\n');
   console.log('🔑 Login credentials:');
-  console.log('   superadmin / Admin@12345  (SUPER_ADMIN)');
-  console.log('   director   / Director@123 (DIRECTOR)\n');
+  console.log('   superadmin / Admin@12345  (SUPER_ADMIN — no hospital)');
+  console.log('   director1  / Director@123 (DIRECTOR — 1-son Tug\'ruq xona)\n');
 }
 
 main()

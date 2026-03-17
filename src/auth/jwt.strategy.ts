@@ -16,14 +16,19 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
   }
 
-  async validate(payload: { sub: string; role: string; username: string }) {
+  async validate(payload: { sub: string; role: string; username: string; hospitalId?: string }) {
     const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },
-      select: { id: true, role: true, status: true, username: true },
+      select: { id: true, role: true, status: true, username: true, hospitalId: true },
     });
     if (!user || user.status !== 'ACTIVE') {
       throw new UnauthorizedException('Token yaroqsiz');
     }
-    return { sub: user.id, role: user.role, username: user.username };
+    return {
+      sub: user.id,
+      role: user.role,
+      username: user.username,
+      hospitalId: user.hospitalId ?? null,
+    };
   }
 }

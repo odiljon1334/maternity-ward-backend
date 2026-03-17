@@ -9,24 +9,44 @@ import { QueryEmployeeDto } from './dto/query-employee.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import { Response } from 'express';
+import { AuditLogService } from '../audit-log/audit-log.service';
+
+/** SUPER_ADMIN uchun: JWT'dagi hospitalId null bo'lsa, query'dan targetHospitalId oladi */
+function resolveHospitalId(jwtHospId: string | null, targetHospId?: string): string {
+  return jwtHospId || targetHospId || '';
+}
 
 @Controller('employees')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class EmployeesController {
-  constructor(private readonly service: EmployeesService) {}
+  constructor(
+    private readonly service: EmployeesService,
+    private readonly auditLog: AuditLogService,
+  ) {}
 
   @Get()
-  findAll(@Query() query: QueryEmployeeDto) {
-    return this.service.findAll(query);
+  findAll(
+    @Query() query: QueryEmployeeDto,
+    @CurrentUser('hospitalId') hospitalId: string,
+    @Query('targetHospitalId') targetHospitalId?: string,
+  ) {
+    return this.service.findAll(query, resolveHospitalId(hospitalId, targetHospitalId));
   }
 
   @Get('export/excel')
   @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
-  async exportExcel(@Res({ passthrough: true }) res: Response): Promise<StreamableFile> {
-    const buffer = await this.service.exportExcel();
+  async exportExcel(
+    @Res({ passthrough: true }) res: Response,
+    @CurrentUser('hospitalId') hospitalId: string,
+    @Query('targetHospitalId') targetHospitalId?: string,
+  ): Promise<StreamableFile> {
+    const hId = resolveHospitalId(hospitalId, targetHospitalId);
+    const buffer = await this.service.exportExcel(hId);
     const filename = `hodimlar_${new Date().toISOString().slice(0, 10)}.xlsx`;
     res.set({
       'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -37,64 +57,172 @@ export class EmployeesController {
 
   @Get('export/csv-template')
   async downloadCsvTemplate(@Res() res: Response) {
-    const csv = this.service.getCsvTemplate();
+    const csvData = this.service.getCsvTemplate();
     res.set({
       'Content-Type': 'text/csv; charset=utf-8',
       'Content-Disposition': 'attachment; filename="hodimlar_shablon.csv"',
     });
-    res.send(csv);
+    res.send(csvData);
+  }
+
+  @Get('export/enroll-pic')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  async enrollPicZip(
+    @Res({ passthrough: true }) res: Response,
+    @CurrentUser('hospitalId') hospitalId: string,
+    @Query('targetHospitalId') targetHospitalId?: string,
+  ): Promise<StreamableFile> {
+    const hId = resolveHospitalId(hospitalId, targetHospitalId);
+    const buffer = await this.service.enrollPicZip(hId);
+    const filename = `enroll_pic_${new Date().toISOString().slice(0, 10)}.zip`;
+    res.set({
+      'Content-Type': 'application/zip',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+    });
+    return new StreamableFile(buffer);
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.service.findOne(id);
+  findOne(
+    @Param('id') id: string,
+    @CurrentUser('hospitalId') hospitalId: string,
+    @Query('targetHospitalId') targetHospitalId?: string,
+  ) {
+    return this.service.findOne(id, resolveHospitalId(hospitalId, targetHospitalId));
   }
 
   @Post()
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN)
-  create(
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  async create(
     @Body() dto: CreateEmployeeDto,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('hospitalId') hospitalId: string,
+    @Query('targetHospitalId') targetHospitalId?: string,
     @Body('username') username?: string,
     @Body('password') password?: string,
   ) {
-    return this.service.create(dto, username, password);
+    const hId = resolveHospitalId(hospitalId, targetHospitalId);
+    const result = await this.service.create(dto, hId, username, password);
+    this.auditLog.log({
+      userId,
+      hospitalId: hId,
+      action: 'CREATE',
+      entity: 'Employee',
+      entityId: result?.id,
+      details: { fullName: dto.fullName },
+    });
+    return result;
   }
 
   @Put(':id')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN)
-  update(@Param('id') id: string, @Body() dto: UpdateEmployeeDto) {
-    return this.service.update(id, dto);
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  async update(
+    @Param('id') id: string,
+    @Body() dto: UpdateEmployeeDto,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('hospitalId') hospitalId: string,
+    @Query('targetHospitalId') targetHospitalId?: string,
+  ) {
+    const hId = resolveHospitalId(hospitalId, targetHospitalId);
+    const result = await this.service.update(id, dto, hId);
+    this.auditLog.log({
+      userId,
+      hospitalId: hId,
+      action: 'UPDATE',
+      entity: 'Employee',
+      entityId: id,
+    });
+    return result;
   }
 
   @Post(':id/photo')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN)
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
   @UseInterceptors(FileInterceptor('photo'))
   async uploadPhoto(
     @Param('id') id: string,
     @UploadedFile() file: Express.Multer.File,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('hospitalId') hospitalId: string,
+    @Query('targetHospitalId') targetHospitalId?: string,
   ) {
-    // Save file and return URL (simplified - in production use S3/local storage)
     const photoUrl = `/uploads/${file.filename}`;
-    return this.service.updatePhoto(id, photoUrl);
+    const hId = resolveHospitalId(hospitalId, targetHospitalId);
+    const result = await this.service.updatePhoto(id, photoUrl, hId);
+    this.auditLog.log({ userId, hospitalId: hId, action: 'UPDATE_PHOTO', entity: 'Employee', entityId: id });
+    return result;
   }
 
   @Post('import/csv')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN)
-  @UseInterceptors(FileInterceptor('file'))
-  importCsv(@UploadedFile() file: Express.Multer.File) {
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
+  async importCsv(
+    @UploadedFile() file: Express.Multer.File,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('hospitalId') hospitalId: string,
+    @Query('targetHospitalId') targetHospitalId?: string,
+  ) {
     if (!file) throw new Error('Fayl yuklanmadi');
-    return this.service.importCsv(file.buffer);
+    const hId = resolveHospitalId(hospitalId, targetHospitalId);
+    const result = await this.service.importCsv(file.buffer, hId);
+    this.auditLog.log({
+      userId,
+      hospitalId: hId,
+      action: 'IMPORT_CSV',
+      entity: 'Employee',
+      details: { imported: result?.imported, filename: file.originalname },
+    });
+    return result;
   }
 
   @Put(':id/fire')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN)
-  fire(@Param('id') id: string, @Body('firedAt') firedAt?: string) {
-    return this.service.fire(id, firedAt);
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  async fire(
+    @Param('id') id: string,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('hospitalId') hospitalId: string,
+    @Query('targetHospitalId') targetHospitalId?: string,
+    @Body('firedAt') firedAt?: string,
+  ) {
+    const hId = resolveHospitalId(hospitalId, targetHospitalId);
+    const result = await this.service.fire(id, hId, firedAt);
+    this.auditLog.log({
+      userId,
+      hospitalId: hId,
+      action: 'FIRE',
+      entity: 'Employee',
+      entityId: id,
+      details: { firedAt },
+    });
+    return result;
   }
 
   @Delete(':id')
-  @Roles(UserRole.SUPER_ADMIN)
-  remove(@Param('id') id: string) {
-    return this.service.remove(id);
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN)
+  async remove(
+    @Param('id') id: string,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('hospitalId') hospitalId: string,
+    @Query('targetHospitalId') targetHospitalId?: string,
+  ) {
+    const hId = resolveHospitalId(hospitalId, targetHospitalId);
+    const result = await this.service.remove(id, hId);
+    this.auditLog.log({
+      userId,
+      hospitalId: hId,
+      action: 'DELETE',
+      entity: 'Employee',
+      entityId: id,
+    });
+    return result;
+  }
+
+  /** EMP-XXXXXX formatli eski employee numberlarni raqamli formatga o'tkazish */
+  @Post('fix-employee-numbers')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  fixEmployeeNumbers(
+    @CurrentUser('hospitalId') hospitalId: string,
+    @Query('targetHospitalId') targetHospitalId?: string,
+  ) {
+    return this.service.fixLegacyEmployeeNumbers(resolveHospitalId(hospitalId, targetHospitalId));
   }
 }

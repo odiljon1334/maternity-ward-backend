@@ -6,61 +6,36 @@ import { CreateShiftDto } from './dto/create-shift.dto';
 export class ShiftsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  findAll() {
-    return this.prisma.shiftTemplate.findMany({ orderBy: { type: 'asc' } });
+  findAll(hospitalId: string | null) {
+    return this.prisma.shiftTemplate.findMany({
+      where: hospitalId ? { hospitalId } : {},
+      orderBy: { type: 'asc' },
+    });
   }
 
-  async findOne(id: string) {
-    const shift = await this.prisma.shiftTemplate.findUnique({ where: { id } });
+  async findOne(id: string, hospitalId: string | null) {
+    const shift = await this.prisma.shiftTemplate.findFirst({
+      where: hospitalId ? { id, hospitalId } : { id },
+    });
     if (!shift) throw new NotFoundException('Smen topilmadi');
     return shift;
   }
 
-  async create(dto: CreateShiftDto) {
-    const exists = await this.prisma.shiftTemplate.findUnique({ where: { name: dto.name } });
+  async create(dto: CreateShiftDto, hospitalId: string) {
+    const exists = await this.prisma.shiftTemplate.findFirst({
+      where: { hospitalId, name: dto.name },
+    });
     if (exists) throw new ConflictException('Bu nomli smen mavjud');
-    return this.prisma.shiftTemplate.create({ data: dto });
+    return this.prisma.shiftTemplate.create({ data: { ...dto, hospitalId } });
   }
 
-  async update(id: string, dto: Partial<CreateShiftDto>) {
-    await this.findOne(id);
+  async update(id: string, dto: Partial<CreateShiftDto>, hospitalId: string) {
+    await this.findOne(id, hospitalId);
     return this.prisma.shiftTemplate.update({ where: { id }, data: dto });
   }
 
-  async remove(id: string) {
-    await this.findOne(id);
+  async remove(id: string, hospitalId: string) {
+    await this.findOne(id, hospitalId);
     return this.prisma.shiftTemplate.delete({ where: { id } });
-  }
-
-  async seed() {
-    const shifts = [
-      {
-        name: 'Kunduzgi smen',
-        type: 'DAYTIME' as const,
-        startTime: '08:00',
-        endTime: '20:00',
-        isOvernight: false,
-        durationH: 12,
-        graceMinutes: 15,
-      },
-      {
-        name: 'Kechki smen',
-        type: 'NIGHTTIME' as const,
-        startTime: '20:00',
-        endTime: '08:00',
-        isOvernight: true,
-        durationH: 12,
-        graceMinutes: 15,
-      },
-    ];
-
-    for (const s of shifts) {
-      await this.prisma.shiftTemplate.upsert({
-        where: { name: s.name },
-        update: s,
-        create: s,
-      });
-    }
-    return { message: 'Default smenlar yaratildi' };
   }
 }

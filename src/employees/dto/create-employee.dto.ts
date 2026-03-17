@@ -3,17 +3,17 @@ import {
   IsEnum,
   IsOptional,
   IsNumber,
-  IsPositive,
-  IsPhoneNumber,
-  IsEmail,
   IsDateString,
+  ValidateIf,
+  IsEmail,
 } from 'class-validator';
 import { Gender } from '@prisma/client';
-import { Type } from 'class-transformer';
+import { Type, Transform } from 'class-transformer';
 
 export class CreateEmployeeDto {
+  @IsOptional()
   @IsString()
-  employeeNo: string;
+  employeeNo?: string;
 
   @IsString()
   fullName: string;
@@ -25,8 +25,11 @@ export class CreateEmployeeDto {
   @IsString()
   phone?: string;
 
+  // Email: only validate if provided and non-empty
   @IsOptional()
-  @IsEmail()
+  @ValidateIf((o) => o.email && o.email.trim() !== '')
+  @IsEmail({}, { message: 'Email noto\'g\'ri formatda' })
+  @Transform(({ value }) => (value === '' ? undefined : value))
   email?: string;
 
   @IsString()
@@ -35,10 +38,11 @@ export class CreateEmployeeDto {
   @IsString()
   positionId: string;
 
+  // baseSalary — optional, default 0 (director biriktiradi keyinroq)
+  @IsOptional()
   @Type(() => Number)
   @IsNumber()
-  @IsPositive()
-  baseSalary: number;
+  baseSalary?: number;
 
   @IsOptional()
   @IsString()

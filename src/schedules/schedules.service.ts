@@ -47,12 +47,13 @@ export class SchedulesService {
   // ──────────────────────────────────────────
   // GET all employees schedules for a day
   // ──────────────────────────────────────────
-  async getDailySchedule(date: string) {
+  async getDailySchedule(date: string, hospitalId?: string | null) {
     const day = DateUtil.startOfDay(date);
     return this.prisma.schedule.findMany({
       where: {
         date: day,
         status: { in: ['WORKING'] },
+        ...(hospitalId && { employee: { hospitalId } }),
       },
       include: {
         employee: { include: { department: true, position: true } },
@@ -64,10 +65,34 @@ export class SchedulesService {
   }
 
   // ──────────────────────────────────────────
+  // GET monthly schedules (all employees)
+  // ──────────────────────────────────────────
+  async getMonthlySchedules(month: number, year: number, hospitalId?: string | null) {
+    const start = DateUtil.startOfMonth(year, month);
+    const end = DateUtil.endOfMonth(year, month);
+
+    return this.prisma.schedule.findMany({
+      where: {
+        date: { gte: start, lte: end },
+        ...(hospitalId && { employee: { hospitalId } }),
+      },
+      include: {
+        shift: true,
+        employee: { include: { department: true, position: true } },
+      },
+      orderBy: [{ employee: { fullName: 'asc' } }, { date: 'asc' }],
+    });
+  }
+
+  // ──────────────────────────────────────────
   // GENERATE schedule by pattern
   // ──────────────────────────────────────────
   async generate(dto: GenerateScheduleDto) {
-    const { employeeId, month, year, pattern, startsWith, customWeeks } = dto;
+    const { employeeId, month, year, pattern, customWeeks } = dto;
+    // FIXED_DAY/FIXED_NIGHT uchun startsWith shart emas; rotating uchun default DAYTIME
+    const startsWith: ShiftType = dto.startsWith ?? 'DAYTIME';
+    // Default: Dushanba–Juma (1–5). 0=Yak, 1=Du, 2=Se, 3=Ch, 4=Pa, 5=Sha, 6=Yak
+    const workDaysSet = new Set(dto.workDays ?? [1, 2, 3, 4, 5]);
 
     // Verify employee exists
     const emp = await this.prisma.employee.findUnique({ where: { id: employeeId } });
@@ -75,8 +100,10 @@ export class SchedulesService {
 
     // Get shift templates
     const [dayShift, nightShift] = await Promise.all([
-      this.prisma.shiftTemplate.findFirst({ where: { type: 'DAYTIME' } }),
-      this.prisma.shiftTemplate.findFirst({ where: { type: 'NIGHTTIME' } }),
+      this.prisma.shiftTemplate.findFirst({ where: { hospitalId: emp.hospitalId, type: 'DAYTIME' } })
+        .then(s => s || this.prisma.shiftTemplate.findFirst({ where: { type: 'DAYTIME' } })),
+      this.prisma.shiftTemplate.findFirst({ where: { hospitalId: emp.hospitalId, type: 'NIGHTTIME' } })
+        .then(s => s || this.prisma.shiftTemplate.findFirst({ where: { type: 'NIGHTTIME' } })),
     ]);
     if (!dayShift || !nightShift) {
       throw new BadRequestException('Avval smenlarni yarating (POST /shifts/seed)');
@@ -89,17 +116,18 @@ export class SchedulesService {
 
     let current = start;
     while (current.isBefore(end) || current.isSame(end, 'day')) {
-      const weekOfMonth = this.getWeekOfMonth(current, start);
-      const shiftType = this.resolveShiftForWeek(weekOfMonth, pattern, startsWith, customWeeks);
+      const dayOfWeek = current.day(); // 0=Sun, 1=Mon...6=Sat
 
-      const isSunday = current.day() === 0; // 0 = Sunday
-      if (isSunday) {
+      if (!workDaysSet.has(dayOfWeek)) {
+        // Dam olish kuni
         entries.push({
           date: current.toDate(),
           shiftId: dayShift.id,
           status: 'DAY_OFF',
         });
       } else {
+        const weekOfMonth = this.getWeekOfMonth(current, start);
+        const shiftType = this.resolveShiftForWeek(weekOfMonth, pattern, startsWith, customWeeks);
         const shift = shiftType === 'DAYTIME' ? dayShift : nightShift;
         entries.push({
           date: current.toDate(),
@@ -145,9 +173,22 @@ export class SchedulesService {
   // ──────────────────────────────────────────
   // BULK GENERATE for multiple employees
   // ──────────────────────────────────────────
-  async bulkGenerate(dto: BulkGenerateScheduleDto) {
+  async bulkGenerate(dto: BulkGenerateScheduleDto & { hospitalId?: string | null }) {
+    // Bo'lim yoki kasalxona bo'yicha hodimlarni topish
+    let employeeIds = dto.employeeIds ?? [];
+    if (!employeeIds.length) {
+      const empWhere: any = { firedAt: null };
+      if (dto.departmentId)  empWhere.departmentId = dto.departmentId;
+      if (dto.hospitalId)    empWhere.hospitalId   = dto.hospitalId;
+      if (!dto.departmentId && !dto.hospitalId) {
+        throw new BadRequestException('employeeIds, departmentId yoki hospitalId kerak');
+      }
+      const emps = await this.prisma.employee.findMany({ where: empWhere, select: { id: true } });
+      employeeIds = emps.map(e => e.id);
+    }
+
     const results = [];
-    for (const empId of dto.employeeIds) {
+    for (const empId of employeeIds) {
       try {
         const result = await this.generate({
           employeeId: empId,
@@ -155,6 +196,7 @@ export class SchedulesService {
           year: dto.year,
           pattern: dto.pattern,
           startsWith: dto.startsWith,
+          workDays: dto.workDays,
         });
         results.push({ employeeId: empId, ...result });
       } catch (e) {
@@ -225,20 +267,24 @@ export class SchedulesService {
     startsWith: ShiftType,
     customWeeks?: ShiftType[],
   ): ShiftType {
+    // O'zgarmas smenlar
+    if (pattern === SchedulePattern.FIXED_DAY)   return 'DAYTIME';
+    if (pattern === SchedulePattern.FIXED_NIGHT) return 'NIGHTTIME';
+
     const other: ShiftType = startsWith === 'DAYTIME' ? 'NIGHTTIME' : 'DAYTIME';
 
     if (pattern === SchedulePattern.CUSTOM && customWeeks) {
       return customWeeks[week] || startsWith;
     }
 
-    const patterns: Record<SchedulePattern, ShiftType[]> = {
+    const patterns: Record<string, ShiftType[]> = {
       [SchedulePattern.TWO_TWO]:   [startsWith, startsWith, other, other],
       [SchedulePattern.ONE_ONE]:   [startsWith, other, startsWith, other],
       [SchedulePattern.THREE_ONE]: [startsWith, startsWith, startsWith, other],
       [SchedulePattern.CUSTOM]:    [startsWith, startsWith, startsWith, startsWith],
     };
 
-    const seq = patterns[pattern];
+    const seq = patterns[pattern] ?? [startsWith];
     return seq[week % seq.length];
   }
 }

@@ -1,12 +1,14 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { DateUtil } from '../common/utils/date.util';
+import { isHospitalBlocked } from '../common/utils/payment.util';
 import { OVERTIME_RATE } from '../common/constants';
 import * as ExcelJS from 'exceljs';
 import { PayrollStatus } from '@prisma/client';
 
 @Injectable()
 export class PayrollService {
+  private readonly logger = new Logger(PayrollService.name);
   constructor(private readonly prisma: PrismaService) {}
 
   // ──────────────────────────────────────────
@@ -110,18 +112,45 @@ export class PayrollService {
       preview.netSalary + manualBonus - manualDeduction,
     );
 
+    // scheduledDays, employeeId, month, year — DB modelida yo'q yoki where clause da
+    const {
+      scheduledDays: _s,
+      employeeId: _e,
+      month: _m,
+      year: _y,
+      netSalary: _n,
+      ...dbFields
+    } = preview;
+
+    // Mavjud yozuv statusini tekshiramiz — APPROVED/PAID bo'lsa status ni o'zgartirmaymiz
+    const existing = await this.prisma.payrollRecord.findUnique({
+      where: { employeeId_month_year: { employeeId, month, year } },
+      select: { status: true, manualBonus: true, manualDeduction: true },
+    });
+
+    const keepStatus = existing?.status === 'APPROVED' || existing?.status === 'PAID';
+    const finalStatus = keepStatus ? existing!.status : 'DRAFT';
+
+    // APPROVED/PAID bo'lsa manual bonuslarni ham saqlaymiz
+    const finalBonus = keepStatus ? Number(existing!.manualBonus) : manualBonus;
+    const finalDeduction = keepStatus ? Number(existing!.manualDeduction) : manualDeduction;
+    const finalNet = Math.max(0, preview.netSalary + finalBonus - finalDeduction);
+
     return this.prisma.payrollRecord.upsert({
       where: { employeeId_month_year: { employeeId, month, year } },
       update: {
-        ...preview,
-        manualBonus,
-        manualDeduction,
-        netSalary: netWithManual,
+        ...dbFields,
+        manualBonus: finalBonus,
+        manualDeduction: finalDeduction,
+        netSalary: finalNet,
         note,
-        status: 'DRAFT',
+        status: finalStatus,
       },
       create: {
-        ...preview,
+        employeeId,
+        month,
+        year,
+        ...dbFields,
         manualBonus,
         manualDeduction,
         netSalary: netWithManual,
@@ -134,9 +163,19 @@ export class PayrollService {
   // ──────────────────────────────────────────
   // BULK GENERATE for all employees
   // ──────────────────────────────────────────
-  async generateMonthlyPayroll(month: number, year: number) {
+  async generateMonthlyPayroll(month: number, year: number, hospitalId?: string, departmentId?: string) {
+    // Kasalxona to'lovi OVERDUE bo'lsa — maosh hisoblanmaydi
+    if (hospitalId && await isHospitalBlocked(this.prisma, hospitalId)) {
+      this.logger.warn(`Hospital ${hospitalId} is BLOCKED — payroll generation skipped`);
+      return { month, year, total: 0, blocked: true, results: [] };
+    }
+
+    const where: any = { firedAt: null };
+    if (hospitalId) where.hospitalId = hospitalId;
+    if (departmentId) where.departmentId = departmentId;
+
     const employees = await this.prisma.employee.findMany({
-      where: { firedAt: null },
+      where,
       select: { id: true },
     });
 
@@ -170,9 +209,15 @@ export class PayrollService {
   // ──────────────────────────────────────────
   // GET payroll list
   // ──────────────────────────────────────────
-  async findAll(month: number, year: number) {
+  async findAll(month: number, year: number, hospitalId?: string, departmentId?: string) {
+    const where: any = { month, year };
+    if (hospitalId || departmentId) {
+      where.employee = {};
+      if (hospitalId) where.employee.hospitalId = hospitalId;
+      if (departmentId) where.employee.departmentId = departmentId;
+    }
     return this.prisma.payrollRecord.findMany({
-      where: { month, year },
+      where,
       include: {
         employee: { include: { department: true, position: true } },
       },
@@ -190,8 +235,8 @@ export class PayrollService {
   // ──────────────────────────────────────────
   // EXCEL EXPORT
   // ──────────────────────────────────────────
-  async exportExcel(month: number, year: number): Promise<Buffer> {
-    const records = await this.findAll(month, year);
+  async exportExcel(month: number, year: number, hospitalId?: string, departmentId?: string): Promise<Buffer> {
+    const records = await this.findAll(month, year, hospitalId, departmentId);
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet(`Maosh ${month}-${year}`);
 

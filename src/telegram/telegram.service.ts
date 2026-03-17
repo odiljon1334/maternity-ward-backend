@@ -1,16 +1,64 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
-import { Telegraf } from 'telegraf';
-import { AttendanceStatus } from '@prisma/client';
-import dayjs from 'dayjs';
+import { Telegraf, Markup } from 'telegraf';
+import * as fs from 'fs';
+import * as path from 'path';
+import { formatMinutes, isHospitalBlocked } from '../common/utils/payment.util';
 
 const TZ = process.env.TIMEZONE || 'Asia/Tashkent';
+
+// Max list length before truncating (Telegram 4096 char limit)
+const MAX_LIST = 50;
+
+function nowStr() {
+  return new Date().toLocaleTimeString('uz-UZ', {
+    hour: '2-digit', minute: '2-digit', timeZone: TZ,
+  });
+}
+
+function todayDateStr() {
+  return new Date().toLocaleDateString('uz-UZ', {
+    day: '2-digit', month: '2-digit', year: 'numeric', timeZone: TZ,
+  });
+}
+
+/** Keyboard agar kasalxona ulanmagan bo'lsa */
+function mainKeyboard(linked: boolean) {
+  const rows: ReturnType<typeof Markup.button.callback>[][] = [
+    [
+      Markup.button.callback('📊 Bugungi davomat', 'cmd_today'),
+      Markup.button.callback('⏳ Kelmaganlar', 'cmd_absent'),
+    ],
+    [
+      Markup.button.callback('📈 Haftalik', 'cmd_week'),
+      Markup.button.callback('💰 Oylik', 'cmd_month'),
+    ],
+  ];
+  if (!linked) {
+    rows.push([Markup.button.callback('🔗 Kasalxonani ulash', 'cmd_link')]);
+  }
+  return Markup.inlineKeyboard(rows);
+}
+
+/** Sub-keyboard for today detail */
+function todayDetailKeyboard(hospitalId: string | null) {
+  const hid = hospitalId || 'null';
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback('📋 Kelganlar ro\'yhati', `cmd_came:${hid}`),
+      Markup.button.callback('❌ Kelmaganlar ro\'yhati', `cmd_notcame:${hid}`),
+    ],
+  ]);
+}
 
 @Injectable()
 export class TelegramService implements OnModuleInit {
   private readonly logger = new Logger(TelegramService.name);
   private bot: Telegraf;
+
+  // chatId → waiting for phone number input
+  private pendingLink = new Set<string>();
 
   constructor(
     private readonly config: ConfigService,
@@ -33,80 +81,261 @@ export class TelegramService implements OnModuleInit {
   private setupCommands() {
     const bot = this.bot;
 
-    // /start — register as subscriber
+    // ── /start ────────────────────────────────────────────────────────────────
     bot.start(async (ctx) => {
       const chatId = String(ctx.chat.id);
       const username = ctx.from?.username || ctx.from?.first_name || '';
+      const firstName = ctx.from?.first_name || 'Foydalanuvchi';
 
-      await this.prisma.telegramSubscription.upsert({
-        where: { chatId },
-        update: { isActive: true, username },
-        create: { chatId, username, role: 'DIRECTOR', isActive: true },
+      // Faqat mavjud (linked) subscriptionni yangilaymiz — null yaratmaymiz
+      const existing = await this.prisma.telegramSubscription.findFirst({
+        where: { chatId, hospitalId: { not: null } },
+        orderBy: { createdAt: 'desc' },
       });
 
+      if (existing) {
+        await this.prisma.telegramSubscription.update({
+          where: { id: existing.id },
+          data: { isActive: true, username },
+        });
+      }
+      // Yangi foydalanuvchi uchun subscription yaratmaymiz — ulashganda yaratiladi
+
+      const linked = await this.getLinkedHospital(chatId);
+      const hospitalLine = linked
+        ? `\n🏥 Kasalxona: <b>${linked.name}</b>`
+        : '\n⚠️ Hali kasalxona ulanmagan.';
+
       await ctx.reply(
-        `👋 Salom, ${ctx.from?.first_name}!\n\n` +
-        `🏥 Tug'ruq xona davomat tizimiga xush kelibsiz.\n\n` +
-        `📋 Mavjud buyruqlar:\n` +
-        `/today — Bugungi davomat\n` +
-        `/absent — Kelmagan hodimlar\n` +
-        `/week — Haftalik hisobot\n` +
-        `/month — Oylik hisobot\n` +
-        `/stop — Bildirishnomalarni o'chirish`,
+        `👋 Assalomu alaykum, <b>${firstName}</b>!\n\n` +
+        `MaternityCare — shifoxona davomat monitoring tizimi.` +
+        hospitalLine +
+        `\n\nQuyidagi tugmalardan foydalaning:`,
+        { parse_mode: 'HTML', ...mainKeyboard(!!linked) },
       );
     });
 
-    // /stop — unsubscribe
+    // ── /stop ─────────────────────────────────────────────────────────────────
     bot.command('stop', async (ctx) => {
       await this.prisma.telegramSubscription.updateMany({
         where: { chatId: String(ctx.chat.id) },
         data: { isActive: false },
       });
-      await ctx.reply('❌ Bildirishnomalar o\'chirildi. /start buyrug\'i bilan qayta ulaning.');
+      await ctx.reply('🔕 Bildirishnomalar o\'chirildi.\n/start buyrug\'i bilan qayta ulaning.');
     });
 
-    // /today — today's attendance summary
+    // ── Text commands ─────────────────────────────────────────────────────────
     bot.command('today', async (ctx) => {
-      const text = await this.buildTodaySummary();
-      await ctx.reply(text, { parse_mode: 'HTML' });
+      const sub = await this.getSubscriber(ctx);
+      const { text, keyboard } = await this.buildTodaySummary(sub?.hospitalId || null);
+      await ctx.reply(text, { parse_mode: 'HTML', ...keyboard });
     });
 
-    // /absent — absent employees today
     bot.command('absent', async (ctx) => {
-      const text = await this.buildAbsentList();
-      await ctx.reply(text, { parse_mode: 'HTML' });
+      const sub = await this.getSubscriber(ctx);
+      await ctx.reply(await this.buildNotCheckedInList(sub?.hospitalId || null), { parse_mode: 'HTML' });
     });
 
-    // /week — weekly report
     bot.command('week', async (ctx) => {
-      const text = await this.buildWeeklyReport();
-      await ctx.reply(text, { parse_mode: 'HTML' });
+      const sub = await this.getSubscriber(ctx);
+      await ctx.reply(await this.buildWeeklyReport(sub?.hospitalId || null), { parse_mode: 'HTML' });
     });
 
-    // /month — monthly report
     bot.command('month', async (ctx) => {
+      const sub = await this.getSubscriber(ctx);
       const now = new Date();
-      const text = await this.buildMonthlyReport(now.getMonth() + 1, now.getFullYear());
-      await ctx.reply(text, { parse_mode: 'HTML' });
+      await ctx.reply(
+        await this.buildMonthlyReport(now.getMonth() + 1, now.getFullYear(), sub?.hospitalId || null),
+        { parse_mode: 'HTML' },
+      );
+    });
+
+    // ── Inline button: main actions ───────────────────────────────────────────
+    bot.action('cmd_today', async (ctx) => {
+      await ctx.answerCbQuery();
+      const chatId = this.chatIdFromCtx(ctx);
+      const sub = await this.getSubscriberByChatId(chatId);
+      const { text, keyboard } = await this.buildTodaySummary(sub?.hospitalId || null);
+      await ctx.reply(text, { parse_mode: 'HTML', ...keyboard });
+    });
+
+    bot.action('cmd_absent', async (ctx) => {
+      await ctx.answerCbQuery();
+      const chatId = this.chatIdFromCtx(ctx);
+      const sub = await this.getSubscriberByChatId(chatId);
+      await ctx.reply(await this.buildNotCheckedInList(sub?.hospitalId || null), { parse_mode: 'HTML' });
+    });
+
+    bot.action('cmd_week', async (ctx) => {
+      await ctx.answerCbQuery();
+      const chatId = this.chatIdFromCtx(ctx);
+      const sub = await this.getSubscriberByChatId(chatId);
+      await ctx.reply(await this.buildWeeklyReport(sub?.hospitalId || null), { parse_mode: 'HTML' });
+    });
+
+    bot.action('cmd_month', async (ctx) => {
+      await ctx.answerCbQuery();
+      const chatId = this.chatIdFromCtx(ctx);
+      const sub = await this.getSubscriberByChatId(chatId);
+      const now = new Date();
+      await ctx.reply(
+        await this.buildMonthlyReport(now.getMonth() + 1, now.getFullYear(), sub?.hospitalId || null),
+        { parse_mode: 'HTML' },
+      );
+    });
+
+    bot.action('cmd_link', async (ctx) => {
+      await ctx.answerCbQuery();
+      const chatId = this.chatIdFromCtx(ctx);
+      this.pendingLink.add(chatId);
+      await ctx.reply(
+        '📱 Kasalxona tizimiga ro\'yxatdan o\'tgan <b>telefon raqamingizni</b> yuboring.\n\n' +
+        'Misol: <code>+998901234567</code>',
+        { parse_mode: 'HTML' },
+      );
+    });
+
+    // ── Inline button: today came/not-came detail lists ───────────────────────
+    bot.action(/^cmd_came:(.+)$/, async (ctx) => {
+      await ctx.answerCbQuery();
+      const hospitalId = (ctx.match as RegExpMatchArray)[1] === 'null' ? null : (ctx.match as RegExpMatchArray)[1];
+      await ctx.reply(await this.buildCameList(hospitalId), { parse_mode: 'HTML' });
+    });
+
+    bot.action(/^cmd_notcame:(.+)$/, async (ctx) => {
+      await ctx.answerCbQuery();
+      const hospitalId = (ctx.match as RegExpMatchArray)[1] === 'null' ? null : (ctx.match as RegExpMatchArray)[1];
+      await ctx.reply(await this.buildNotCheckedInList(hospitalId), { parse_mode: 'HTML' });
+    });
+
+    // ── Text: phone number for linking ────────────────────────────────────────
+    bot.on('text', async (ctx) => {
+      const chatId = String(ctx.chat.id);
+      const text = ctx.message.text.trim();
+
+      if (!this.pendingLink.has(chatId)) return;
+
+      const digits = text.replace(/\D/g, '');
+      if (digits.length < 9) {
+        await ctx.reply(
+          '❌ Noto\'g\'ri format. Raqamni to\'liq kiriting.\nMisol: <code>+998901234567</code>',
+          { parse_mode: 'HTML' },
+        );
+        return;
+      }
+
+      const last9 = digits.slice(-9);
+      const employee = await this.prisma.employee.findFirst({
+        where: { phone: { endsWith: last9 } },
+        include: { hospital: true, user: true },
+      });
+
+      if (!employee) {
+        await ctx.reply(
+          `❌ <b>${text}</b> raqamli hodim tizimda topilmadi.\n\nAdministrator bilan bog\'laning.`,
+          { parse_mode: 'HTML' },
+        );
+        return;
+      }
+
+      if (!employee.hospitalId) {
+        await ctx.reply('❌ Bu hodim hech qanday kasalxonaga biriktirilmagan.', { parse_mode: 'HTML' });
+        return;
+      }
+
+      // Faqat DIRECTOR roli bo'lgan foydalanuvchilar ulay oladi
+      if (!employee.user || employee.user.role !== 'DIRECTOR') {
+        await ctx.reply(
+          '⛔ <b>Kirish rad etildi</b>\n\n' +
+          'Faqat tug\'ruq xona <b>direktori</b> Telegram botni ulay oladi.\n\n' +
+          'Agar siz direktor bo\'lsangiz, tizim administratori bilan bog\'laning.',
+          { parse_mode: 'HTML' },
+        );
+        return;
+      }
+
+      this.pendingLink.delete(chatId);
+
+      const username = ctx.from?.username || ctx.from?.first_name || '';
+      const existingSub = await this.prisma.telegramSubscription.findFirst({
+        where: { chatId, hospitalId: employee.hospitalId },
+      });
+
+      if (existingSub) {
+        await this.prisma.telegramSubscription.update({
+          where: { id: existingSub.id },
+          data: { isActive: true, username },
+        });
+      } else {
+        await this.prisma.telegramSubscription.create({
+          data: { chatId, username, role: 'DIRECTOR', hospitalId: employee.hospitalId, isActive: true },
+        });
+      }
+
+      await ctx.reply(
+        `✅ <b>${employee.hospital?.name}</b> kasalxonasiga muvaffaqiyatli ulandi!\n\n` +
+        `👤 Direktor: <b>${employee.fullName}</b>\n\n` +
+        `Endi real vaqtda davomat xabarlari yuboriladi. 🎉`,
+        { parse_mode: 'HTML', ...mainKeyboard(true) },
+      );
+    });
+  }
+
+  // ─── helpers ────────────────────────────────────────────────────────────────
+  private chatIdFromCtx(ctx: any): string {
+    return String(ctx.chat?.id || ctx.from?.id);
+  }
+
+  private async getLinkedHospital(chatId: string) {
+    const sub = await this.prisma.telegramSubscription.findFirst({
+      where: { chatId, isActive: true, hospitalId: { not: null } },
+      include: { hospital: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    return sub?.hospital || null;
+  }
+
+  private async getSubscriber(ctx: any) {
+    return this.getSubscriberByChatId(String(ctx.chat.id));
+  }
+
+  private async getSubscriberByChatId(chatId: string) {
+    return this.prisma.telegramSubscription.findFirst({
+      where: { chatId, isActive: true, hospitalId: { not: null } },
+      orderBy: { createdAt: 'desc' },
     });
   }
 
   // ──────────────────────────────────────────
-  // NOTIFY: hodim keldi/ketdi
+  // NOTIFY: hodim keldi/ketdi — RASM BILAN
   // ──────────────────────────────────────────
-  async notifyAttendance(employee: any, action: 'CHECK_IN' | 'CHECK_OUT', attendance: any) {
+  async notifyAttendance(
+    employee: any,
+    action: 'CHECK_IN' | 'CHECK_OUT',
+    attendance: any,
+    snapshotBuffer?: Buffer,   // Terminaldan kelgan real-time rasm (ixtiyoriy)
+  ) {
     if (!this.bot) return;
 
+    // Kasalxona to'lovi OVERDUE bo'lsa — Telegram xabar yuborilmaydi
+    if (await isHospitalBlocked(this.prisma, employee.hospitalId)) {
+      this.logger.warn(`Hospital ${employee.hospitalId} blocked — Telegram notification skipped`);
+      return;
+    }
+
+    // Faqat shu kasalxonaga ulangan subscriberlar — null hospitalId'ga yubormaymiz
     const subscribers = await this.prisma.telegramSubscription.findMany({
-      where: { isActive: true },
+      where: {
+        isActive: true,
+        hospitalId: employee.hospitalId,
+      },
     });
     if (!subscribers.length) return;
 
-    const timeStr = dayjs(action === 'CHECK_IN' ? attendance.checkIn : attendance.checkOut)
-      .tz ? dayjs(action === 'CHECK_IN' ? attendance.checkIn : attendance.checkOut).format('HH:mm')
-      : new Date(action === 'CHECK_IN' ? attendance.checkIn : attendance.checkOut).toLocaleTimeString('uz-UZ', {
-          hour: '2-digit', minute: '2-digit', timeZone: TZ,
-        });
+    const checkTime = action === 'CHECK_IN' ? attendance.checkIn : attendance.checkOut;
+    const timeStr = new Date(checkTime).toLocaleTimeString('uz-UZ', {
+      hour: '2-digit', minute: '2-digit', timeZone: TZ,
+    });
 
     let emoji = '✅';
     let actionText = 'KELDI';
@@ -115,28 +344,53 @@ export class TelegramService implements OnModuleInit {
     if (action === 'CHECK_IN') {
       if (attendance.lateMinutes > 0) {
         emoji = '⚠️';
-        extra = `\n⏱ <b>${attendance.lateMinutes} daqiqa kechikdi</b>`;
+        extra = `\n⏱ <b>${formatMinutes(attendance.lateMinutes)} kechikdi</b>`;
       }
     } else {
       emoji = '🚶';
       actionText = 'KETDI';
       if (attendance.earlyLeaveMin > 0) {
-        extra = `\n⚡ <b>${attendance.earlyLeaveMin} daqiqa erta ketdi</b>`;
+        extra = `\n⚡ <b>${formatMinutes(attendance.earlyLeaveMin)} erta ketdi</b>`;
       } else if (attendance.overtimeMinutes > 0) {
-        extra = `\n⭐ +${attendance.overtimeMinutes} daqiqa overtime`;
+        extra = `\n⭐ +${formatMinutes(attendance.overtimeMinutes)} overtime`;
       }
     }
 
-    const text =
+    const caption =
       `${emoji} <b>${employee.fullName}</b> ${actionText}\n` +
       `🕐 Vaqt: <b>${timeStr}</b>\n` +
+      `🏥 Kasalxona: ${employee.hospital?.name || '—'}\n` +
       `🏢 Bo'lim: ${employee.department?.name || '—'}\n` +
       `💼 Lavozim: ${employee.position?.name || '—'}` +
       extra;
 
+    // 1-ustuvorlik: terminal snapshot (real-time yuz rasmi)
+    // 2-ustuvorlik: DB dagi saqlab qo'yilgan rasm
+    let photoBuffer: Buffer | null = snapshotBuffer || null;
+    if (!photoBuffer && employee.photoUrl) {
+      const uploadDir = process.env.UPLOAD_DIR || './uploads';
+      const filename = (employee.photoUrl as string).replace(/^\/uploads\//, '');
+      const filePath = path.join(uploadDir, filename);
+      if (fs.existsSync(filePath)) {
+        try { photoBuffer = fs.readFileSync(filePath); } catch { /* skip */ }
+      }
+    }
+
+    const photoSource = photoBuffer
+      ? { source: photoBuffer, filename: snapshotBuffer ? 'snapshot.jpg' : 'photo.jpg' }
+      : null;
+
     for (const sub of subscribers) {
       try {
-        await this.bot.telegram.sendMessage(sub.chatId, text, { parse_mode: 'HTML' });
+        if (photoSource) {
+          await this.bot.telegram.sendPhoto(
+            sub.chatId,
+            photoSource,
+            { caption, parse_mode: 'HTML' },
+          );
+        } else {
+          await this.bot.telegram.sendMessage(sub.chatId, caption, { parse_mode: 'HTML' });
+        }
       } catch (e) {
         this.logger.warn(`Failed to send to ${sub.chatId}: ${e.message}`);
       }
@@ -144,7 +398,7 @@ export class TelegramService implements OnModuleInit {
   }
 
   // ──────────────────────────────────────────
-  // BROADCAST: custom message
+  // BROADCAST
   // ──────────────────────────────────────────
   async broadcast(message: string) {
     if (!this.bot) return;
@@ -158,82 +412,277 @@ export class TelegramService implements OnModuleInit {
     }
   }
 
+  async sendToChat(chatId: string, message: string) {
+    if (!this.bot) return;
+    await this.bot.telegram.sendMessage(chatId, message, { parse_mode: 'HTML' });
+  }
+
+  async broadcastToHospital(hospitalId: string | null, message: string) {
+    if (!this.bot) return;
+    const subscribers = await this.prisma.telegramSubscription.findMany({
+      where: {
+        isActive: true,
+        OR: [
+          { hospitalId },
+          { hospitalId: null },
+        ],
+      },
+    });
+    for (const sub of subscribers) {
+      try {
+        await this.bot.telegram.sendMessage(sub.chatId, message, { parse_mode: 'HTML' });
+      } catch (e) {
+        this.logger.warn(`broadcastToHospital failed to ${sub.chatId}`);
+      }
+    }
+  }
+
   // ──────────────────────────────────────────
-  // HELPERS: Report builders
+  // HELPERS — report builders
   // ──────────────────────────────────────────
-  private async buildTodaySummary(): Promise<string> {
-    const today = new Date().toISOString().slice(0, 10);
+
+  /**
+   * Bugungi davomat xulosasi + "Kelganlar / Kelmaganlar" tugmalari
+   */
+  private async buildTodaySummary(
+    hospitalId: string | null,
+  ): Promise<{ text: string; keyboard: ReturnType<typeof Markup.inlineKeyboard> }> {
+    const todayStart = this.todayStart();
+    const dateLabel = todayDateStr();
+    const timeLabel = nowStr();
+
+    const empWhere: any = { firedAt: null };
+    if (hospitalId) empWhere.hospitalId = hospitalId;
+
+    // Rejalashtirilgan bugun (schedule bo'lsa)
+    const schedWhere: any = { date: todayStart, status: 'WORKING' };
+    if (hospitalId) schedWhere.employee = { hospitalId };
+    const scheduled = await this.prisma.schedule.findMany({
+      where: schedWhere,
+      select: { employeeId: true },
+    });
+
+    // Check-in qilganlar (bugun)
+    const attWhere: any = { workDate: todayStart, checkIn: { not: null } };
+    if (hospitalId) attWhere.employee = { hospitalId };
+    const attendances = await this.prisma.attendanceRecord.findMany({
+      where: attWhere,
+      select: { employeeId: true, lateMinutes: true },
+    });
+
+    let totalScheduled: number;
+    let cameCount: number;
+    let lateCount: number;
+    let notCameCount: number;
+
+    if (scheduled.length > 0) {
+      // Schedule bor — faqat jadvalda bo'lganlarni hisoblash
+      const scheduledIds = new Set(scheduled.map(s => s.employeeId));
+      const cameInSchedule = attendances.filter(a => scheduledIds.has(a.employeeId));
+      totalScheduled = scheduled.length;
+      cameCount = cameInSchedule.length;
+      lateCount = cameInSchedule.filter(a => a.lateMinutes > 0).length;
+      notCameCount = totalScheduled - cameCount;
+    } else {
+      // Schedule yo'q — barcha xodimlar va attendanceRecord dan hisoblash
+      totalScheduled = await this.prisma.employee.count({ where: empWhere });
+      cameCount = attendances.length;
+      lateCount = attendances.filter(a => a.lateMinutes > 0).length;
+      notCameCount = totalScheduled - cameCount;
+    }
+
+    const text =
+      `📊 <b>Bugungi davomat</b>\n` +
+      `📅 ${dateLabel} | 🕐 ${timeLabel} holat\n\n` +
+      `👥 Jami xodimlar: <b>${totalScheduled} ta</b>\n` +
+      `✅ Keldi: <b>${cameCount} ta</b>\n` +
+      `❌ Hali kelmagan: <b>${Math.max(0, notCameCount)} ta</b>\n` +
+      `⚠️ Kechikkan: <b>${lateCount} ta</b>`;
+
+    return { text, keyboard: todayDetailKeyboard(hospitalId) };
+  }
+
+  /**
+   * Bugun kelganlar ro'yhati (ism + kelgan vaqt)
+   */
+  private async buildCameList(hospitalId: string | null): Promise<string> {
+    const todayStart = this.todayStart();
+    const dateLabel = todayDateStr();
+
+    const attWhere: any = { workDate: todayStart, checkIn: { not: null } };
+    if (hospitalId) attWhere.employee = { hospitalId };
+
     const records = await this.prisma.attendanceRecord.findMany({
-      where: { workDate: new Date(today) },
+      where: attWhere,
+      include: { employee: { include: { department: true } } },
+      orderBy: { checkIn: 'asc' },
+    });
+
+    // Schedule bo'lsa, faqat jadvalda bo'lganlarni ko'rsatish
+    const schedWhere: any = { date: todayStart, status: 'WORKING' };
+    if (hospitalId) schedWhere.employee = { hospitalId };
+    const scheduled = await this.prisma.schedule.findMany({ where: schedWhere, select: { employeeId: true } });
+
+    const came = scheduled.length > 0
+      ? records.filter(r => new Set(scheduled.map(s => s.employeeId)).has(r.employeeId))
+      : records;
+
+    if (!came.length) {
+      return `📋 <b>Kelganlar — ${dateLabel}</b>\n\nHali hech kim kelmagan.`;
+    }
+
+    const list = came.slice(0, MAX_LIST).map((r, i) => {
+      const time = new Date(r.checkIn!).toLocaleTimeString('uz-UZ', {
+        hour: '2-digit', minute: '2-digit', timeZone: TZ,
+      });
+      const late = r.lateMinutes > 0 ? ` ⚠️ +${r.lateMinutes} daq` : '';
+      return `${i + 1}. <b>${r.employee.fullName}</b> — ${time}${late}`;
+    }).join('\n');
+
+    const tail = came.length > MAX_LIST ? `\n\n<i>...va yana ${came.length - MAX_LIST} ta</i>` : '';
+
+    return `✅ <b>Kelganlar — ${dateLabel}</b> (${came.length} ta)\n\n${list}${tail}`;
+  }
+
+  /**
+   * Bugun rejalashtirilgan, lekin hali check-in qilmaganlar
+   */
+  private async buildNotCheckedInList(hospitalId: string | null): Promise<string> {
+    const todayStart = this.todayStart();
+    const dateLabel = todayDateStr();
+    const timeLabel = nowStr();
+
+    const schedWhere: any = { date: todayStart, status: 'WORKING' };
+    if (hospitalId) schedWhere.employee = { hospitalId };
+
+    const schedules = await this.prisma.schedule.findMany({
+      where: schedWhere,
       include: { employee: { include: { department: true } } },
     });
 
-    const present = records.filter(r => ['PRESENT', 'LATE', 'LATE_EARLY', 'EARLY_LEAVE'].includes(r.status));
-    const absent = records.filter(r => r.status === 'ABSENT');
-    const late = records.filter(r => ['LATE', 'LATE_EARLY'].includes(r.status));
+    if (!schedules.length) {
+      return `📋 <b>${dateLabel}</b>\n\nBugun uchun ish grafigi topilmadi.`;
+    }
+
+    const attWhere: any = { workDate: todayStart, checkIn: { not: null } };
+    if (hospitalId) attWhere.employee = { hospitalId };
+
+    const checkedIn = await this.prisma.attendanceRecord.findMany({
+      where: attWhere,
+      select: { employeeId: true },
+    });
+    const checkedInIds = new Set(checkedIn.map(r => r.employeeId));
+
+    const notYet = schedules.filter(s => !checkedInIds.has(s.employeeId));
+
+    if (!notYet.length) {
+      return `✅ <b>${dateLabel}</b>\n\nBarcha ${schedules.length} ta rejalashtirilgan hodim keldi!`;
+    }
+
+    const list = notYet.slice(0, MAX_LIST).map((s, i) =>
+      `${i + 1}. <b>${s.employee.fullName}</b> — ${s.employee.department?.name || '—'} ❌`,
+    ).join('\n');
+
+    const tail = notYet.length > MAX_LIST ? `\n\n<i>...va yana ${notYet.length - MAX_LIST} ta</i>` : '';
 
     return (
-      `📊 <b>Bugungi davomat (${today})</b>\n\n` +
-      `✅ Keldi: <b>${present.length}</b>\n` +
-      `❌ Kelmadi: <b>${absent.length}</b>\n` +
-      `⚠️ Kechikdi: <b>${late.length}</b>\n\n` +
-      `Jami qaydlar: ${records.length}`
+      `⏳ <b>Hali kelmaganlar — ${dateLabel}</b>\n` +
+      `🕐 ${timeLabel} holat\n\n` +
+      `${list}${tail}\n\n` +
+      `Jami: <b>${notYet.length} ta</b> / ${schedules.length} ta rejalashtirilgan`
     );
   }
 
-  private async buildAbsentList(): Promise<string> {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+  /**
+   * Haftalik hisobot — weeklyAttendanceStat bo'lmasa, attendanceRecord dan hisoblanadi
+   */
+  private async buildWeeklyReport(hospitalId: string | null): Promise<string> {
+    const weekStart = this.weekStart();
 
-    const absent = await this.prisma.attendanceRecord.findMany({
-      where: { workDate: today, status: 'ABSENT' },
-      include: { employee: { include: { department: true } } },
-    });
-
-    if (!absent.length) return '✅ Bugun hamma kelgan!';
-
-    const list = absent
-      .map((a, i) => `${i + 1}. ${a.employee.fullName} — ${a.employee.department.name}`)
-      .join('\n');
-
-    return `❌ <b>Kelmagan hodimlar (${today.toLocaleDateString('uz-UZ')})</b>\n\n${list}`;
-  }
-
-  private async buildWeeklyReport(): Promise<string> {
-    const now = new Date();
-    const weekStart = new Date(now);
-    weekStart.setDate(now.getDate() - now.getDay() + 1);
-    weekStart.setHours(0, 0, 0, 0);
+    const where: any = {
+      weekStart,
+      OR: [
+        { totalLateMin: { gt: 0 } },
+        { totalEarlyMin: { gt: 0 } },
+        { daysAbsent: { gt: 0 } },
+      ],
+    };
+    if (hospitalId) where.employee = { hospitalId };
 
     const stats = await this.prisma.weeklyAttendanceStat.findMany({
-      where: {
-        weekStart,
-        OR: [
-          { totalLateMin: { gt: 0 } },
-          { totalEarlyMin: { gt: 0 } },
-          { daysAbsent: { gt: 0 } },
-        ],
-      },
+      where,
       include: { employee: { include: { department: true } } },
       orderBy: { totalLateMin: 'desc' },
       take: 20,
     });
 
-    if (!stats.length) return '✅ Bu hafta davomati yaxshi!';
-
-    const list = stats
-      .map((s, i) => {
-        const deduct = Number(s.deductionAmount) > 0 ? ` | 💰 -${Math.round(Number(s.deductionAmount)).toLocaleString()} so'm` : '';
+    if (stats.length) {
+      const list = stats.map((s, i) => {
+        const deduct = Number(s.deductionAmount) > 0
+          ? ` | 💰 -${Math.round(Number(s.deductionAmount)).toLocaleString()} so'm`
+          : '';
         return `${i + 1}. <b>${s.employee.fullName}</b>\n   ⏱ ${s.totalLateMin} min kech | 🚶 ${s.totalEarlyMin} min erta${deduct}`;
-      })
-      .join('\n\n');
+      }).join('\n\n');
+      return `📈 <b>Haftalik hisobot</b>\n\n${list}`;
+    }
 
-    return `📈 <b>Haftalik hisobot</b>\n\n${list}`;
+    // weeklyAttendanceStat yo'q — raw recordlardan hisoblash
+    const rawWhere: any = {
+      workDate: { gte: weekStart },
+      OR: [
+        { lateMinutes: { gt: 0 } },
+        { earlyLeaveMin: { gt: 0 } },
+        { status: 'ABSENT' },
+      ],
+    };
+    if (hospitalId) rawWhere.employee = { hospitalId };
+
+    const raw = await this.prisma.attendanceRecord.findMany({
+      where: rawWhere,
+      include: { employee: { include: { department: true } } },
+      orderBy: { workDate: 'asc' },
+    });
+
+    if (!raw.length) {
+      return `✅ <b>Haftalik hisobot</b>\n\nBu hafta hech qanday kechikish yoki sababsiz yo\'qlik qayd etilmagan.`;
+    }
+
+    // Hodim bo'yicha guruhlash
+    const empMap = new Map<string, { name: string; dept: string; lateMin: number; earlyMin: number; absent: number }>();
+    for (const r of raw) {
+      if (!empMap.has(r.employeeId)) {
+        empMap.set(r.employeeId, {
+          name: r.employee.fullName,
+          dept: r.employee.department?.name || '—',
+          lateMin: 0, earlyMin: 0, absent: 0,
+        });
+      }
+      const s = empMap.get(r.employeeId)!;
+      s.lateMin += r.lateMinutes;
+      s.earlyMin += r.earlyLeaveMin;
+      if (r.status === 'ABSENT') s.absent++;
+    }
+
+    const sorted = [...empMap.values()].sort((a, b) => b.lateMin - a.lateMin).slice(0, 20);
+    const weekLabel = weekStart.toLocaleDateString('uz-UZ', { day: '2-digit', month: '2-digit', timeZone: TZ });
+
+    const list = sorted.map((s, i) => {
+      const parts: string[] = [];
+      if (s.lateMin > 0) parts.push(`⏱ ${s.lateMin} min kech`);
+      if (s.earlyMin > 0) parts.push(`🚶 ${s.earlyMin} min erta`);
+      if (s.absent > 0) parts.push(`❌ ${s.absent} kun yo'q`);
+      return `${i + 1}. <b>${s.name}</b> (${s.dept})\n   ${parts.join(' | ')}`;
+    }).join('\n\n');
+
+    return `📈 <b>Haftalik hisobot</b> (${weekLabel} dan)\n\n${list}`;
   }
 
-  private async buildMonthlyReport(month: number, year: number): Promise<string> {
+  private async buildMonthlyReport(month: number, year: number, hospitalId: string | null): Promise<string> {
+    const where: any = { month, year };
+    if (hospitalId) where.employee = { hospitalId };
+
     const payrolls = await this.prisma.payrollRecord.findMany({
-      where: { month, year },
+      where,
       include: { employee: { include: { department: true } } },
       orderBy: { netSalary: 'desc' },
       take: 30,
@@ -254,5 +703,35 @@ export class TelegramService implements OnModuleInit {
       `📉 Jami kesimlar: ${Math.round(totalDeductions).toLocaleString()} so'm\n\n` +
       `<i>Batafsil ma'lumot uchun tizimga kiring</i>`
     );
+  }
+
+  // ── date utils (Asia/Tashkent = UTC+5) ──────────────────────────────────────
+
+  /** Bugungi kun boshlang'ich vaqti — Toshkent vaqti bo'yicha (UTC+5) */
+  private todayStart(): Date {
+    const TZ_OFFSET_MS = 5 * 60 * 60 * 1000; // UTC+5
+    const now = new Date();
+    // Toshkent vaqtiga o'tkazamiz
+    const tashkent = new Date(now.getTime() + TZ_OFFSET_MS);
+    // Kun boshiga (UTC da 00:00 Toshkent = UTC-5 oldingi kuni)
+    tashkent.setUTCHours(0, 0, 0, 0);
+    // UTC ga qaytaramiz
+    return new Date(tashkent.getTime() - TZ_OFFSET_MS);
+  }
+
+  /** Haftaning dushanba kunidan boshlanish vaqti — Toshkent vaqti bo'yicha */
+  private weekStart(): Date {
+    const TZ_OFFSET_MS = 5 * 60 * 60 * 1000; // UTC+5
+    const now = new Date();
+    const tashkent = new Date(now.getTime() + TZ_OFFSET_MS);
+    tashkent.setUTCHours(0, 0, 0, 0);
+
+    // 0=Yakshanba, 1=Dushanba ... 6=Shanba
+    const day = tashkent.getUTCDay();
+    // Dushanbaga qaytish: Yakshanba uchun -6, qolganlar uchun -(day-1)
+    const daysBack = day === 0 ? 6 : day - 1;
+    tashkent.setUTCDate(tashkent.getUTCDate() - daysBack);
+
+    return new Date(tashkent.getTime() - TZ_OFFSET_MS);
   }
 }

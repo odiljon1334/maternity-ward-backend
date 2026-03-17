@@ -1,0 +1,71 @@
+# VPS backend deploy (postgres + nestjs)
+# Ishlatish:
+#   cd /home/deploy/maternity-ward-backend
+#   bash deploy.sh
+
+version: '3.9'
+
+services:
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: maternity_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: maternity_ward_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - maternity_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+
+  # ── Backend (NestJS) ────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: .
+    container_name: maternity_backend
+    restart: always
+    ports:
+      - "3001:3001"
+    env_file:
+      - .env.prod
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/maternity_ward_db
+      PORT: 3001
+      NODE_ENV: production
+      TZ: Asia/Tashkent
+    volumes:
+      - uploads_data:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - maternity_net
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+          cpus: '1.0'
+        reservations:
+          memory: 256M
+
+networks:
+  maternity_net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  uploads_data:
