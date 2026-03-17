@@ -70,7 +70,7 @@ async function bootstrap() {
   // Global interceptors
   app.useGlobalInterceptors(new ResponseInterceptor());
 
-  const port = process.env.PORT || 3001;
+  const port = process.env.PORT || 5001;
   await app.listen(port);
   console.log(`\n🏥 Maternity Ward Attendance API`);
   console.log(`🚀 Server running on: http://localhost:${port}/api/v1`);

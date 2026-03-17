@@ -36,7 +36,7 @@ RUN chown -R appuser:appgroup /app
 
 USER appuser
 
-EXPOSE 3001
+EXPOSE 5001
 
 # Migrate qilib keyin serverni start qilish
 CMD ["sh", "-c", "npx prisma migrate deploy && node dist/main.js"]

@@ -39,12 +39,12 @@ services:
     container_name: maternity_backend
     restart: always
     ports:
-      - "3001:3001"
+      - "5001:5001"
     env_file:
       - .env.prod
     environment:
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/maternity_ward_db
-      PORT: 3001
+      PORT: 5001
       NODE_ENV: production
       TZ: Asia/Tashkent
     volumes:

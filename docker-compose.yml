@@ -35,11 +35,11 @@ services:
     environment:
       NODE_ENV: production
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-changeme_in_production}@postgres:5432/${POSTGRES_DB:-maternity_ward_db}
-      PORT: 3001
+      PORT: 5001
     volumes:
       - uploads_data:/app/uploads
     ports:
-      - "3001:3001"
+      - "5001:5001"
 
   # ── Frontend (Next.js) ───────────────────────────────────────────────────────
   frontend:
@@ -53,7 +53,7 @@ services:
     depends_on:
       - backend
     ports:
-      - "3000:3000"
+      - "5000:5000"
 
   # ── Nginx (reverse proxy + SSL) ──────────────────────────────────────────────
   nginx:
