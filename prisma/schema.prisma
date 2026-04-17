@@ -13,6 +13,7 @@ datasource db {
 
 enum UserRole {
   SUPER_ADMIN
+  MINISTRY          // Viloyat / Respublika vazirlik kuzatuvchisi
   ASSISTANT_ADMIN
   ADMIN
   DIRECTOR
@@ -85,6 +86,29 @@ enum PaymentStatus {
 }
 
 // ─────────────────────────────────────────────
+// TERMINAL EVENT TYPES (Hikvision work status)
+// ─────────────────────────────────────────────
+
+enum TerminalEventType {
+  CHECK_IN       // Keldi (kirish)
+  CHECK_OUT      // Ketdi (chiqish)
+  LUNCH_OUT      // Tushlikka chiqdi
+  LUNCH_IN       // Tushlikdan qaytdi
+  COFFEE_OUT     // Coffee/tanaffusga chiqdi
+  COFFEE_IN      // Coffee/tanaffusdan qaytdi
+  OVERTIME_IN    // Qo'shimcha ishga kirdi
+  OVERTIME_OUT   // Qo'shimcha ishdan chiqdi
+  UNKNOWN        // Noma'lum / fallback
+}
+
+// Break turi (tushlik, coffee, boshqa)
+enum BreakType {
+  LUNCH
+  COFFEE
+  OTHER
+}
+
+// ─────────────────────────────────────────────
 // HOSPITAL (Tug'ruq xona — tenant)
 // ─────────────────────────────────────────────
 
@@ -106,9 +130,36 @@ model Hospital {
   telegramSubs  TelegramSubscription[]
   notifications Notification[]
   payments      Payment[]
+  cameras       Camera[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+// ─────────────────────────────────────────────
+// CAMERA (HikConnect kamera — poliklinikaga bog'liq)
+// ─────────────────────────────────────────────
+
+model Camera {
+  id              String   @id @default(uuid())
+  hospitalId      String
+  hospital        Hospital @relation(fields: [hospitalId], references: [id], onDelete: Cascade)
+
+  name            String   // "Qabul xonasi", "Koridor 1", "Kirish"
+  cameraIndexCode String?  // HikConnect unique camera code (keyinroq)
+  channelNo       Int      @default(1)
+  deviceSerial    String?  // HikConnect device serial (optional)
+
+  // MediaMTX stream path — FFmpeg agent pushes to VPS
+  // e.g. "hospital1/cam1" → https://vps/hospital1/cam1/index.m3u8
+  streamPath      String?
+
+  isActive        Boolean  @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([hospitalId])
 }
 
 // ─────────────────────────────────────────────
@@ -208,10 +259,11 @@ model Employee {
   hiredAt  DateTime  @default(now())
   firedAt  DateTime?
 
-  schedules   Schedule[]
-  attendances AttendanceRecord[]
-  payrolls    PayrollRecord[]
-  weeklyStats WeeklyAttendanceStat[]
+  schedules       Schedule[]
+  attendances     AttendanceRecord[]
+  payrolls        PayrollRecord[]
+  weeklyStats     WeeklyAttendanceStat[]
+  terminalEvents  AttendanceEvent[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -299,9 +351,14 @@ model AttendanceRecord {
   expectedCheckOut DateTime
 
   // Tushlik break (ixtiyoriy)
-  lunchOut     DateTime?   // tushlikka chiqqan vaqt
-  lunchIn      DateTime?   // tushlikdan qaytgan vaqt
-  lunchLateMin Int @default(0)  // tushlikdan kech qaytish minutlari
+  lunchOut     DateTime?
+  lunchIn      DateTime?
+  lunchLateMin Int @default(0)
+
+  // Coffee / tanaffus break (ixtiyoriy)
+  coffeeOut     DateTime?
+  coffeeIn      DateTime?
+  coffeeLateMin Int @default(0)
 
   status          AttendanceStatus @default(ABSENT)
   lateMinutes     Int  @default(0)
@@ -311,10 +368,14 @@ model AttendanceRecord {
   workDate DateTime
   note     String?
 
+  // Terminal eventlari (audit trail)
+  terminalEvents AttendanceEvent[]
+  breaks         BreakRecord[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@unique([employeeId, workDate])   // bir xodim, bir kunda — faqat bitta yozuv
+  @@unique([employeeId, workDate])
   @@index([employeeId, workDate])
 }
 
@@ -462,6 +523,59 @@ model Notification {
   createdAt  DateTime         @default(now())
 
   @@index([hospitalId, isRead])
+}
+
+// ─────────────────────────────────────────────
+// ATTENDANCE EVENTS (terminal raw log — o'zgarmas)
+// Har bir terminal signali bu yerga yoziladi.
+// AttendanceRecord computed natija, bu esa audit trail.
+// ─────────────────────────────────────────────
+
+model AttendanceEvent {
+  id         String            @id @default(uuid())
+
+  employeeId String
+  employee   Employee          @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  // Qaysi AttendanceRecord ga bog'landi (null = ignore qilindi yoki hali bog'lanmagan)
+  recordId   String?
+  record     AttendanceRecord? @relation(fields: [recordId], references: [id], onDelete: SetNull)
+
+  eventType  TerminalEventType
+  deviceId   String?
+  deviceName String?
+
+  // Terminal dan kelgan aniq vaqt (UTC)
+  rawTime    DateTime
+
+  // Hikvision dan kelgan to'liq payload — debug uchun
+  rawPayload Json?
+
+  createdAt  DateTime @default(now())
+
+  @@index([employeeId, rawTime])
+  @@index([recordId])
+}
+
+// ─────────────────────────────────────────────
+// BREAK RECORDS (tushlik, coffee — har bir break)
+// AttendanceRecord ga bog'langan, bir kunda bir nechta bo'lishi mumkin
+// ─────────────────────────────────────────────
+
+model BreakRecord {
+  id        String    @id @default(uuid())
+
+  recordId  String
+  record    AttendanceRecord @relation(fields: [recordId], references: [id], onDelete: Cascade)
+
+  type      BreakType
+  startTime DateTime
+  endTime   DateTime?
+  lateMin   Int       @default(0) // qaytishda kechikish minutlari
+
+  createdAt DateTime @default(now())
+
+  @@index([recordId])
 }
 
 // ─────────────────────────────────────────────

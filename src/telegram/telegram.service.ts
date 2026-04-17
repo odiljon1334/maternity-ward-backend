@@ -311,9 +311,9 @@ export class TelegramService implements OnModuleInit {
   // ──────────────────────────────────────────
   async notifyAttendance(
     employee: any,
-    action: 'CHECK_IN' | 'CHECK_OUT',
+    action: string,   // TerminalEventType yoki 'CHECK_IN' | 'CHECK_OUT'
     attendance: any,
-    snapshotBuffer?: Buffer,   // Terminaldan kelgan real-time rasm (ixtiyoriy)
+    snapshotBuffer?: Buffer,
   ) {
     if (!this.bot) return;
 

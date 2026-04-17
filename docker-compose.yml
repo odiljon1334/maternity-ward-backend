@@ -55,6 +55,34 @@ services:
     ports:
       - "5000:5000"
 
+  # ── MediaMTX (RTSP relay + HLS server) ─────────────────────────────────────
+  # Har bir poliklinikadagi FFmpeg agent shu portga push qiladi:
+  #   ffmpeg -i rtsp://... -f rtsp rtsp://vps-ip:8554/hospital1/cam1
+  # Browser HLS orqali ko'radi:
+  #   https://yourdomain.com/live/hospital1/cam1/index.m3u8
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    container_name: maternity_mediamtx
+    restart: unless-stopped
+    environment:
+      # HLS — browser uchun
+      MTX_HLSADDRESS:        :8888
+      MTX_HLSALWAYSREMUX:    "yes"
+      MTX_HLSSEGMENTCOUNT:   "3"
+      MTX_HLSSEGMENTDURATION: "2s"
+
+      # RTSP — FFmpeg agent push uchun
+      MTX_RTSPADDRESS:       :8554
+
+      # Authentication (ixtiyoriy, tavsiya etiladi)
+      # MTX_AUTHMETHOD: http
+      # MTX_AUTHINTERNALUSERS: ...
+    ports:
+      - "8554:8554"   # RTSP in  (FFmpeg agent shu portga push qiladi)
+      - "8888:8888"   # HLS  out (Nginx orqali ochiladi)
+    volumes:
+      - mediamtx_data:/mediamtx
+
   # ── Nginx (reverse proxy + SSL) ──────────────────────────────────────────────
   nginx:
     image: nginx:alpine
@@ -63,6 +91,7 @@ services:
     depends_on:
       - backend
       - frontend
+      - mediamtx
     ports:
       - "80:80"
       - "443:443"
@@ -74,3 +103,4 @@ services:
 volumes:
   postgres_data:
   uploads_data:
+  mediamtx_data:

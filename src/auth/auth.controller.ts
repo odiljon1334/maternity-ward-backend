@@ -4,6 +4,7 @@ import { Throttle, SkipThrottle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { RegisterDto } from './dto/register.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -28,11 +29,17 @@ export class AuthController {
     return this.authService.login(dto, getIp(req));
   }
 
+  /**
+   * Yangi global foydalanuvchi yaratish.
+   * Faqat SUPER_ADMIN qila oladi.
+   * Rol: MINISTRY (kuzatuvchi) yoki ASSISTANT_ADMIN (yordamchi).
+   * Default: ASSISTANT_ADMIN
+   */
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
   @Post('register')
   register(
-    @Body() dto: { username: string; password: string; role?: UserRole },
+    @Body() dto: RegisterDto,
     @CurrentUser('sub') createdByUserId: string,
   ) {
     return this.authService.register(dto, createdByUserId);

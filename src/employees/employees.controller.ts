@@ -13,6 +13,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
+import { BadRequestException } from '@nestjs/common';
 import { Response } from 'express';
 import { AuditLogService } from '../audit-log/audit-log.service';
 
@@ -137,7 +138,7 @@ export class EmployeesController {
 
   @Post(':id/photo')
   @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
-  @UseInterceptors(FileInterceptor('photo'))
+  @UseInterceptors(FileInterceptor('photo', { storage: memoryStorage() }))
   async uploadPhoto(
     @Param('id') id: string,
     @UploadedFile() file: Express.Multer.File,
@@ -145,9 +146,9 @@ export class EmployeesController {
     @CurrentUser('hospitalId') hospitalId: string,
     @Query('targetHospitalId') targetHospitalId?: string,
   ) {
-    const photoUrl = `/uploads/${file.filename}`;
+    if (!file) throw new BadRequestException('Rasm yuklanmadi');
     const hId = resolveHospitalId(hospitalId, targetHospitalId);
-    const result = await this.service.updatePhoto(id, photoUrl, hId);
+    const result = await this.service.updatePhoto(id, file.buffer, hId);
     this.auditLog.log({ userId, hospitalId: hId, action: 'UPDATE_PHOTO', entity: 'Employee', entityId: id });
     return result;
   }

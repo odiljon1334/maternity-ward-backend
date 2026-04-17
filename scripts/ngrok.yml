@@ -1,0 +1,9 @@
+version: "2"
+authtoken: 3AGrr1pnnwo8vgOgu7hgj6ZIk2G_59dUfojDRLHZBnQFLaFoW
+
+tunnels:
+  # Backend API (NestJS :5001) — FAQAT SHUNGA ngrok kerak
+  backend:
+    addr: 5001
+    proto: http
+    inspect: true
