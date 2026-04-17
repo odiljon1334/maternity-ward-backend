@@ -9,6 +9,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { LoginDto } from './dto/login.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { RegisterDto } from './dto/register.dto';
 import { UserRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 
@@ -111,7 +112,7 @@ export class AuthService {
     const isMatch = await bcrypt.compare(dto.currentPassword, user.passwordHash);
     if (!isMatch) throw new BadRequestException('Joriy parol noto\'g\'ri');
 
-    const newHash = await bcrypt.hash(dto.newPassword, 10);
+    const newHash = await bcrypt.hash(dto.newPassword, 12);
     await this.prisma.user.update({
       where: { id: userId },
       data: { passwordHash: newHash },
@@ -129,11 +130,11 @@ export class AuthService {
     return { message: 'Parol muvaffaqiyatli o\'zgartirildi' };
   }
 
-  async register(dto: { username: string; password: string; role?: UserRole }, createdByUserId?: string) {
+  async register(dto: RegisterDto, createdByUserId?: string) {
     const exists = await this.prisma.user.findUnique({ where: { username: dto.username } });
     if (exists) throw new ConflictException('Bu username band');
 
-    const passwordHash = await bcrypt.hash(dto.password, 10);
+    const passwordHash = await bcrypt.hash(dto.password, 12);
     const role = dto.role ?? UserRole.ASSISTANT_ADMIN;
 
     const user = await this.prisma.user.create({

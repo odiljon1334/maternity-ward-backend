@@ -15,6 +15,7 @@ import { Readable } from 'stream';
 const archiver = require('archiver');
 import * as fs from 'fs';
 import * as path from 'path';
+import { processAndSavePhoto } from '../common/utils/image.util';
 
 @Injectable()
 export class EmployeesService {
@@ -99,7 +100,7 @@ export class EmployeesService {
       let userId: string | undefined;
 
       if (username && password) {
-        const hash = await bcrypt.hash(password, 10);
+        const hash = await bcrypt.hash(password, 12);
         const user = await tx.user.create({
           data: { username, passwordHash: hash, role: 'EMPLOYEE', hospitalId },
         });
@@ -136,7 +137,7 @@ export class EmployeesService {
         if (emp?.userId) {
           const updateData: any = {};
           if (username) updateData.username = username;
-          if (password) updateData.passwordHash = await bcrypt.hash(password, 10);
+          if (password) updateData.passwordHash = await bcrypt.hash(password, 12);
           await tx.user.update({ where: { id: emp.userId }, data: updateData });
         }
       }
@@ -158,16 +159,28 @@ export class EmployeesService {
     });
   }
 
-  async updatePhoto(id: string, photoUrl: string, hospitalId: string) {
+  async updatePhoto(id: string, imageBuffer: Buffer, hospitalId: string) {
     await this.findOne(id, hospitalId);
     const emp = await this.prisma.employee.findUnique({ where: { id } });
+
+    // Rasmni qayta ishlash: EXIF rotate + resize 800x800 + JPEG 85% siqish
+    const uploadDir = process.env.UPLOAD_DIR || './uploads';
+    const filenameBase = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+    const { filename } = await processAndSavePhoto(imageBuffer, uploadDir, filenameBase);
+    const photoUrl = `/uploads/${filename}`;
+
+    // Eski rasmni o'chirish
+    if (emp?.photoUrl) {
+      const oldFile = path.join(uploadDir, emp.photoUrl.replace(/^\/uploads\//, ''));
+      if (fs.existsSync(oldFile)) fs.unlinkSync(oldFile);
+    }
+
     const updateData: any = { photoUrl };
 
     // Auto-generate numeric employeeNo for Hikvision terminal (only if not set yet)
     if (!emp?.employeeNo) {
-      // Count existing employees in this hospital to get next sequential number
       const count = await this.prisma.employee.count({ where: { hospitalId } });
-      // Format: {YY}{sequential 5-digit} — e.g. 26 00001, 2600042
+      // Format: {YY}{sequential 5-digit} — e.g. 2600001
       const yy = new Date().getFullYear().toString().slice(-2);
       const seq = String(count + 1).padStart(5, '0');
       updateData.employeeNo = `${yy}${seq}`;

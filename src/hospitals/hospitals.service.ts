@@ -106,7 +106,7 @@ export class HospitalsService {
     if (existing) throw new ConflictException('Bu username allaqachon mavjud');
 
     const bcrypt = await import('bcrypt');
-    const hash = await bcrypt.hash(dto.password, 10);
+    const hash = await bcrypt.hash(dto.password, 12);
 
     // Find or create default ADMIN position
     let pos = await this.prisma.position.findFirst({

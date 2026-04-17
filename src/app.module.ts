@@ -21,6 +21,9 @@ import { HospitalsModule } from './hospitals/hospitals.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { PaymentsModule } from './payments/payments.module';
 import { AuditLogModule } from './audit-log/audit-log.module';
+import { MinistryModule } from './ministry/ministry.module';
+import { HikConnectModule } from './hikconnect/hikconnect.module';
+import { HealthModule } from './health/health.module';
 
 @Module({
   imports: [
@@ -56,6 +59,9 @@ import { AuditLogModule } from './audit-log/audit-log.module';
     NotificationsModule,
     PaymentsModule,
     AuditLogModule,
+    MinistryModule,
+    HikConnectModule,
+    HealthModule,
   ],
   providers: [
     // Global ThrottlerGuard — barcha endpointlarga default limit qo'llanadi
