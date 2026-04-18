@@ -23,9 +23,14 @@ function todayDateStr() {
   });
 }
 
-/** Keyboard agar kasalxona ulanmagan bo'lsa */
+/** Keyboard: ulashilmagan → faqat "Tizimga ulanish", ulashilgan → barcha tugmalar */
 function mainKeyboard(linked: boolean) {
-  const rows: ReturnType<typeof Markup.button.callback>[][] = [
+  if (!linked) {
+    return Markup.inlineKeyboard([
+      [Markup.button.callback('🔗 Tizimga ulanish', 'cmd_link')],
+    ]);
+  }
+  return Markup.inlineKeyboard([
     [
       Markup.button.callback('📊 Bugungi davomat', 'cmd_today'),
       Markup.button.callback('⏳ Kelmaganlar', 'cmd_absent'),
@@ -34,11 +39,10 @@ function mainKeyboard(linked: boolean) {
       Markup.button.callback('📈 Haftalik', 'cmd_week'),
       Markup.button.callback('💰 Oylik', 'cmd_month'),
     ],
-  ];
-  if (!linked) {
-    rows.push([Markup.button.callback('🔗 Kasalxonani ulash', 'cmd_link')]);
-  }
-  return Markup.inlineKeyboard(rows);
+    [
+      Markup.button.callback('⚙️ Sozlamalar', 'cmd_settings'),
+    ],
+  ]);
 }
 
 /** Sub-keyboard for today detail */
@@ -182,6 +186,46 @@ export class TelegramService implements OnModuleInit {
         await this.buildMonthlyReport(now.getMonth() + 1, now.getFullYear(), sub?.hospitalId || null),
         { parse_mode: 'HTML' },
       );
+    });
+
+    bot.action('cmd_settings', async (ctx) => {
+      await ctx.answerCbQuery();
+      const chatId = this.chatIdFromCtx(ctx);
+      const linked = await this.getLinkedHospital(chatId);
+      if (linked) {
+        await ctx.reply(
+          `⚙️ <b>Sozlamalar</b>\n\n` +
+          `🏥 Ulangan kasalxona: <b>${linked.name}</b>\n\n` +
+          `Kasalxonani o'zgartirish uchun /start buyrug'ini yuboring.`,
+          {
+            parse_mode: 'HTML',
+            ...Markup.inlineKeyboard([
+              [Markup.button.callback('🔓 Kasalxonani uzish', 'cmd_unlink')],
+              [Markup.button.callback('⬅️ Orqaga', 'cmd_back')],
+            ]),
+          },
+        );
+      }
+    });
+
+    bot.action('cmd_unlink', async (ctx) => {
+      await ctx.answerCbQuery();
+      const chatId = this.chatIdFromCtx(ctx);
+      await this.prisma.telegramSubscription.updateMany({
+        where: { chatId },
+        data: { isActive: false },
+      });
+      await ctx.reply(
+        '✅ Kasalxona ulanishi uzildi.\n\nQayta ulash uchun /start bosing.',
+        { ...mainKeyboard(false) },
+      );
+    });
+
+    bot.action('cmd_back', async (ctx) => {
+      await ctx.answerCbQuery();
+      const chatId = this.chatIdFromCtx(ctx);
+      const linked = await this.getLinkedHospital(chatId);
+      await ctx.reply('🏠 Asosiy menyu:', { ...mainKeyboard(!!linked) });
     });
 
     bot.action('cmd_link', async (ctx) => {
