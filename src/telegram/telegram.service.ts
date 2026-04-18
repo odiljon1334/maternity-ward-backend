@@ -40,6 +40,9 @@ function mainKeyboard(linked: boolean) {
       Markup.button.callback('💰 Oylik', 'cmd_month'),
     ],
     [
+      Markup.button.callback('💳 Obuna', 'cmd_subscription'),
+    ],
+    [
       Markup.button.callback('⚙️ Sozlamalar', 'cmd_settings'),
     ],
   ]);
@@ -185,6 +188,161 @@ export class TelegramService implements OnModuleInit {
       await ctx.reply(
         await this.buildMonthlyReport(now.getMonth() + 1, now.getFullYear(), sub?.hospitalId || null),
         { parse_mode: 'HTML' },
+      );
+    });
+
+    // ── OBUNA: holat ko'rsatish ───────────────────────────────────────────────
+    bot.action('cmd_subscription', async (ctx) => {
+      await ctx.answerCbQuery();
+      const chatId = this.chatIdFromCtx(ctx);
+      const linked = await this.getLinkedHospital(chatId);
+      if (!linked) return ctx.reply('⚠️ Avval kasalxonani ulang.');
+
+      const empCount = await this.prisma.employee.count({
+        where: { hospitalId: linked.id, status: 'ACTIVE' },
+      });
+
+      // Oxirgi faol obunani tekshirish
+      const activeSub = await this.prisma.payment.findFirst({
+        where: {
+          hospitalId: linked.id,
+          status: 'PAID',
+          validUntil: { gte: new Date() },
+        },
+        orderBy: { validUntil: 'desc' },
+      });
+
+      const MONTHLY_PER_EMP = 12_000;
+      const ANNUAL_PER_EMP  = 100_000;
+      const monthlyTotal    = empCount * MONTHLY_PER_EMP;
+      const annualTotal     = empCount * ANNUAL_PER_EMP;
+      const saving          = monthlyTotal * 12 - annualTotal;
+
+      const subLine = activeSub
+        ? `✅ <b>Faol obuna:</b> ${activeSub.type === 'MONTHLY' ? 'Oylik' : 'Yillik'}\n` +
+          `📅 Tugash sanasi: <b>${activeSub.validUntil!.toLocaleDateString('uz-UZ', { timeZone: 'Asia/Tashkent' })}</b>`
+        : `❌ <b>Faol obuna yo'q</b>`;
+
+      await ctx.reply(
+        `💳 <b>Obuna boshqaruvi</b>\n\n` +
+        `🏥 ${linked.name}\n` +
+        `👥 Faol xodimlar: <b>${empCount} nafar</b>\n\n` +
+        `${subLine}\n\n` +
+        `📌 <b>Tariflar:</b>\n` +
+        `📅 Oylik: ${empCount} × 12,000 = <b>${monthlyTotal.toLocaleString()} so'm</b>\n` +
+        `📆 Yillik: ${empCount} × 100,000 = <b>${annualTotal.toLocaleString()} so'm</b>\n` +
+        `   <i>(${saving.toLocaleString()} so'm tejaysiz)</i>`,
+        {
+          parse_mode: 'HTML',
+          ...Markup.inlineKeyboard([
+            [
+              Markup.button.callback(`📅 Oylik — ${monthlyTotal.toLocaleString()} so'm`, `pay_monthly:${linked.id}`),
+            ],
+            [
+              Markup.button.callback(`📆 Yillik — ${annualTotal.toLocaleString()} so'm`, `pay_annual:${linked.id}`),
+            ],
+            [Markup.button.callback('⬅️ Orqaga', 'cmd_back')],
+          ]),
+        },
+      );
+    });
+
+    // ── TO'LOV: invoice yuborish ─────────────────────────────────────────────
+    const sendSubscriptionInvoice = async (ctx: any, hospitalId: string, type: 'MONTHLY' | 'ANNUAL') => {
+      const paymentToken = this.config.get<string>('TELEGRAM_PAYMENT_TOKEN');
+      if (!paymentToken) return ctx.reply('⚠️ To\'lov tizimi sozlanmagan. Admin bilan bog\'laning.');
+
+      const hospital = await this.prisma.hospital.findUnique({ where: { id: hospitalId } });
+      if (!hospital) return;
+
+      const empCount = await this.prisma.employee.count({
+        where: { hospitalId, status: 'ACTIVE' },
+      });
+
+      const isMonthly   = type === 'MONTHLY';
+      const pricePerEmp = isMonthly ? 12_000 : 100_000;
+      const totalSom    = empCount * pricePerEmp;
+      const title       = isMonthly ? '📅 Oylik obuna' : '📆 Yillik obuna';
+      const period      = isMonthly ? '1 oy' : '1 yil';
+
+      await ctx.replyWithInvoice(
+        title,
+        `${hospital.name} uchun ${period}lik obuna\n👥 ${empCount} nafar xodim × ${pricePerEmp.toLocaleString()} so'm`,
+        `${type}:${hospitalId}`,           // payload
+        paymentToken,
+        'UZS',
+        [{ label: `${empCount} xodim (${period})`, amount: totalSom }],
+        {
+          photo_url: 'https://clinicuk24.com/icons/icon-192x192.png',
+          need_name: false,
+          send_phone_number: false,
+        },
+      );
+    };
+
+    bot.action(/^pay_(monthly|annual):(.+)$/, async (ctx) => {
+      await ctx.answerCbQuery();
+      const match = ctx.match;
+      const type = match[1].toUpperCase() as 'MONTHLY' | 'ANNUAL';
+      const hospitalId = match[2];
+      await sendSubscriptionInvoice(ctx, hospitalId, type);
+    });
+
+    // ── PRE-CHECKOUT: tasdiqlash ─────────────────────────────────────────────
+    bot.on('pre_checkout_query', async (ctx) => {
+      await ctx.answerPreCheckoutQuery(true);
+    });
+
+    // ── MUVAFFAQIYATLI TO'LOV ────────────────────────────────────────────────
+    bot.on('message', async (ctx: any) => {
+      const payment = ctx.message?.successful_payment;
+      if (!payment) return;
+
+      const payload   = payment.invoice_payload as string;
+      const [type, hospitalId] = payload.split(':');
+      const chatId    = String(ctx.chat.id);
+      const firstName = ctx.from?.first_name || 'Foydalanuvchi';
+      const totalSom  = payment.total_amount;
+
+      const hospital = await this.prisma.hospital.findUnique({ where: { id: hospitalId } });
+      if (!hospital) return;
+
+      const empCount = await this.prisma.employee.count({
+        where: { hospitalId, status: 'ACTIVE' },
+      });
+
+      const now       = new Date();
+      const validUntil = new Date(now);
+      if (type === 'MONTHLY') validUntil.setMonth(validUntil.getMonth() + 1);
+      else validUntil.setFullYear(validUntil.getFullYear() + 1);
+
+      const period = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+      await this.prisma.payment.create({
+        data: {
+          hospitalId,
+          payerName:          firstName,
+          amount:             totalSom,
+          type:               type as any,
+          period,
+          status:             'PAID',
+          employeeCount:      empCount,
+          validUntil,
+          telegramPaymentId:  payment.telegram_payment_charge_id,
+          paidByChatId:       chatId,
+          note:               `Telegram orqali to\'lov`,
+        },
+      });
+
+      const typeLabel = type === 'MONTHLY' ? 'oylik' : 'yillik';
+      await ctx.reply(
+        `✅ <b>To'lov muvaffaqiyatli!</b>\n\n` +
+        `🏥 ${hospital.name}\n` +
+        `💰 ${totalSom.toLocaleString()} so'm (${typeLabel})\n` +
+        `👥 ${empCount} nafar xodim\n` +
+        `📅 Amal qilish muddati: <b>${validUntil.toLocaleDateString('uz-UZ', { timeZone: 'Asia/Tashkent' })}</b>\n\n` +
+        `Rahmat! 🙏`,
+        { parse_mode: 'HTML', ...mainKeyboard(true) },
       );
     });
 

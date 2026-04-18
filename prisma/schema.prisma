@@ -583,18 +583,24 @@ model BreakRecord {
 // ─────────────────────────────────────────────
 
 model Payment {
-  id         String        @id @default(uuid())
-  hospitalId String
-  hospital   Hospital      @relation(fields: [hospitalId], references: [id], onDelete: Cascade)
-  payerName  String
-  amount     Decimal       @db.Decimal(12, 2)
-  type       PaymentType   @default(MONTHLY)
-  period     String?                           // "2026-03" — YYYY-MM
-  status     PaymentStatus @default(PAID)
-  paidAt     DateTime      @default(now())
-  note       String?
-  createdAt  DateTime      @default(now())
-  updatedAt  DateTime      @updatedAt
+  id                  String        @id @default(uuid())
+  hospitalId          String
+  hospital            Hospital      @relation(fields: [hospitalId], references: [id], onDelete: Cascade)
+  payerName           String
+  amount              Decimal       @db.Decimal(12, 2)
+  type                PaymentType   @default(MONTHLY)
+  period              String?                           // "2026-03" — YYYY-MM
+  status              PaymentStatus @default(PAID)
+  paidAt              DateTime      @default(now())
+  note                String?
+  // Telegram to'lov uchun qo'shimcha fieldlar
+  employeeCount       Int?                              // To'lov vaqtidagi xodimlar soni
+  validUntil          DateTime?                         // Obuna tugash sanasi
+  telegramPaymentId   String?                           // Telegram charge_id
+  paidByChatId        String?                           // Kim to'ladi (chatId)
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
 
   @@index([hospitalId, period])
+  @@index([hospitalId, validUntil])
 }
