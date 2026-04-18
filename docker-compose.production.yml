@@ -118,6 +118,30 @@ services:
           memory: 512M
           cpus: '0.75'
 
+  # ── MediaMTX (RTSP → HLS relay) ───────────────────────────
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    container_name: maternity_mediamtx
+    restart: always
+    environment:
+      MTX_PROTOCOLS: tcp
+      MTX_HLSADDRESS: :8888
+      MTX_RTSPADDRESS: :8554
+      MTX_RTMPADDRESS: :1935
+      MTX_HLSALWAYSREMUX: "yes"
+      MTX_HLSSEGMENTCOUNT: "3"
+      MTX_HLSSEGMENTDURATION: "1s"
+    ports:
+      - "8554:8554"   # RTSP — Hikvision kamera ulanadi
+      - "1935:1935"   # RTMP
+    networks:
+      - maternity_net
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+
   # ── Nginx (reverse proxy + SSL) ────────────────────────────
   nginx:
     image: nginx:alpine
