@@ -199,7 +199,7 @@ export class TelegramService implements OnModuleInit {
       if (!linked) return ctx.reply('⚠️ Avval kasalxonani ulang.');
 
       const empCount = await this.prisma.employee.count({
-        where: { hospitalId: linked.id, status: 'ACTIVE' },
+        where: { hospitalId: linked.id, firedAt: null },
       });
 
       // Oxirgi faol obunani tekshirish
@@ -256,7 +256,7 @@ export class TelegramService implements OnModuleInit {
       if (!hospital) return;
 
       const empCount = await this.prisma.employee.count({
-        where: { hospitalId, status: 'ACTIVE' },
+        where: { hospitalId, firedAt: null },
       });
 
       const isMonthly   = type === 'MONTHLY';
@@ -308,7 +308,7 @@ export class TelegramService implements OnModuleInit {
       if (!hospital) return;
 
       const empCount = await this.prisma.employee.count({
-        where: { hospitalId, status: 'ACTIVE' },
+        where: { hospitalId, firedAt: null },
       });
 
       const now       = new Date();
