@@ -25,8 +25,9 @@ export class EmployeesService {
     const { search, departmentId, positionId, page = 1, limit = 20 } = query;
     const skip = (page - 1) * limit;
 
+    // hospitalId bo'sh string bo'lsa (SUPER_ADMIN kasalxona tanlamagan) — barcha xodimlar
     const where: any = {
-      hospitalId,
+      ...(hospitalId ? { hospitalId } : {}),
       firedAt: null,
       ...(departmentId && { departmentId }),
       ...(positionId && { positionId }),
@@ -145,13 +146,14 @@ export class EmployeesService {
       return tx.employee.update({
         where: { id },
         data: {
-          ...(rest.fullName && { fullName: rest.fullName }),
-          ...(rest.gender && { gender: rest.gender }),
-          ...(rest.phone !== undefined && { phone: rest.phone }),
-          ...(rest.email !== undefined && { email: rest.email }),
-          ...(rest.departmentId && { departmentId: rest.departmentId }),
-          ...(rest.positionId && { positionId: rest.positionId }),
-          ...(rest.baseSalary && { baseSalary: rest.baseSalary }),
+          ...(rest.fullName                   && { fullName:       rest.fullName }),
+          ...(rest.gender                     && { gender:         rest.gender }),
+          ...(rest.phone       !== undefined   && { phone:          rest.phone }),
+          ...(rest.email       !== undefined   && { email:          rest.email }),
+          ...(rest.departmentId               && { departmentId:   rest.departmentId }),
+          ...(rest.positionId                 && { positionId:      rest.positionId }),
+          ...(rest.baseSalary  !== undefined   && { baseSalary:     rest.baseSalary }),
+          ...(rest.employeeNo  !== undefined   && rest.employeeNo !== '' && { employeeNo: rest.employeeNo }),
           ...(rest.telegramChatId !== undefined && { telegramChatId: rest.telegramChatId }),
         },
         include: { department: true, position: true },

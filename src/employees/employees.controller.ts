@@ -17,7 +17,8 @@ import { BadRequestException } from '@nestjs/common';
 import { Response } from 'express';
 import { AuditLogService } from '../audit-log/audit-log.service';
 
-/** SUPER_ADMIN uchun: JWT'dagi hospitalId null bo'lsa, query'dan targetHospitalId oladi */
+/** SUPER_ADMIN uchun: JWT'dagi hospitalId null bo'lsa, query'dan targetHospitalId oladi.
+ *  Ikkalasi ham yo'q bo'lsa — '' qaytaradi (findAll unda filtersiz ko'rsatadi) */
 function resolveHospitalId(jwtHospId: string | null, targetHospId?: string): string {
   return jwtHospId || targetHospId || '';
 }
