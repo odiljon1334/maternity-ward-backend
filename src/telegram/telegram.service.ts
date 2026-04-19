@@ -132,30 +132,61 @@ export class TelegramService implements OnModuleInit {
     });
 
     // ── Text commands ─────────────────────────────────────────────────────────
-    bot.command('today', async (ctx) => {
+    // ── /today | /bugun ───────────────────────────────────────────────────────
+    const handleToday = async (ctx: any) => {
       const sub = await this.getSubscriber(ctx);
       const { text, keyboard } = await this.buildTodaySummary(sub?.hospitalId || null);
       await ctx.reply(text, { parse_mode: 'HTML', ...keyboard });
-    });
+    };
+    bot.command('today', handleToday);
+    bot.command('bugun', handleToday);
 
-    bot.command('absent', async (ctx) => {
+    // ── /absent | /kechikganlar | /kelmaganlar ────────────────────────────────
+    const handleAbsent = async (ctx: any) => {
       const sub = await this.getSubscriber(ctx);
       await ctx.reply(await this.buildNotCheckedInList(sub?.hospitalId || null), { parse_mode: 'HTML' });
-    });
+    };
+    bot.command('absent', handleAbsent);
+    bot.command('kechikganlar', handleAbsent);
+    bot.command('kelmaganlar', handleAbsent);
 
-    bot.command('week', async (ctx) => {
+    // ── /week | /haftalik ─────────────────────────────────────────────────────
+    const handleWeek = async (ctx: any) => {
       const sub = await this.getSubscriber(ctx);
       await ctx.reply(await this.buildWeeklyReport(sub?.hospitalId || null), { parse_mode: 'HTML' });
-    });
+    };
+    bot.command('week', handleWeek);
+    bot.command('haftalik', handleWeek);
 
-    bot.command('month', async (ctx) => {
+    // ── /month | /oylik | /hisobot ────────────────────────────────────────────
+    const handleMonth = async (ctx: any) => {
       const sub = await this.getSubscriber(ctx);
       const now = new Date();
       await ctx.reply(
         await this.buildMonthlyReport(now.getMonth() + 1, now.getFullYear(), sub?.hospitalId || null),
         { parse_mode: 'HTML' },
       );
-    });
+    };
+    bot.command('month', handleMonth);
+    bot.command('oylik', handleMonth);
+    bot.command('hisobot', handleMonth);
+
+    // ── /yordam | /help ───────────────────────────────────────────────────────
+    const handleHelp = async (ctx: any) => {
+      await ctx.reply(
+        `📖 <b>Mavjud buyruqlar:</b>\n\n` +
+        `/bugun — Bugungi davomat xulosasi\n` +
+        `/kelmaganlar — Bugun hali kelmagan hodimlar\n` +
+        `/haftalik — Haftalik hisobot\n` +
+        `/oylik — Oylik maosh hisoboti\n` +
+        `/hisobot — Oylik hisobot\n` +
+        `/stop — Bildirishnomalarni o'chirish\n\n` +
+        `Yoki quyidagi tugmalardan foydalaning 👇`,
+        { parse_mode: 'HTML' },
+      );
+    };
+    bot.command('yordam', handleHelp);
+    bot.command('help', handleHelp);
 
     // ── Inline button: main actions ───────────────────────────────────────────
     bot.action('cmd_today', async (ctx) => {
