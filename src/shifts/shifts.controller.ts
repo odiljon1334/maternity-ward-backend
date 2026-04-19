@@ -63,4 +63,14 @@ export class ShiftsController {
   ) {
     return this.service.remove(id, resolveHospitalId(hospitalId, targetHospitalId));
   }
+
+  /** Default DAYTIME + NIGHTTIME smenlarini avtomatik yaratish */
+  @Post('seed')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  seed(
+    @CurrentUser('hospitalId') hospitalId: string | null,
+    @Query('targetHospitalId') targetHospitalId?: string,
+  ) {
+    return this.service.seed(resolveHospitalId(hospitalId, targetHospitalId)!);
+  }
 }

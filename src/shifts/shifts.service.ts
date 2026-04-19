@@ -38,4 +38,39 @@ export class ShiftsService {
     await this.findOne(id, hospitalId);
     return this.prisma.shiftTemplate.delete({ where: { id } });
   }
+
+  /** Default DAYTIME + NIGHTTIME smenlarini upsert qilish */
+  async seed(hospitalId: string) {
+    const defaults = [
+      {
+        name: 'Kunduzgi smen',
+        type: 'DAYTIME'   as const,
+        startTime: '08:00',
+        endTime:   '20:00',
+        isOvernight: false,
+        durationH:   12,
+        graceMinutes: 15,
+      },
+      {
+        name: 'Kechki smen',
+        type: 'NIGHTTIME' as const,
+        startTime: '20:00',
+        endTime:   '08:00',
+        isOvernight: true,
+        durationH:   12,
+        graceMinutes: 15,
+      },
+    ];
+
+    const results = [];
+    for (const s of defaults) {
+      const shift = await this.prisma.shiftTemplate.upsert({
+        where: { hospitalId_name: { hospitalId, name: s.name } },
+        update: s,
+        create: { ...s, hospitalId },
+      });
+      results.push(shift);
+    }
+    return { message: 'Smenlar yaratildi', shifts: results };
+  }
 }

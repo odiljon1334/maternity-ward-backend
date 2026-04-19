@@ -98,15 +98,38 @@ export class SchedulesService {
     const emp = await this.prisma.employee.findUnique({ where: { id: employeeId } });
     if (!emp) throw new NotFoundException('Hodim topilmadi');
 
-    // Get shift templates
-    const [dayShift, nightShift] = await Promise.all([
+    // Get shift templates (with auto-seed fallback)
+    let [dayShift, nightShift] = await Promise.all([
       this.prisma.shiftTemplate.findFirst({ where: { hospitalId: emp.hospitalId, type: 'DAYTIME' } })
         .then(s => s || this.prisma.shiftTemplate.findFirst({ where: { type: 'DAYTIME' } })),
       this.prisma.shiftTemplate.findFirst({ where: { hospitalId: emp.hospitalId, type: 'NIGHTTIME' } })
         .then(s => s || this.prisma.shiftTemplate.findFirst({ where: { type: 'NIGHTTIME' } })),
     ]);
+
     if (!dayShift || !nightShift) {
-      throw new BadRequestException('Avval smenlarni yarating (POST /shifts/seed)');
+      if (!emp.hospitalId) {
+        throw new BadRequestException("Xodimga kasalxona biriktirilmagan. Avval xodim ma'lumotlarini to'ldiring.");
+      }
+      // Auto-seed default shifts for this hospital so user doesn't need to go to Settings first
+      const seedDefaults = [
+        { name: 'Kunduzgi smen', type: 'DAYTIME'   as ShiftType, startTime: '08:00', endTime: '20:00', isOvernight: false, durationH: 12, graceMinutes: 15 },
+        { name: 'Kechki smen',   type: 'NIGHTTIME' as ShiftType, startTime: '20:00', endTime: '08:00', isOvernight: true,  durationH: 12, graceMinutes: 15 },
+      ];
+      for (const s of seedDefaults) {
+        await this.prisma.shiftTemplate.upsert({
+          where: { hospitalId_name: { hospitalId: emp.hospitalId, name: s.name } },
+          update: s,
+          create: { ...s, hospitalId: emp.hospitalId },
+        });
+      }
+      // Re-fetch after auto-seed
+      [dayShift, nightShift] = await Promise.all([
+        this.prisma.shiftTemplate.findFirst({ where: { hospitalId: emp.hospitalId, type: 'DAYTIME' } }),
+        this.prisma.shiftTemplate.findFirst({ where: { hospitalId: emp.hospitalId, type: 'NIGHTTIME' } }),
+      ]);
+      if (!dayShift || !nightShift) {
+        throw new BadRequestException("Smenlar yaratib bo'lmadi. Sozlamalar > Smenlar bo'limiga o'ting.");
+      }
     }
 
     // Generate dates for the month
