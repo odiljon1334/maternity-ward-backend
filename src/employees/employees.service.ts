@@ -239,7 +239,15 @@ export class EmployeesService {
 
   async remove(id: string, hospitalId: string) {
     await this.findOne(id, hospitalId);
-    return this.prisma.employee.delete({ where: { id } });
+    // Bog'liq yozuvlarni avval o'chirish (cascade yo'q jadvallar)
+    await this.prisma.$transaction([
+      this.prisma.payrollRecord.deleteMany({ where: { employeeId: id } }),
+      this.prisma.weeklyAttendanceStat.deleteMany({ where: { employeeId: id } }),
+      this.prisma.attendanceRecord.deleteMany({ where: { employeeId: id } }),
+      this.prisma.schedule.deleteMany({ where: { employeeId: id } }),
+      this.prisma.employee.delete({ where: { id } }),
+    ]);
+    return { success: true, message: 'Hodim o\'chirildi' };
   }
 
   // ──────────────────────────────────────────
