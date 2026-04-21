@@ -5,7 +5,7 @@ WORKDIR /app
 
 # Dependencies (devDeps ham kerak — TypeScript build uchun)
 COPY package*.json ./
-RUN npm ci
+RUN npm ci --legacy-peer-deps
 
 COPY . .
 RUN npx prisma generate
@@ -20,7 +20,7 @@ ENV NODE_ENV=production
 
 # Faqat production dependencies
 COPY package*.json ./
-RUN npm ci --only=production && npm cache clean --force
+RUN npm ci --omit=dev --legacy-peer-deps && npm cache clean --force
 
 # Build artifacts
 COPY --from=builder /app/dist ./dist
