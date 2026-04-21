@@ -6,8 +6,8 @@
 
 set -e  # Har qanday xatoda to'xtasin
 
-BACKEND_DIR="/home/deploy/maternity-ward-backend"
-FRONTEND_DIR="/home/deploy/maternity-ward-frontend"
+BACKEND_DIR="/home/maternit-backend/maternity-ward-backend"
+FRONTEND_DIR="/home/maternit-backend/maternity-ward-frontend"
 COMPOSE_FILE="$BACKEND_DIR/docker-compose.production.yml"
 
 # Ranglar
@@ -46,15 +46,22 @@ success ".env.prod tekshirildi"
 
 # ── 2. Repo update ───────────────────────────────────────────
 log "2. Kod yangilanmoqda..."
-cd "$BACKEND_DIR" && git pull origin main
-cd "$FRONTEND_DIR" && git pull origin main
+cd "$BACKEND_DIR"
+git fetch origin main
+git reset --hard origin/main
+cd "$FRONTEND_DIR"
+git fetch origin main
+git reset --hard origin/main
 success "Kod yangilandi"
 
-# ── 3. Eski containerlarni to'xtatish ───────────────────────
-log "3. Eski containerlar to'xtatilmoqda..."
+# ── 3. Barcha maternity containerlarni to'xtatish ───────────
+log "3. Barcha eski containerlar o'chirilmoqda..."
+# Compose orqali to'xtatish
 cd "$BACKEND_DIR"
 docker compose -f docker-compose.production.yml down --remove-orphans 2>/dev/null || true
-success "Containerlar to'xtatildi"
+# Qolgan maternity containerlarni ham o'chirish (boshqa compose fayllar bilan ishgantushganlar)
+docker ps -a --format "{{.Names}}" | grep -i "maternity" | xargs -r docker rm -f 2>/dev/null || true
+success "Containerlar o'chirildi"
 
 # ── 4. Build ─────────────────────────────────────────────────
 log "4. Docker image build qilinmoqda (bu biroz vaqt oladi)..."
