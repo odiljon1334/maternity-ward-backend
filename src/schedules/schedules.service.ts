@@ -88,7 +88,7 @@ export class SchedulesService {
   // GENERATE schedule by pattern
   // ──────────────────────────────────────────
   async generate(dto: GenerateScheduleDto) {
-    const { employeeId, month, year, pattern, customWeeks } = dto;
+    const { employeeId, month, year, pattern, customWeeks, shiftId } = dto;
     // FIXED_DAY/FIXED_NIGHT uchun startsWith shart emas; rotating uchun default DAYTIME
     const startsWith: ShiftType = dto.startsWith ?? 'DAYTIME';
     // Default: Dushanba–Juma (1–5). 0=Yak, 1=Du, 2=Se, 3=Ch, 4=Pa, 5=Sha, 6=Yak
@@ -129,6 +129,15 @@ export class SchedulesService {
       ]);
       if (!dayShift || !nightShift) {
         throw new BadRequestException("Smenlar yaratib bo'lmadi. Sozlamalar > Smenlar bo'limiga o'ting.");
+      }
+    }
+
+    // Bitta xodim uchun aniq shift berilgan bo'lsa — uni ishlatamiz
+    if (shiftId) {
+      const specific = await this.prisma.shiftTemplate.findUnique({ where: { id: shiftId } });
+      if (specific) {
+        if (specific.type === 'DAYTIME') dayShift = specific;
+        else nightShift = specific;
       }
     }
 

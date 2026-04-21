@@ -38,6 +38,11 @@ export class GenerateScheduleDto {
   @IsInt({ each: true })
   workDays?: number[];
 
+  // Bitta xodim uchun aniq shift (startTime belgilash)
+  @IsOptional()
+  @IsString()
+  shiftId?: string;
+
   // Custom pattern uchun: har hafta uchun shift type
   @IsOptional()
   @IsArray()

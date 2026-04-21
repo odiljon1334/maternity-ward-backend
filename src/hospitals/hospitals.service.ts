@@ -37,11 +37,13 @@ export class HospitalsService {
 
       return {
         ...h,
+        directorId:       dirUser?.id ?? null,
+        directorUsername: dirUser?.username ?? null,
         directorName,
         directorPhone,
         directorHasPhone: !!directorPhone,
         telegramLinked: (h._count?.telegramSubs ?? 0) > 0,
-        users: undefined, // frontend ga raw User ma'lumoti kerak emas
+        users: undefined,
       };
     });
   }
@@ -152,6 +154,43 @@ export class HospitalsService {
       });
 
       return { user: { id: user.id, username: user.username, role: user.role }, employee, hospital };
+    });
+  }
+
+  // Update director for a hospital
+  async updateDirector(hospitalId: string, dto: {
+    fullName?: string;
+    phone?: string;
+    password?: string;
+  }) {
+    const hospital = await this.findOne(hospitalId);
+
+    const dirUser = await this.prisma.user.findFirst({
+      where: { hospitalId, role: 'DIRECTOR' },
+      include: { employee: true },
+    });
+    if (!dirUser) throw new NotFoundException('Direktor topilmadi');
+
+    return this.prisma.$transaction(async (tx) => {
+      if (dto.password) {
+        const bcrypt = await import('bcrypt');
+        const hash = await bcrypt.hash(dto.password, 12);
+        await tx.user.update({ where: { id: dirUser.id }, data: { passwordHash: hash } });
+      }
+
+      if (dto.fullName !== undefined || dto.phone !== undefined) {
+        if (dirUser.employee) {
+          await tx.employee.update({
+            where: { id: dirUser.employee.id },
+            data: {
+              ...(dto.fullName !== undefined && { fullName: dto.fullName }),
+              ...(dto.phone !== undefined && { phone: dto.phone }),
+            },
+          });
+        }
+      }
+
+      return { success: true, message: 'Direktor yangilandi' };
     });
   }
 }

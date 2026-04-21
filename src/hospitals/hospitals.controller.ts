@@ -68,4 +68,13 @@ export class HospitalsController {
   ) {
     return this.svc.createDirector(id, body);
   }
+
+  @Patch(':id/directors')
+  @Roles(SUPER)
+  updateDirector(
+    @Param('id') id: string,
+    @Body() body: { fullName?: string; phone?: string; password?: string },
+  ) {
+    return this.svc.updateDirector(id, body);
+  }
 }
