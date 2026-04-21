@@ -8,7 +8,7 @@ COPY package*.json ./
 RUN npm ci --legacy-peer-deps
 
 COPY . .
-RUN npx prisma generate
+RUN DATABASE_URL=postgresql://dummy:dummy@localhost/dummy npx prisma generate
 RUN npm run build
 
 # ─── Production stage ────────────────────────────────────────────────────────
