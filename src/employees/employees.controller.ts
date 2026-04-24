@@ -16,6 +16,7 @@ import { memoryStorage } from 'multer';
 import { BadRequestException } from '@nestjs/common';
 import { Response } from 'express';
 import { AuditLogService } from '../audit-log/audit-log.service';
+import { SkipThrottle } from '@nestjs/throttler';
 
 /** SUPER_ADMIN uchun: JWT'dagi hospitalId null bo'lsa, query'dan targetHospitalId oladi.
  *  Ikkalasi ham yo'q bo'lsa — '' qaytaradi (findAll unda filtersiz ko'rsatadi) */
@@ -23,6 +24,7 @@ function resolveHospitalId(jwtHospId: string | null, targetHospId?: string): str
   return jwtHospId || targetHospId || '';
 }
 
+@SkipThrottle()
 @Controller('employees')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class EmployeesController {

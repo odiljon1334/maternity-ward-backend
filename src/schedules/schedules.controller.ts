@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import { SchedulesService } from './schedules.service';
 import {
   GenerateScheduleDto,
@@ -15,6 +16,7 @@ function resolveHospitalId(jwtHospId: string | null, targetHospId?: string): str
   return jwtHospId || targetHospId || null;
 }
 
+@SkipThrottle()
 @Controller('schedules')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class SchedulesController {

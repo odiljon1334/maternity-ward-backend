@@ -1,4 +1,5 @@
 import { Body, Controller, Delete, Get, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import { PositionsService } from './positions.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -10,6 +11,7 @@ function resolveHospitalId(jwtHospId: string | null, targetHospId?: string): str
   return jwtHospId || targetHospId || null;
 }
 
+@SkipThrottle()
 @Controller('positions')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class PositionsController {
