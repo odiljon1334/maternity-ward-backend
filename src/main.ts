@@ -85,16 +85,34 @@ async function bootstrap() {
 
   const port = process.env.PORT || 5001;
   await app.listen(port);
-  console.log(`\n🏥 Maternity Ward Attendance API`);
-  console.log(`🚀 Server running on: http://localhost:${port}/api/v1`);
+
+  // Cluster worker ID (PM2 rejimida)
+  const workerId = process.env.NODE_APP_INSTANCE
+    ? `[Worker #${process.env.NODE_APP_INSTANCE}] `
+    : '';
+
+  console.log(`\n🏥 ${workerId}Maternity Ward Attendance API`);
+  console.log(`🚀 ${workerId}Server running on: http://localhost:${port}/api/v1`);
   console.log(`❤️  Health check: http://localhost:${port}/api/v1/health`);
-  console.log(`📦 Environment: ${process.env.NODE_ENV || 'development'}\n`);
+  console.log(`📦 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`🧠 Memory limit: ${process.env.NODE_OPTIONS || 'default'}\n`);
+
+  // ── Graceful shutdown (PM2 SIGINT / SIGTERM) ──────────────────────────
+  const shutdown = async (signal: string) => {
+    console.log(`\n${workerId}${signal} qabul qilindi — graceful shutdown...`);
+    await app.close();
+    console.log(`${workerId}Server to'xtatildi`);
+    process.exit(0);
+  };
+
+  process.on('SIGINT',  () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
 }
 
 // Global unhandled rejection handler
 process.on('unhandledRejection', (reason) => {
   console.error('⚠️  Unhandled Rejection:', reason);
-  // Production da process ni o'ldirmaymiz — PM2/Docker restart qilsin
+  // Production da process ni o'ldirmaymiz — PM2 restart qilsin
 });
 
 process.on('uncaughtException', (err) => {
