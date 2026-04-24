@@ -5,9 +5,13 @@
 # Ko'p container (horizontal scaling):
 #   docker compose -f docker-compose.production.yml up -d --scale backend=4
 #   (Nginx upstream service DNS orqali barchasini topadi)
+#
+# Server: 6 CPU, ~12–16 GB RAM
+# CPU taqsimot:
+#   postgres  2.0  |  backend  2.0  |  frontend  1.0
+#   redis     0.5  |  mediamtx 0.5  |  nginx     0.25
+#   (Limitlar maksimum, bir vaqtda hammasi full charge qilmaydi)
 # ============================================================
-
-version: '3.9'
 
 services:
 
@@ -20,24 +24,24 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-maternity_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB:-maternity_ward_db}
-    # Performance tuning (32-core server uchun)
+    # Performance tuning (6-core server uchun)
     command: >
       postgres
-      -c max_connections=200
-      -c shared_buffers=2GB
-      -c effective_cache_size=6GB
-      -c maintenance_work_mem=512MB
+      -c max_connections=100
+      -c shared_buffers=512MB
+      -c effective_cache_size=2GB
+      -c maintenance_work_mem=128MB
       -c checkpoint_completion_target=0.9
-      -c wal_buffers=64MB
+      -c wal_buffers=16MB
       -c default_statistics_target=100
       -c random_page_cost=1.1
-      -c effective_io_concurrency=200
-      -c work_mem=16MB
-      -c max_worker_processes=16
-      -c max_parallel_workers_per_gather=8
-      -c max_parallel_workers=16
-      -c min_wal_size=1GB
-      -c max_wal_size=4GB
+      -c effective_io_concurrency=100
+      -c work_mem=8MB
+      -c max_worker_processes=4
+      -c max_parallel_workers_per_gather=2
+      -c max_parallel_workers=4
+      -c min_wal_size=512MB
+      -c max_wal_size=2GB
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
@@ -50,11 +54,11 @@ services:
     deploy:
       resources:
         limits:
-          memory: 8G
-          cpus: '8.0'
-        reservations:
-          memory: 2G
+          memory: 3G
           cpus: '2.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
 
   # ── Redis ──────────────────────────────────────────────────
   redis:
@@ -64,7 +68,7 @@ services:
     command: >
       redis-server
       --requirepass ${REDIS_PASSWORD}
-      --maxmemory 512mb
+      --maxmemory 256mb
       --maxmemory-policy allkeys-lru
       --save 900 1
       --save 300 10
@@ -80,8 +84,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 768M
-          cpus: '1.0'
+          memory: 384M
+          cpus: '0.5'
 
   # ── Backend (NestJS) ───────────────────────────────────────
   # Scaling: docker compose up -d --scale backend=4
@@ -97,10 +101,10 @@ services:
       NODE_ENV: production
       PORT: 5001
       TZ: Asia/Tashkent
-      # Har bir container 4GB Node heap oladi
-      NODE_MEMORY_MB: 4096
-      # DB connection pool: instances × connection_limit ≤ max_connections(200)
-      # 4 instance × 20 = 80 ≤ 200 ✓
+      # Har bir container 1.5GB Node heap oladi
+      NODE_MEMORY_MB: 1536
+      # DB connection pool: instances × connection_limit ≤ max_connections(100)
+      # 1 instance × 20 = 20 ≤ 100 ✓  (--scale backend=4 bo'lsa: 4×20=80 ≤ 100 ✓)
       DATABASE_URL: >-
         postgresql://${POSTGRES_USER:-maternity_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-maternity_ward_db}?connection_limit=20&pool_timeout=30
       REDIS_HOST: redis
@@ -121,15 +125,16 @@ services:
       retries: 3
       start_period: 60s
     deploy:
-      # Replikalar: docker compose up --scale backend=4 yoki bu yerda:
-      replicas: 2
+      # Replikalar: docker compose up --scale backend=2 yoki bu yerda:
+      # 6-CPU server: 1 replica default. Scale kerak bo'lsa: --scale backend=2
+      replicas: 1
       resources:
         limits:
-          memory: 5G
-          cpus: '4.0'
+          memory: 2G
+          cpus: '2.0'
         reservations:
-          memory: 512M
-          cpus: '0.5'
+          memory: 256M
+          cpus: '0.25'
       restart_policy:
         condition: on-failure
         delay: 5s
@@ -157,8 +162,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1G
-          cpus: '2.0'
+          memory: 768M
+          cpus: '1.0'
 
   # ── MediaMTX (RTSP → HLS relay) ───────────────────────────
   mediamtx:
@@ -181,8 +186,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512M
-          cpus: '1.0'
+          memory: 384M
+          cpus: '0.5'
 
   # ── Nginx (reverse proxy + SSL) ────────────────────────────
   nginx:
@@ -205,7 +210,7 @@ services:
       resources:
         limits:
           memory: 128M
-          cpus: '1.0'
+          cpus: '0.25'
 
 networks:
   maternity_net:
