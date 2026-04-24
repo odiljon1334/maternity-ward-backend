@@ -42,4 +42,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
   CMD wget -qO- http://localhost:5001/api/v1/health || exit 1
 
 # Migrate qilib keyin serverni start qilish
-CMD ["sh", "-c", "npx prisma migrate deploy && node dist/src/main"]
+# NODE_OPTIONS docker-compose da ham override qilish mumkin
+CMD ["sh", "-c", "npx prisma migrate deploy && node --max-old-space-size=${NODE_MEMORY_MB:-4096} dist/src/main"]

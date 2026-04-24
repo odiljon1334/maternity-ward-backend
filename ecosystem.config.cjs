@@ -1,6 +1,10 @@
 /**
  * PM2 Ecosystem Config — Maternity Ward Backend
  *
+ * ⚠️  DOCKER ishlatayotgan bo'lsangiz bu fayl KERAK EMAS!
+ *     Docker o'zi process boshqaradi. Bu fayl faqat bare-metal
+ *     (Docker'siz, to'g'ridan-to'g'ri server) deploy uchun.
+ *
  * Cluster mode: barcha CPU yadrolariga HTTP requestlar taqsimlanadi.
  *
  * ⚠️  WebSocket (WsAdapter) cluster rejimida:
