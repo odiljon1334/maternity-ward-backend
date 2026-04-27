@@ -1,5 +1,4 @@
 import { Controller, Post, HttpCode, Logger, Req } from '@nestjs/common';
-import { SkipThrottle } from '@nestjs/throttler';
 import { Request } from 'express';
 import { TerminalEventType } from '@prisma/client';
 
@@ -8,7 +7,6 @@ import { TelegramService } from '../telegram/telegram.service';
 import { mapHikvisionStatus } from './constants/terminal-event.map';
 
 /** Hikvision qurilmalari tez-tez so'rov yuboradi — rate limit o'chirilgan */
-@SkipThrottle({ default: true, login: true })
 @Controller('hikvision')
 export class HikvisionWebhookController {
   private readonly logger = new Logger(HikvisionWebhookController.name);

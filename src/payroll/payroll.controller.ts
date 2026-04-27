@@ -2,7 +2,6 @@ import {
   Body, Controller, Get, Param, Post, Put, Query,
   UseGuards, Res, StreamableFile,
 } from '@nestjs/common';
-import { SkipThrottle } from '@nestjs/throttler';
 import { PayrollService } from './payroll.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -31,8 +30,7 @@ export class PayrollController {
   }
 
   @Get('preview/:employeeId')
-  @SkipThrottle({ default: true, login: true })
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR, UserRole.ASSISTANT_ADMIN)
+    @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR, UserRole.ASSISTANT_ADMIN)
   preview(
     @Param('employeeId') employeeId: string,
     @Query('month') month: string,
@@ -43,8 +41,7 @@ export class PayrollController {
   }
 
   @Get(':employeeId')
-  @SkipThrottle({ default: true, login: true })
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR, UserRole.ASSISTANT_ADMIN)
+    @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR, UserRole.ASSISTANT_ADMIN)
   findOne(
     @Param('employeeId') employeeId: string,
     @Query('month') month: string,

@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Post, Put, Req, UseGuards } from '@nestjs/common';
 import { Request } from 'express';
-import { Throttle, SkipThrottle } from '@nestjs/throttler';
+import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
@@ -23,6 +23,7 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   /** Brute-force himoya: 15 daqiqada max 10 urinish */
+  @UseGuards(ThrottlerGuard)
   @Throttle({ login: { ttl: 900_000, limit: 10 } })
   @Post('login')
   login(@Body() dto: LoginDto, @Req() req: Request) {

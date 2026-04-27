@@ -1,7 +1,6 @@
 import {
   Controller, Get, Post, Put, Patch, Delete, Param, Body, UseGuards,
 } from '@nestjs/common';
-import { SkipThrottle } from '@nestjs/throttler';
 import { HospitalsService } from './hospitals.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -11,7 +10,6 @@ import { UserRole } from '@prisma/client';
 const SUPER = UserRole.SUPER_ADMIN;
 const ASST  = UserRole.ASSISTANT_ADMIN;
 
-@SkipThrottle()
 @Controller('hospitals')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class HospitalsController {

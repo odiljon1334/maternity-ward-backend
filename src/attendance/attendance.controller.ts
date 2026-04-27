@@ -1,7 +1,6 @@
 import {
   Body, Controller, Get, Param, Post, Put, Query, UseGuards,
 } from '@nestjs/common';
-import { SkipThrottle } from '@nestjs/throttler';
 import { AttendanceService } from './attendance.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -30,8 +29,7 @@ export class AttendanceController {
   }
 
   @Get('employee/:id')
-  @SkipThrottle({ default: true, login: true })
-  getEmployeeAttendance(
+    getEmployeeAttendance(
     @Param('id') id: string,
     @Query('month') month: string,
     @Query('year') year: string,
@@ -40,8 +38,7 @@ export class AttendanceController {
   }
 
   @Get('weekly-stats/:employeeId')
-  @SkipThrottle({ default: true, login: true })
-  getWeeklyStats(
+    getWeeklyStats(
     @Param('employeeId') employeeId: string,
     @Query('weekStart') weekStart: string,
   ) {

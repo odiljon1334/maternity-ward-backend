@@ -2,7 +2,6 @@ import {
   Controller, Get, Put, Delete, Post,
   Param, Query, Body, UseGuards,
 } from '@nestjs/common';
-import { SkipThrottle } from '@nestjs/throttler';
 import { NotificationsService } from './notifications.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -33,8 +32,7 @@ export class NotificationsController {
   }
 
   @Get('unread-count')
-  @SkipThrottle({ default: true, login: true })
-  unreadCount() {
+    unreadCount() {
     return this.service.unreadCount();
   }
 

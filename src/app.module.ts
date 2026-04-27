@@ -1,7 +1,6 @@
 import { Module } from '@nestjs/common';
-import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
-import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
 
 import { PrismaModule } from './prisma/prisma.module';
@@ -30,10 +29,10 @@ import { HealthModule } from './health/health.module';
     // Config — .env loading
     ConfigModule.forRoot({ isGlobal: true }),
 
-    // Rate limiting — global: 100 req/min; login: 10 req/15min (auth.controller)
+    // Rate limiting — faqat login endpoint uchun (auth.controller.ts da @UseGuards)
+    // Barcha boshqa endpointlar JWT bilan himoyalangan + Nginx rate limit bor
     ThrottlerModule.forRoot([
-      { name: 'default', ttl: 60_000,  limit: 100 },
-      { name: 'login',   ttl: 900_000, limit: 10  }, // 10 urinish / 15 daqiqa
+      { name: 'login', ttl: 900_000, limit: 10 }, // 10 urinish / 15 daqiqa
     ]),
 
     // Cron scheduler
@@ -63,9 +62,6 @@ import { HealthModule } from './health/health.module';
     HikConnectModule,
     HealthModule,
   ],
-  providers: [
-    // Global ThrottlerGuard — barcha endpointlarga default limit qo'llanadi
-    { provide: APP_GUARD, useClass: ThrottlerGuard },
-  ],
+  providers: [],
 })
 export class AppModule {}

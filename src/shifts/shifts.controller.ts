@@ -1,5 +1,4 @@
 import { Body, Controller, Delete, Get, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
-import { SkipThrottle } from '@nestjs/throttler';
 import { ShiftsService } from './shifts.service';
 import { CreateShiftDto } from './dto/create-shift.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -12,7 +11,6 @@ function resolveHospitalId(jwtHospId: string | null, targetHospId?: string): str
   return jwtHospId || targetHospId || null;
 }
 
-@SkipThrottle()
 @Controller('shifts')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class ShiftsController {
