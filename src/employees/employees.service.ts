@@ -17,6 +17,21 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { processAndSavePhoto } from '../common/utils/image.util';
 
+// ─── Kirill → Lotin transliteratsiya ────────────────────────────────────────
+const CYR_TO_LAT: Record<string, string> = {
+  'а':'a','б':'b','в':'v','г':'g','д':'d','е':'e','ё':'yo','ж':'j','з':'z',
+  'и':'i','й':'y','к':'k','л':'l','м':'m','н':'n','о':'o','п':'p','р':'r',
+  'с':'s','т':'t','у':'u','ф':'f','х':'x','ц':'c','ч':'ch','ш':'sh',
+  'ъ':"'",'ь':"'",'э':'e','ю':'yu','я':'ya',
+  'ғ':'g','қ':'q','ҳ':'h','ў':'o',
+};
+function cyrToLat(str: string): string {
+  return str.toLowerCase().split('').map(c => CYR_TO_LAT[c] ?? c).join('');
+}
+function hasCyrillic(str: string): boolean {
+  return /[а-яёА-ЯЁҒғҚқҲҳЎў]/.test(str);
+}
+
 @Injectable()
 export class EmployeesService {
   constructor(private readonly prisma: PrismaService) {}
@@ -31,16 +46,25 @@ export class EmployeesService {
       firedAt: null,
       ...(departmentId && { departmentId }),
       ...(positionId && { positionId }),
-      ...(search && {
-        OR: [
-          // Ism boshidan qidirish: "Ak" → "Akbarov", "Akmal"
+      ...(search && (() => {
+        // Kirill kiritilsa → Lotin ekvivalentini ham qidiramiz (va aksincha)
+        const alt = hasCyrillic(search) ? cyrToLat(search) : null;
+        const nameFilters: any[] = [
           { fullName: { startsWith: search, mode: 'insensitive' } },
-          // Familiya boshidan: "Xolmatov Ak..." → ikkinchi so'z "Ak" bilan boshlanadi
           { fullName: { contains: ` ${search}`, mode: 'insensitive' } },
-          { employeeNo: { contains: search, mode: 'insensitive' } },
-          { phone: { contains: search, mode: 'insensitive' } },
-        ],
-      }),
+          ...(alt ? [
+            { fullName: { startsWith: alt, mode: 'insensitive' } },
+            { fullName: { contains: ` ${alt}`, mode: 'insensitive' } },
+          ] : []),
+        ];
+        return {
+          OR: [
+            ...nameFilters,
+            { employeeNo: { contains: search, mode: 'insensitive' } },
+            { phone: { contains: search, mode: 'insensitive' } },
+          ],
+        };
+      })()),
     };
 
     const [data, total] = await Promise.all([
