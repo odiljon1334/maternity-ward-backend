@@ -140,6 +140,15 @@ export class SchedulesService {
         else nightShift = specific;
       }
     }
+    // Bulk generate'dan kelgan aniq shift IDlar (custom vaqt)
+    if ((dto as any).dayShiftId) {
+      const s = await this.prisma.shiftTemplate.findUnique({ where: { id: (dto as any).dayShiftId } });
+      if (s) dayShift = s;
+    }
+    if ((dto as any).nightShiftId) {
+      const s = await this.prisma.shiftTemplate.findUnique({ where: { id: (dto as any).nightShiftId } });
+      if (s) nightShift = s;
+    }
 
     // Generate dates for the month
     const start = dayjs.tz(`${year}-${String(month).padStart(2, '0')}-01`, TZ).startOf('month');
@@ -229,7 +238,9 @@ export class SchedulesService {
           pattern: dto.pattern,
           startsWith: dto.startsWith,
           workDays: dto.workDays,
-        });
+          dayShiftId: dto.dayShiftId,
+          nightShiftId: dto.nightShiftId,
+        } as any);
         results.push({ employeeId: empId, ...result });
       } catch (e) {
         results.push({ employeeId: empId, error: e.message });

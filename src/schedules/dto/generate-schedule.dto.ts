@@ -43,6 +43,15 @@ export class GenerateScheduleDto {
   @IsString()
   shiftId?: string;
 
+  // Aniq kunduzgi / kechki shift ID (bulkGenerate'dan keladi)
+  @IsOptional()
+  @IsString()
+  dayShiftId?: string;
+
+  @IsOptional()
+  @IsString()
+  nightShiftId?: string;
+
   // Custom pattern uchun: har hafta uchun shift type
   @IsOptional()
   @IsArray()
@@ -82,6 +91,15 @@ export class BulkGenerateScheduleDto {
   @IsOptional()
   @IsString()
   departmentId?: string;
+
+  // Frontend tomonidan yaratilgan / topilgan shift IDlari (custom vaqt uchun)
+  @IsOptional()
+  @IsString()
+  dayShiftId?: string;
+
+  @IsOptional()
+  @IsString()
+  nightShiftId?: string;
 }
 
 export class ManualScheduleEntryDto {
