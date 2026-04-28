@@ -33,7 +33,10 @@ export class EmployeesService {
       ...(positionId && { positionId }),
       ...(search && {
         OR: [
-          { fullName: { contains: search, mode: 'insensitive' } },
+          // Ism boshidan qidirish: "Ak" → "Akbarov", "Akmal"
+          { fullName: { startsWith: search, mode: 'insensitive' } },
+          // Familiya boshidan: "Xolmatov Ak..." → ikkinchi so'z "Ak" bilan boshlanadi
+          { fullName: { contains: ` ${search}`, mode: 'insensitive' } },
           { employeeNo: { contains: search, mode: 'insensitive' } },
           { phone: { contains: search, mode: 'insensitive' } },
         ],
