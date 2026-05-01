@@ -499,16 +499,16 @@ export class TelegramService implements OnModuleInit {
         return;
       }
 
-      // DIRECTOR yoki HOSPITAL_ADMIN roli bo'lgan foydalanuvchilar ulay oladi
-      const ALLOWED_ROLES = ['DIRECTOR', 'HOSPITAL_ADMIN'];
+      // DIRECTOR yoki ADMIN roli bo'lgan foydalanuvchilar ulay oladi
+      const ALLOWED_ROLES = ['DIRECTOR', 'ADMIN'];
       if (!employee.user || !ALLOWED_ROLES.includes(employee.user.role)) {
         const roleInfo = employee.user
-          ? `(joriy rol: <b>${employee.user.role}</b>)`
-          : '(tizim hisobi mavjud emas)';
+          ? `Joriy rol: <b>${employee.user.role}</b>`
+          : 'Tizim hisobi mavjud emas';
         await ctx.reply(
-          `⛔ <b>Kirish rad etildi</b> ${roleInfo}\n\n` +
-          'Faqat kasalxona <b>direktori</b> yoki <b>administratori</b> Telegram botni ulay oladi.\n\n' +
-          'Agar siz direktor bo\'lsangiz, tizim administratori bilan bog\'laning.',
+          `⛔ <b>Kirish rad etildi</b>\n${roleInfo}\n\n` +
+          'Faqat kasalxona <b>direktori</b> (DIRECTOR yoki ADMIN) Telegram botni ulay oladi.\n\n' +
+          'Tizim administratori bilan bog\'laning.',
           { parse_mode: 'HTML' },
         );
         return;
