@@ -1,4 +1,4 @@
-import { Controller, Post, HttpCode, Logger, Req } from '@nestjs/common';
+import { Controller, Get, Post, HttpCode, Logger, Req } from '@nestjs/common';
 import { Request } from 'express';
 import { TerminalEventType } from '@prisma/client';
 
@@ -15,6 +15,13 @@ export class HikvisionWebhookController {
     private readonly attendanceService: AttendanceService,
     private readonly telegramService: TelegramService,
   ) {}
+
+  /** Kamera aloqa tekshiruvi — GET so'rovi har 2 soniyada keladi */
+  @Get('webhook')
+  @HttpCode(200)
+  healthCheck() {
+    return { status: 'ok' };
+  }
 
   @Post('webhook')
   @HttpCode(200)
