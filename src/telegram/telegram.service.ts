@@ -104,19 +104,20 @@ export class TelegramService implements OnModuleInit {
       const username = ctx.from?.username || ctx.from?.first_name || '';
       const firstName = ctx.from?.first_name || 'Foydalanuvchi';
 
-      // Faqat mavjud (linked) subscriptionni yangilaymiz — null yaratmaymiz
-      const existing = await this.prisma.telegramSubscription.findFirst({
-        where: { chatId, hospitalId: { not: null } },
+      // Faqat FAOL subscription username ni yangilaymiz.
+      // isActive=false bo'lgan (o'chirilgan) subscriptionni QAYTA TIKLAMAYMIZ —
+      // foydalanuvchi telefon raqamini qayta kiritishi shart.
+      const activeExisting = await this.prisma.telegramSubscription.findFirst({
+        where: { chatId, hospitalId: { not: null }, isActive: true },
         orderBy: { createdAt: 'desc' },
       });
 
-      if (existing) {
+      if (activeExisting) {
         await this.prisma.telegramSubscription.update({
-          where: { id: existing.id },
-          data: { isActive: true, username },
+          where: { id: activeExisting.id },
+          data: { username },   // faqat username, isActive TEGINMAYMİZ
         });
       }
-      // Yangi foydalanuvchi uchun subscription yaratmaymiz — ulashganda yaratiladi
 
       const linked = await this.getLinkedHospital(chatId);
       const hospitalLine = linked
