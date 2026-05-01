@@ -2,8 +2,15 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { AttendanceService } from '../attendance/attendance.service';
 import { TelegramService } from '../telegram/telegram.service';
+import { SchedulesService } from '../schedules/schedules.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { DateUtil } from '../common/utils/date.util';
+import dayjs from 'dayjs';
+import timezone from 'dayjs/plugin/timezone';
+import utc from 'dayjs/plugin/utc';
+dayjs.extend(utc);
+dayjs.extend(timezone);
+const TZ = process.env.TIMEZONE || 'Asia/Tashkent';
 
 @Injectable()
 export class CronService {
@@ -12,6 +19,7 @@ export class CronService {
   constructor(
     private readonly attendanceService: AttendanceService,
     private readonly telegramService: TelegramService,
+    private readonly schedulesService: SchedulesService,
     private readonly prisma: PrismaService,
   ) {}
 
@@ -309,6 +317,31 @@ export class CronService {
       }
     } catch (err) {
       this.logger.error('monthlyReport failed:', err);
+    }
+  }
+
+  /**
+   * Har oyning 1-kuni 00:05 da — oldingi oyning grafigini yangi oyga avtomatik ko'chiradi.
+   * Allaqachon grafigi bor xodimlar o'tkazib yuboriladi.
+   */
+  @Cron('5 0 1 * *', { timeZone: TZ })
+  async monthlyScheduleRollover() {
+    const now       = dayjs.tz(new Date(), TZ);
+    const toMonth   = now.month() + 1;
+    const toYear    = now.year();
+    const fromDate  = now.subtract(1, 'month');
+    const fromMonth = fromDate.month() + 1;
+    const fromYear  = fromDate.year();
+
+    this.logger.log(`Schedule rollover start: ${fromMonth}/${fromYear} → ${toMonth}/${toYear}`);
+    try {
+      // hospitalId = null → barcha kasalxonalar uchun
+      const result = await this.schedulesService.rolloverMonth(
+        fromMonth, fromYear, toMonth, toYear, null,
+      );
+      this.logger.log(`Rollover done: ${JSON.stringify(result)}`);
+    } catch (err) {
+      this.logger.error('monthlyScheduleRollover failed:', err);
     }
   }
 }

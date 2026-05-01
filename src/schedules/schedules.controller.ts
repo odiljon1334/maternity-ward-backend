@@ -79,6 +79,20 @@ export class SchedulesController {
     return this.service.bulkManual(dto);
   }
 
+  @Post('rollover')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  rollover(
+    @Body() body: { fromMonth: number; fromYear: number; toMonth: number; toYear: number },
+    @CurrentUser('hospitalId') hospitalId: string | null,
+    @Query('targetHospitalId') targetHospitalId?: string,
+  ) {
+    return this.service.rolloverMonth(
+      body.fromMonth, body.fromYear,
+      body.toMonth,   body.toYear,
+      resolveHospitalId(hospitalId, targetHospitalId),
+    );
+  }
+
   @Put(':id')
   @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
   updateEntry(

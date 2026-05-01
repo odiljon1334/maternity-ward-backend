@@ -297,6 +297,119 @@ export class SchedulesService {
   }
 
   // ──────────────────────────────────────────
+  // ROLLOVER: copy schedules to next month
+  // ──────────────────────────────────────────
+  /**
+   * fromMonth/Year dagi grafiklarni toMonth/Year ga ko'chiradi.
+   * toMonth da allaqachon grafigi bor xodimlar o'tkazib yuboriladi.
+   * Har bir kun uchun: toMonth dagi hafta-nomer + hafta-kuni bo'yicha
+   * fromMonth dan mos yozuv topiladi — shu smena/status ishlatiladi.
+   * (2-2, 1-1, FIXED, va boshqa patternlar to'g'ri saqlanadi)
+   */
+  async rolloverMonth(
+    fromMonth: number, fromYear: number,
+    toMonth:   number, toYear:   number,
+    hospitalId?: string | null,
+  ) {
+    const fromStart = DateUtil.startOfMonth(fromYear, fromMonth);
+    const fromEnd   = DateUtil.endOfMonth(fromYear, fromMonth);
+    const toStart   = DateUtil.startOfMonth(toYear, toMonth);
+    const toEnd     = DateUtil.endOfMonth(toYear, toMonth);
+
+    // fromMonth da grafigi bor xodimlar
+    const withSchedule = await this.prisma.schedule.findMany({
+      where: {
+        date: { gte: fromStart, lte: fromEnd },
+        ...(hospitalId && { employee: { hospitalId } }),
+      },
+      select: { employeeId: true },
+      distinct: ['employeeId'],
+    });
+    const employeeIds = withSchedule.map(s => s.employeeId);
+    if (!employeeIds.length) return { rolled: 0, skipped: 0, total: 0 };
+
+    // toMonth da allaqachon grafigi borlarni exclude qilish
+    const alreadyHas = await this.prisma.schedule.findMany({
+      where: {
+        date: { gte: toStart, lte: toEnd },
+        employeeId: { in: employeeIds },
+      },
+      select: { employeeId: true },
+      distinct: ['employeeId'],
+    });
+    const alreadyHasIds = new Set(alreadyHas.map(s => s.employeeId));
+    const toProcessIds  = employeeIds.filter(id => !alreadyHasIds.has(id));
+
+    if (!toProcessIds.length) {
+      return { rolled: 0, skipped: alreadyHasIds.size, total: employeeIds.length,
+               message: 'Barcha xodimlar uchun grafik allaqachon mavjud' };
+    }
+
+    // fromMonth barcha grafiklarini olish
+    const fromSchedules = await this.prisma.schedule.findMany({
+      where: {
+        date: { gte: fromStart, lte: fromEnd },
+        employeeId: { in: toProcessIds },
+      },
+    });
+
+    // employeeId → Map<"hafta_weekday" → { shiftId, status }>
+    const empMap = new Map<string, Map<string, { shiftId: string; status: ScheduleStatus }>>();
+    for (const s of fromSchedules) {
+      const d = dayjs.tz(s.date, TZ);
+      const week = Math.floor((d.date() - 1) / 7); // 0-4
+      const dow  = d.day();                          // 0=Yak..6=Sha
+      const key  = `${week}_${dow}`;
+      if (!empMap.has(s.employeeId)) empMap.set(s.employeeId, new Map());
+      empMap.get(s.employeeId)!.set(key, { shiftId: s.shiftId, status: s.status });
+    }
+
+    let rolled = 0;
+    for (const empId of toProcessIds) {
+      const dayMap = empMap.get(empId);
+      if (!dayMap) continue;
+
+      let cur = dayjs.tz(
+        `${toYear}-${String(toMonth).padStart(2, '0')}-01`, TZ,
+      ).startOf('month');
+      const end = cur.endOf('month');
+
+      while (cur.isBefore(end) || cur.isSame(end, 'day')) {
+        const week = Math.floor((cur.date() - 1) / 7);
+        const dow  = cur.day();
+
+        // Shu hafta + weekday bor-yo'qligini tekshirish;
+        // yo'q bo'lsa oldingi haftalardan izlash (toMonth fromMonth dan uzunroq bo'lishi mumkin)
+        let entry = dayMap.get(`${week}_${dow}`);
+        if (!entry) {
+          for (let w = week - 1; w >= 0; w--) {
+            entry = dayMap.get(`${w}_${dow}`);
+            if (entry) break;
+          }
+        }
+
+        if (entry) {
+          const dateStart = DateUtil.startOfDay(cur.toDate());
+          await this.prisma.schedule.upsert({
+            where:  { employeeId_date: { employeeId: empId, date: dateStart } },
+            update: { shiftId: entry.shiftId, status: entry.status },
+            create: { employeeId: empId, date: dateStart, shiftId: entry.shiftId, status: entry.status },
+          });
+        }
+        cur = cur.add(1, 'day');
+      }
+      rolled++;
+    }
+
+    return {
+      rolled,
+      skipped: alreadyHasIds.size,
+      total:   employeeIds.length,
+      message: `${rolled} ta xodim grafigi ${toMonth}/${toYear} oyiga ko'chirildi`,
+    };
+  }
+
+  // ──────────────────────────────────────────
   // HELPER: resolve week of month (0-indexed)
   // ──────────────────────────────────────────
   private getWeekOfMonth(date: Dayjs, monthStart: Dayjs): number {
