@@ -81,7 +81,17 @@ export class TelegramService implements OnModuleInit {
 
     this.bot = new Telegraf(token);
     this.setupCommands();
-    this.bot.launch().catch((err) => this.logger.error('Bot launch failed:', err));
+    this.bot.launch().then(async () => {
+      // Android va boshqa qurilmalarda / menyusida ko'rinishi uchun
+      await this.bot.telegram.setMyCommands([
+        { command: 'start',       description: '🏠 Botni ishga tushirish / Asosiy menyu' },
+        { command: 'bugun',       description: '📊 Bugungi davomat xulosasi' },
+        { command: 'kelmaganlar', description: '⏳ Hali kelmagan hodimlar' },
+        { command: 'haftalik',    description: '📈 Haftalik kechikishlar hisoboti' },
+        { command: 'oylik',       description: '💰 Oylik maosh hisoboti' },
+        { command: 'stop',        description: '🔕 Bildirishnomalarni o\'chirish' },
+      ]).catch(() => {});
+    }).catch((err) => this.logger.error('Bot launch failed:', err));
     this.logger.log('Telegram bot started');
   }
 
@@ -446,10 +456,23 @@ export class TelegramService implements OnModuleInit {
       const chatId = String(ctx.chat.id);
       const text = ctx.message.text.trim();
 
-      if (!this.pendingLink.has(chatId)) return;
+      // Commands are handled by bot.command/bot.start — skip here
+      if (text.startsWith('/')) return;
 
       const digits = text.replace(/\D/g, '');
-      if (digits.length < 9) {
+      const looksLikePhone = digits.length >= 9;
+      const inPending = this.pendingLink.has(chatId);
+
+      // Process if: user clicked "Tizimga ulanish" (pendingLink)
+      // OR: message looks like a phone number and user is NOT yet linked
+      // (handles server-restart case where pendingLink Set is cleared)
+      if (!inPending) {
+        if (!looksLikePhone) return;
+        const alreadyLinked = await this.getLinkedHospital(chatId);
+        if (alreadyLinked) return; // linked foydalanuvchining tasodifiy raqam xabari — ignore
+      }
+
+      if (!looksLikePhone) {
         await ctx.reply(
           '❌ Noto\'g\'ri format. Raqamni to\'liq kiriting.\nMisol: <code>+998901234567</code>',
           { parse_mode: 'HTML' },
@@ -476,11 +499,15 @@ export class TelegramService implements OnModuleInit {
         return;
       }
 
-      // Faqat DIRECTOR roli bo'lgan foydalanuvchilar ulay oladi
-      if (!employee.user || employee.user.role !== 'DIRECTOR') {
+      // DIRECTOR yoki HOSPITAL_ADMIN roli bo'lgan foydalanuvchilar ulay oladi
+      const ALLOWED_ROLES = ['DIRECTOR', 'HOSPITAL_ADMIN'];
+      if (!employee.user || !ALLOWED_ROLES.includes(employee.user.role)) {
+        const roleInfo = employee.user
+          ? `(joriy rol: <b>${employee.user.role}</b>)`
+          : '(tizim hisobi mavjud emas)';
         await ctx.reply(
-          '⛔ <b>Kirish rad etildi</b>\n\n' +
-          'Faqat tug\'ruq xona <b>direktori</b> Telegram botni ulay oladi.\n\n' +
+          `⛔ <b>Kirish rad etildi</b> ${roleInfo}\n\n` +
+          'Faqat kasalxona <b>direktori</b> yoki <b>administratori</b> Telegram botni ulay oladi.\n\n' +
           'Agar siz direktor bo\'lsangiz, tizim administratori bilan bog\'laning.',
           { parse_mode: 'HTML' },
         );
