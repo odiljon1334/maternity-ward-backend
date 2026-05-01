@@ -336,9 +336,9 @@ export class TelegramService implements OnModuleInit {
     });
 
     // ── MUVAFFAQIYATLI TO'LOV ────────────────────────────────────────────────
-    bot.on('message', async (ctx: any) => {
+    bot.on('message', async (ctx: any, next: () => Promise<void>) => {
       const payment = ctx.message?.successful_payment;
-      if (!payment) return;
+      if (!payment) return next(); // text va boshqa xabarlarni on('text') ga o'tkazish
 
       const payload   = payment.invoice_payload as string;
       const [type, hospitalId] = payload.split(':');
