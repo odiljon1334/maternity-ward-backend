@@ -578,12 +578,6 @@ export class TelegramService implements OnModuleInit {
   ) {
     if (!this.bot) return;
 
-    // Kasalxona to'lovi OVERDUE bo'lsa — Telegram xabar yuborilmaydi
-    if (await isHospitalBlocked(this.prisma, employee.hospitalId)) {
-      this.logger.warn(`Hospital ${employee.hospitalId} blocked — Telegram notification skipped`);
-      return;
-    }
-
     // Faqat shu kasalxonaga ulangan subscriberlar — null hospitalId'ga yubormaymiz
     const subscribers = await this.prisma.telegramSubscription.findMany({
       where: {
