@@ -257,15 +257,25 @@ export class EmployeesService {
   }
 
   async fire(id: string, hospitalId: string, firedAt?: string) {
-    await this.findOne(id, hospitalId);
-    return this.prisma.employee.update({
+    const emp = await this.findOne(id, hospitalId);
+    const result = await this.prisma.employee.update({
       where: { id },
       data: { firedAt: firedAt ? new Date(firedAt) : new Date() },
     });
+    // Agar DIRECTOR bo'lsa — Telegram obunasini o'chirish
+    if (emp.user?.role === 'DIRECTOR' && emp.hospitalId) {
+      await this.prisma.telegramSubscription.updateMany({
+        where: { hospitalId: emp.hospitalId, isActive: true },
+        data: { isActive: false },
+      });
+    }
+    return result;
   }
 
   async remove(id: string, hospitalId: string) {
-    await this.findOne(id, hospitalId);
+    const emp = await this.findOne(id, hospitalId);
+    const isDirector = emp.user?.role === 'DIRECTOR';
+
     // Bog'liq yozuvlarni avval o'chirish (cascade yo'q jadvallar)
     await this.prisma.$transaction([
       this.prisma.payrollRecord.deleteMany({ where: { employeeId: id } }),
@@ -274,6 +284,15 @@ export class EmployeesService {
       this.prisma.schedule.deleteMany({ where: { employeeId: id } }),
       this.prisma.employee.delete({ where: { id } }),
     ]);
+
+    // DIRECTOR o'chirilsa — Telegram obunasini ham o'chirish
+    if (isDirector && emp.hospitalId) {
+      await this.prisma.telegramSubscription.updateMany({
+        where: { hospitalId: emp.hospitalId, isActive: true },
+        data: { isActive: false },
+      });
+    }
+
     return { success: true, message: 'Hodim o\'chirildi' };
   }
 

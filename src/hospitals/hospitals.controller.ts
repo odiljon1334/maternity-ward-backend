@@ -77,4 +77,11 @@ export class HospitalsController {
   ) {
     return this.svc.updateDirector(id, body);
   }
+
+  /** Kasalxonaning barcha Telegram obunalarini o'chirish (eski direktor qoldiqlari uchun) */
+  @Delete(':id/telegram-subs')
+  @Roles(SUPER, ASST)
+  resetTelegramSubs(@Param('id') id: string) {
+    return this.svc.resetTelegramSubs(id);
+  }
 }

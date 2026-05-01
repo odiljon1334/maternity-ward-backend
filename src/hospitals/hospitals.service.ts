@@ -217,4 +217,20 @@ export class HospitalsService {
       return { success: true, message: 'Direktor yangilandi' };
     });
   }
+
+  /** Kasalxonadagi barcha Telegram obunalarini o'chirish.
+   *  Eski direktor o'chirilganda qolib ketgan subscriptionlarni tozalash uchun. */
+  async resetTelegramSubs(hospitalId: string) {
+    const { count } = await this.prisma.telegramSubscription.updateMany({
+      where: { hospitalId, isActive: true },
+      data: { isActive: false },
+    });
+    return {
+      success: true,
+      deactivated: count,
+      message: count > 0
+        ? `${count} ta Telegram obuna o'chirildi. Yangi direktor /start orqali qayta ulana oladi.`
+        : 'Faol Telegram obuna topilmadi.',
+    };
+  }
 }
