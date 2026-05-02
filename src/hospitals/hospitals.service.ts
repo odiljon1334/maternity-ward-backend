@@ -130,21 +130,20 @@ export class HospitalsService {
     }
 
     return this.prisma.$transaction(async (tx) => {
-      // ── Eski direktor(lar) ni to'liq tozalash ──────────────────────────────
-      // 1) User(DIRECTOR) ga bog'liq Employee yozuvlarini o'chirish
+      // ── Eski direktor(lar) ni EMPLOYEE ga demote qilish ────────────────────
+      // O'chirish o'rniga rol EMPLOYEE ga o'zgartiriladi — tarixiy ma'lumotlar saqlanadi
       const oldDirUsers = await tx.user.findMany({
         where: { hospitalId, role: 'DIRECTOR' },
-        include: { employee: true },
       });
       for (const oldUser of oldDirUsers) {
-        if (oldUser.employee) {
-          await tx.employee.delete({ where: { id: oldUser.employee.id } });
-        }
-        await tx.user.delete({ where: { id: oldUser.id } });
+        await tx.user.update({
+          where: { id: oldUser.id },
+          data: { role: 'EMPLOYEE' },
+        });
       }
 
-      // 2) userId=null bo'lib qolgan "yetim" director employee larni ham o'chirish
-      //    (avval qo'lda user o'chirilgan holat uchun)
+      // userId=null bo'lib qolgan "yetim" director employee larni o'chirish
+      // (avval qo'lda user o'chirilgan holat uchun)
       await tx.employee.deleteMany({
         where: {
           hospitalId,
