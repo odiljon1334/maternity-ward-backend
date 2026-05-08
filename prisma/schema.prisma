@@ -365,6 +365,9 @@ model AttendanceRecord {
   earlyLeaveMin   Int  @default(0)
   overtimeMinutes Int  @default(0)
 
+  // Sof ish vaqti (tushlik ayirib tashlangan) — maosh hisoblash uchun
+  netWorkMin      Int  @default(0)
+
   workDate DateTime
   note     String?
 

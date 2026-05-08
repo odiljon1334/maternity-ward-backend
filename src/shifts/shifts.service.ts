@@ -1,6 +1,7 @@
 import { Injectable, ConflictException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateShiftDto } from './dto/create-shift.dto';
+import { calcAutoLunch } from '../common/utils/shift.util';
 
 @Injectable()
 export class ShiftsService {
@@ -26,7 +27,16 @@ export class ShiftsService {
       where: { hospitalId, name: dto.name },
     });
     if (exists) throw new ConflictException('Bu nomli smen mavjud');
-    return this.prisma.shiftTemplate.create({ data: { ...dto, hospitalId } });
+
+    // Tushlik vaqti berilmagan bo'lsa — avtomatik hisoblash
+    const isOvernight = dto.isOvernight ?? false;
+    const autoLunch = (!dto.lunchStart && !dto.lunchEnd)
+      ? calcAutoLunch(dto.startTime, dto.endTime, isOvernight)
+      : {};
+
+    return this.prisma.shiftTemplate.create({
+      data: { ...dto, hospitalId, ...autoLunch },
+    });
   }
 
   async update(id: string, dto: Partial<CreateShiftDto>, hospitalId: string) {

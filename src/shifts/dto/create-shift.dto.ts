@@ -28,4 +28,20 @@ export class CreateShiftDto {
   @Max(60)
   @IsOptional()
   graceMinutes?: number;
+
+  @IsString()
+  @IsOptional()
+  @Matches(/^\d{2}:\d{2}$/, { message: 'lunchStart HH:MM formatida bo\'lishi kerak' })
+  lunchStart?: string;
+
+  @IsString()
+  @IsOptional()
+  @Matches(/^\d{2}:\d{2}$/, { message: 'lunchEnd HH:MM formatida bo\'lishi kerak' })
+  lunchEnd?: string;
+
+  @IsInt()
+  @Min(0)
+  @Max(60)
+  @IsOptional()
+  lunchGraceMin?: number;
 }

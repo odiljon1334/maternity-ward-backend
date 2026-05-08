@@ -9,6 +9,7 @@ import isoWeek from 'dayjs/plugin/isoWeek';
 import { PrismaService } from '../prisma/prisma.service';
 import { DateUtil } from '../common/utils/date.util';
 import { isHospitalBlocked } from '../common/utils/payment.util';
+import { calcNetWorkMin } from '../common/utils/shift.util';
 import { LATE_GRACE_MINUTES, WEEKLY_LATE_THRESHOLD_MIN } from '../common/constants';
 
 dayjs.extend(utc);
@@ -242,8 +243,20 @@ export class AttendanceService {
 
     const earlyLeaveMin   = this.calcEarlyLeaveMinutes(eventDate, expectedEnd);
     const overtimeMinutes = this.calcOvertimeMinutes(eventDate, expectedEnd);
+    const newStatus       = this.recalcStatus(rec.status, rec.lateMinutes, earlyLeaveMin);
 
-    const newStatus = this.recalcStatus(rec.status, rec.lateMinutes, earlyLeaveMin);
+    // Sof ish vaqti: brutto − tushlik (haqiqiy yoki rejalashtirilgan)
+    const shift = schedule?.shift ?? fallbackShift;
+    const netWorkMin = rec.checkIn
+      ? calcNetWorkMin(
+          rec.checkIn,
+          eventDate,
+          rec.lunchOut,
+          rec.lunchIn,
+          shift?.lunchStart,
+          shift?.lunchEnd,
+        )
+      : 0;
 
     const updated = await this.prisma.attendanceRecord.update({
       where: { id: rec.id },
@@ -252,6 +265,7 @@ export class AttendanceService {
         checkOut:        eventDate,
         earlyLeaveMin,
         overtimeMinutes,
+        netWorkMin,
         status:          newStatus,
       },
     });

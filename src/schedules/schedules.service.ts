@@ -7,6 +7,7 @@ import {
   SchedulePattern,
 } from './dto/generate-schedule.dto';
 import { DateUtil } from '../common/utils/date.util';
+import { calcAutoLunch } from '../common/utils/shift.util';
 import { ShiftType, ScheduleStatus } from '@prisma/client';
 import dayjs from 'dayjs';
 import type { Dayjs } from 'dayjs';
@@ -533,8 +534,9 @@ export class SchedulesService {
       });
       if (existing) { shiftCache.set(key, existing.id); continue; }
       const name = `${type === 'DAYTIME' ? 'Kunduzgi' : 'Kechki'} ${startTime}–${endTime}`;
+      const { lunchStart, lunchEnd } = calcAutoLunch(startTime, endTime, isOvernight);
       const created = await this.prisma.shiftTemplate.create({
-        data: { name, type, startTime, endTime, isOvernight, durationH: Math.round(mins / 60), graceMinutes: 15, hospitalId },
+        data: { name, type, startTime, endTime, isOvernight, durationH: Math.round(mins / 60), graceMinutes: 15, hospitalId, lunchStart, lunchEnd },
       });
       shiftCache.set(key, created.id);
     }
