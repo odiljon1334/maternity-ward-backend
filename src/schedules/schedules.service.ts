@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   GenerateScheduleDto,
@@ -22,6 +22,7 @@ const TZ = process.env.TIMEZONE || 'Asia/Tashkent';
 
 @Injectable()
 export class SchedulesService {
+  private readonly logger = new Logger(SchedulesService.name);
   constructor(private readonly prisma: PrismaService) {}
 
   // ──────────────────────────────────────────
@@ -415,6 +416,206 @@ export class SchedulesService {
   private getWeekOfMonth(date: Dayjs, monthStart: Dayjs): number {
     const dayOfMonth = date.date();
     return Math.floor((dayOfMonth - 1) / 7);
+  }
+
+  // ──────────────────────────────────────────
+  // XLSX IMPORT — ism bo'yicha grafik yaratish
+  // ──────────────────────────────────────────
+  /**
+   * XLSX/CSV fayldan hodimlar grafigini import qiladi.
+   * Fayl formati (har bir qator = 1 xodim):
+   *   Col0: Ism familya
+   *   Col1: Jinsi (ixtiyoriy)
+   *   Col2: Lavozim (ixtiyoriy)
+   *   Col3: Qo'shimcha (ixtiyoriy)
+   *   Col4: Telefon (ixtiyoriy)
+   *   Col5..N: "HH:MM  HH:MM" yoki bo'sh (Dushanba→Yakshanba)
+   *
+   * Agar 5 ustun bo'lsa: Du–Ju (5 kunlik)
+   * Agar 7 ustun bo'lsa: Du–Yak (7 kunlik) — Shanba/Yakshanba ham belgilanadi
+   */
+  async importXlsx(
+    fileBuffer: Buffer,
+    month: number,
+    year: number,
+    hospitalId: string | null,
+  ) {
+    const ExcelJS = await import('exceljs');
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(fileBuffer as any);
+
+    // Birinchi ishchi sheet ni topish
+    let ws = wb.worksheets.find(s => s.rowCount > 0);
+    if (!ws) throw new BadRequestException('Fayl bo\'sh yoki noto\'g\'ri formatda');
+
+    // Kasalxonadagi barcha hodimlarni olish (ism normallashtirish uchun)
+    const empWhere: any = { firedAt: null };
+    if (hospitalId) empWhere.hospitalId = hospitalId;
+    const allEmployees = await this.prisma.employee.findMany({
+      where: empWhere,
+      select: { id: true, fullName: true, hospitalId: true },
+    });
+
+    const normalizeEmpName = (n: string) =>
+      n.toLowerCase()
+       .replace(/\s+/g, ' ')
+       .trim()
+       .replace(/[ёъь]/g, '')
+       .replace(/ғ/g, 'g').replace(/қ/g, 'q').replace(/ҳ/g, 'h')
+       .replace(/ў/g, 'u').replace(/ш/g, 'sh').replace(/ч/g, 'ch');
+
+    const empIndex = new Map<string, string>(); // normalizedName → id
+    for (const e of allEmployees) {
+      empIndex.set(normalizeEmpName(e.fullName), e.id);
+    }
+
+    // Shift cache: "startTime|endTime" → shiftId
+    const shiftCache = new Map<string, string>();
+
+    const getOrCreateShift = async (startTime: string, endTime: string, empHospitalId: string | null) => {
+      const key = `${startTime}|${endTime}`;
+      if (shiftCache.has(key)) return shiftCache.get(key)!;
+
+      const [sh, sm] = startTime.split(':').map(Number);
+      const [eh, em] = endTime.split(':').map(Number);
+      const isOvernight = (eh * 60 + em) < (sh * 60 + sm);
+      let mins = (eh * 60 + em) - (sh * 60 + sm);
+      if (mins <= 0) mins += 24 * 60;
+      const durationH = Math.round(mins / 60);
+      const type: ShiftType = isOvernight || sh >= 18 ? 'NIGHTTIME' : 'DAYTIME';
+      const hospId = empHospitalId || hospitalId;
+
+      const existing = await this.prisma.shiftTemplate.findFirst({
+        where: { startTime, endTime, ...(hospId && { hospitalId: hospId }) },
+      });
+      if (existing) { shiftCache.set(key, existing.id); return existing.id; }
+
+      const name = `${type === 'DAYTIME' ? 'Kunduzgi' : 'Kechki'} ${startTime}–${endTime}`;
+      const created = await this.prisma.shiftTemplate.create({
+        data: { name, type, startTime, endTime, isOvernight, durationH, graceMinutes: 15, hospitalId: hospId },
+      });
+      shiftCache.set(key, created.id);
+      return created.id;
+    };
+
+    const parseTime = (raw: string | null): { start: string; end: string } | null => {
+      if (!raw) return null;
+      // "08:00  16:30" veya "08:00 16:30" veya "08:00-16:30"
+      const cleaned = raw.toString().trim().replace(/[–—-]/, ' ').replace(/\s+/, ' ');
+      const m = cleaned.match(/(\d{1,2}:\d{2})\s+(\d{1,2}:\d{2})/);
+      if (!m) return null;
+      const pad = (t: string) => t.split(':').map(p => p.padStart(2, '0')).join(':');
+      return { start: pad(m[1]), end: pad(m[2]) };
+    };
+
+    // Hafta kunlari: col offset → JS day (0=Yak, 1=Du...6=Sha)
+    // 5 ustunli: Du(1), Se(2), Ch(3), Pa(4), Ju(5)
+    // 7 ustunli: Du(1)..Sha(6), Yak(0)
+    const dayOfWeekMap5 = [1, 2, 3, 4, 5];
+    const dayOfWeekMap7 = [1, 2, 3, 4, 5, 6, 0];
+
+    const monthStart = dayjs(`${year}-${String(month).padStart(2, '0')}-01`);
+    const daysInMonth = monthStart.daysInMonth();
+
+    let created = 0, updated = 0, skipped = 0;
+    const unmatched: string[] = [];
+
+    // Barcha kunlar uchun hafta-kuni sxemasi
+    const dateDowMap: Array<{ dateStr: string; dow: number; date: Date }> = [];
+    for (let d = 1; d <= daysInMonth; d++) {
+      const dt = monthStart.date(d);
+      dateDowMap.push({
+        dateStr: dt.format('YYYY-MM-DD'),
+        dow: dt.day(),
+        date: dt.toDate(),
+      });
+    }
+
+    ws.eachRow((row, rowNum) => {
+      // Bu sinxron emas, async bo'lgani uchun promise massiv orqali ishlaymiz
+    });
+
+    // eachRow sinxron — async import uchun rows ni to'plash kerak
+    const rows: any[][] = [];
+    ws.eachRow((row) => {
+      const vals = row.values as any[];
+      rows.push(vals.slice(1)); // 0-indexed: vals[0] bo'sh, vals[1]= A ustun
+    });
+
+    for (const cols of rows) {
+      const rawName = cols[0];
+      if (!rawName) continue;
+      const nameStr = rawName.toString().trim();
+      if (!nameStr) continue;
+
+      const normName = normalizeEmpName(nameStr);
+      const empId = empIndex.get(normName);
+      if (!empId) {
+        // Qisman moslik — first word match
+        const firstWord = normName.split(' ')[0];
+        const partial = [...empIndex.keys()].find(k => k.startsWith(firstWord));
+        if (!partial) { unmatched.push(nameStr); continue; }
+        // Partial match found
+      }
+      const resolvedEmpId = empId ?? [...empIndex.entries()].find(([k]) => normalizeEmpName(k).split(' ')[0] === normalizeEmpName(nameStr).split(' ')[0])?.[1];
+      if (!resolvedEmpId) { unmatched.push(nameStr); continue; }
+
+      // Vaqt ustunlarini aniqlash (col index 5+)
+      const timeCols = cols.slice(5).filter((v) => v !== undefined);
+      const dowMap = timeCols.length >= 7 ? dayOfWeekMap7 : dayOfWeekMap5;
+
+      // Har bir oy kuni uchun schedule yaratish
+      for (const { dateStr, dow, date } of dateDowMap) {
+        const colIdx = dowMap.indexOf(dow);
+        const hasTime = colIdx >= 0 && timeCols[colIdx] != null;
+        const rawTime = hasTime ? timeCols[colIdx]?.toString() : null;
+        const parsed = hasTime ? parseTime(rawTime) : null;
+
+        let shiftId: string | undefined;
+        let status: ScheduleStatus = 'DAY_OFF';
+
+        if (parsed) {
+          const emp = allEmployees.find(e => e.id === resolvedEmpId);
+          shiftId = await getOrCreateShift(parsed.start, parsed.end, emp?.hospitalId ?? null);
+          status = 'WORKING';
+        }
+
+        const dateStart = DateUtil.startOfDay(date);
+        const existing = await this.prisma.schedule.findUnique({
+          where: { employeeId_date: { employeeId: resolvedEmpId, date: dateStart } },
+        });
+
+        if (existing) {
+          await this.prisma.schedule.update({
+            where: { id: existing.id },
+            data: { ...(shiftId && { shiftId }), status },
+          });
+          updated++;
+        } else {
+          // shiftId bo'lmasa default shift topish
+          if (!shiftId) {
+            const emp = allEmployees.find(e => e.id === resolvedEmpId);
+            const defShift = await this.prisma.shiftTemplate.findFirst({
+              where: { ...(emp?.hospitalId && { hospitalId: emp.hospitalId }), type: 'DAYTIME' },
+            });
+            if (defShift) shiftId = defShift.id;
+            else { skipped++; continue; }
+          }
+          await this.prisma.schedule.create({
+            data: { employeeId: resolvedEmpId, date: dateStart, shiftId, status },
+          });
+          created++;
+        }
+      }
+    }
+
+    return {
+      created,
+      updated,
+      skipped,
+      unmatched,
+      message: `Import yakunlandi: ${created} yangi, ${updated} yangilandi${unmatched.length ? `, ${unmatched.length} ta topilmadi` : ''}`,
+    };
   }
 
   private resolveShiftForWeek(

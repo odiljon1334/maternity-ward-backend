@@ -226,7 +226,7 @@ export class AttendanceService {
     });
 
     await this.updateAttendanceEventRecord(employee.id, eventDate, attendance.id);
-    await this.updateWeeklyStats(employee.id, eventDate, lateMinutes, 0, 0);
+    await this.updateWeeklyStats(employee.id, eventDate, lateMinutes, 0, 0, true); // isCheckIn=true
 
     return { employee, action: TerminalEventType.CHECK_IN, attendance, notifyTelegram: true };
   }
@@ -805,6 +805,7 @@ export class AttendanceService {
     addLateMin: number,
     addEarlyMin: number,
     addOvertime: number,
+    isCheckIn = false,   // faqat check-in da daysWorked oshadi
   ) {
     const weekStart = DateUtil.startOfWeek(date);
     const weekEnd   = DateUtil.endOfWeek(date);
@@ -837,6 +838,7 @@ export class AttendanceService {
         totalLateMin:  { increment: addLateMin },
         totalEarlyMin: { increment: addEarlyMin },
         totalOvertime: { increment: addOvertime },
+        ...(isCheckIn && { daysWorked: { increment: 1 } }),
         penaltyLateMin,
         deductionAmount,
       },
@@ -847,7 +849,7 @@ export class AttendanceService {
         totalLateMin:  addLateMin,
         totalEarlyMin: addEarlyMin,
         totalOvertime: addOvertime,
-        daysWorked:    addLateMin > 0 || addEarlyMin > 0 ? 1 : 0,
+        daysWorked:    isCheckIn ? 1 : 0,   // har doim check-in da 1 dan boshlaydi
         penaltyLateMin,
         deductionAmount,
       },

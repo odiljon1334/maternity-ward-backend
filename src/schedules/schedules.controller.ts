@@ -1,4 +1,6 @@
-import { Body, Controller, Get, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Put, Query, UseGuards, UploadedFile, UseInterceptors, BadRequestException } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import { SchedulesService } from './schedules.service';
 import {
   GenerateScheduleDto,
@@ -89,6 +91,27 @@ export class SchedulesController {
     return this.service.rolloverMonth(
       body.fromMonth, body.fromYear,
       body.toMonth,   body.toYear,
+      resolveHospitalId(hospitalId, targetHospitalId),
+    );
+  }
+
+  @Post('import-xlsx')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
+  async importXlsx(
+    @UploadedFile() file: Express.Multer.File,
+    @Body() body: { month: string; year: string },
+    @CurrentUser('hospitalId') hospitalId: string | null,
+    @Query('targetHospitalId') targetHospitalId?: string,
+  ) {
+    if (!file) throw new BadRequestException('Fayl yuklanmadi');
+    const month = parseInt(body.month, 10);
+    const year  = parseInt(body.year,  10);
+    if (!month || !year) throw new BadRequestException('month va year kerak');
+    return this.service.importXlsx(
+      file.buffer,
+      month,
+      year,
       resolveHospitalId(hospitalId, targetHospitalId),
     );
   }
