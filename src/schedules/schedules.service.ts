@@ -616,12 +616,14 @@ export class SchedulesService {
     const updated = toUpdate.length;
     this.logger.log(`importXlsx: ${created} yangi, ${updated} yangilandi, ${skipped} o'tkazib yuborildi, ${unmatched.length} topilmadi`);
 
+    const employeesCount = parsedRows.length;
     return {
       created,
       updated,
       skipped,
       unmatched,
-      message: `Import yakunlandi: ${created} yangi, ${updated} yangilandi${unmatched.length ? `, ${unmatched.length} ta topilmadi` : ''}`,
+      employeesCount,
+      message: `Import yakunlandi: ${employeesCount} hodim, ${created + updated} grafik yozuvi (${created} yangi, ${updated} yangilandi)${unmatched.length ? `, ${unmatched.length} ta topilmadi` : ''}`,
     };
   }
 
