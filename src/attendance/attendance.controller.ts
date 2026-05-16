@@ -28,8 +28,21 @@ export class AttendanceController {
     );
   }
 
+  @Get('my')
+  getMyAttendance(
+    @CurrentUser('sub') userId: string,
+    @Query('month') month: string,
+    @Query('year') year: string,
+  ) {
+    return this.service.getMyAttendance(
+      userId,
+      +month || new Date().getMonth() + 1,
+      +year || new Date().getFullYear(),
+    );
+  }
+
   @Get('employee/:id')
-    getEmployeeAttendance(
+  getEmployeeAttendance(
     @Param('id') id: string,
     @Query('month') month: string,
     @Query('year') year: string,

@@ -478,6 +478,15 @@ export class AttendanceService {
   // PUBLIC: GET METHODS
   // ──────────────────────────────────────────────────────────────────────────────
 
+  async getMyAttendance(userId: string, month: number, year: number) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { employee: true },
+    });
+    if (!user?.employee) throw new NotFoundException('Bu foydalanuvchi uchun xodim profili topilmadi');
+    return this.getEmployeeAttendance(user.employee.id, month, year);
+  }
+
   async getEmployeeAttendance(employeeId: string, month: number, year: number) {
     const start = DateUtil.startOfMonth(year, month);
     const end   = DateUtil.endOfMonth(year, month);
