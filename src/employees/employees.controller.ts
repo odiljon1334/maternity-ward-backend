@@ -198,6 +198,35 @@ export class EmployeesController {
     return result;
   }
 
+  @Post('bulk-delete')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN)
+  async bulkDelete(
+    @Body('ids') ids: string[],
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('hospitalId') hospitalId: string,
+    @Query('targetHospitalId') targetHospitalId?: string,
+  ) {
+    const hId = resolveHospitalId(hospitalId, targetHospitalId);
+    const result = await this.service.bulkDelete(ids, hId);
+    this.auditLog.log({ userId, hospitalId: hId, action: 'BULK_DELETE', entity: 'Employee', details: { count: ids.length } });
+    return result;
+  }
+
+  @Put('bulk-department')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  async bulkUpdateDepartment(
+    @Body('ids') ids: string[],
+    @Body('departmentId') departmentId: string,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('hospitalId') hospitalId: string,
+    @Query('targetHospitalId') targetHospitalId?: string,
+  ) {
+    const hId = resolveHospitalId(hospitalId, targetHospitalId);
+    const result = await this.service.bulkUpdateDepartment(ids, departmentId, hId);
+    this.auditLog.log({ userId, hospitalId: hId, action: 'BULK_MOVE_DEPT', entity: 'Employee', details: { count: ids.length, departmentId } });
+    return result;
+  }
+
   @Delete(':id')
   @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN)
   async remove(

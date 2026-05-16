@@ -297,6 +297,31 @@ export class EmployeesService {
   }
 
   // ──────────────────────────────────────────
+  // BULK OPERATIONS
+  // ──────────────────────────────────────────
+  async bulkDelete(ids: string[], hospitalId: string) {
+    const where = { employeeId: { in: ids } };
+    await this.prisma.$transaction([
+      this.prisma.payrollRecord.deleteMany({ where }),
+      this.prisma.weeklyAttendanceStat.deleteMany({ where }),
+      this.prisma.attendanceRecord.deleteMany({ where }),
+      this.prisma.schedule.deleteMany({ where }),
+      this.prisma.employee.deleteMany({
+        where: { id: { in: ids }, ...(hospitalId ? { hospitalId } : {}) },
+      }),
+    ]);
+    return { success: true, deleted: ids.length };
+  }
+
+  async bulkUpdateDepartment(ids: string[], departmentId: string, hospitalId: string) {
+    const result = await this.prisma.employee.updateMany({
+      where: { id: { in: ids }, ...(hospitalId ? { hospitalId } : {}) },
+      data: { departmentId },
+    });
+    return { success: true, updated: result.count };
+  }
+
+  // ──────────────────────────────────────────
   // CSV IMPORT
   // ──────────────────────────────────────────
   async importCsv(
