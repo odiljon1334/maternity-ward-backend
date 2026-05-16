@@ -427,6 +427,7 @@ model PayrollRecord {
   totalLateMin     Int     @default(0)
   totalEarlyMin    Int     @default(0)
   totalOvertimeMin Int     @default(0)
+  totalNetWorkMin  Int     @default(0)
 
   absenceDeduction    Decimal @default(0) @db.Decimal(12, 2)
   lateDeduction       Decimal @default(0) @db.Decimal(12, 2)

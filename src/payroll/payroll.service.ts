@@ -40,6 +40,8 @@ export class PayrollService {
     const totalLateMin = records.reduce((s, r) => s + r.lateMinutes, 0);
     const totalEarlyMin = records.reduce((s, r) => s + r.earlyLeaveMin, 0);
     const totalOvertimeMin = records.reduce((s, r) => s + r.overtimeMinutes, 0);
+    // Sof ish vaqti: checkIn/checkOut bo'lgan kunlardagi netWorkMin yig'indisi
+    const totalNetWorkMin = records.reduce((s, r) => s + (r.netWorkMin ?? 0), 0);
 
     // Scheduled work days in this month
     const scheduledDays = await this.prisma.schedule.count({
@@ -85,6 +87,7 @@ export class PayrollService {
         totalLateMin,
         totalEarlyMin,
         totalOvertimeMin,
+        totalNetWorkMin,
         absenceDeduction: Math.round(absenceDeduction),
         lateDeduction: Math.round(lateDeduction),
         earlyLeaveDeduction: Math.round(earlyLeaveDeduction),
@@ -253,6 +256,7 @@ export class PayrollService {
       '№', 'F.I.O', 'Bo\'lim', 'Lavozim',
       'Asosiy maosh', 'Ish kunlari', 'Yo\'qligi',
       'Kechikish (min)', 'Erta ketish (min)', 'Overtime (min)',
+      'Sof ish vaqti (min)', 'Sof ish vaqti (soat)',
       'Kechikish kesim', 'Yo\'qlik kesim', 'Overtime bonus',
       'Qo\'l bonus', 'Qo\'l kesim', 'Net maosh', 'Status',
     ]);
@@ -263,6 +267,7 @@ export class PayrollService {
     headerRow.height = 25;
 
     records.forEach((r, i) => {
+      const netMin = r.totalNetWorkMin ?? 0;
       sheet.addRow([
         i + 1,
         r.employee.fullName,
@@ -274,6 +279,8 @@ export class PayrollService {
         r.totalLateMin,
         r.totalEarlyMin,
         r.totalOvertimeMin,
+        netMin,
+        +(netMin / 60).toFixed(2),
         Number(r.lateDeduction),
         Number(r.absenceDeduction),
         Number(r.overtimeBonus),
@@ -285,10 +292,11 @@ export class PayrollService {
     });
 
     sheet.columns = [
-      { width: 4 }, { width: 30 }, { width: 20 }, { width: 20 },
+      { width: 4 },  { width: 30 }, { width: 20 }, { width: 20 },
       { width: 15 }, { width: 12 }, { width: 10 }, { width: 15 },
-      { width: 15 }, { width: 14 }, { width: 15 }, { width: 14 },
-      { width: 15 }, { width: 12 }, { width: 12 }, { width: 15 }, { width: 12 },
+      { width: 15 }, { width: 14 }, { width: 18 }, { width: 18 },
+      { width: 15 }, { width: 14 }, { width: 15 }, { width: 12 },
+      { width: 12 }, { width: 15 }, { width: 12 },
     ];
 
     return (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
