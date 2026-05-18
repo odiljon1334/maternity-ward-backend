@@ -653,6 +653,105 @@ export class TelegramService implements OnModuleInit {
   }
 
   // ──────────────────────────────────────────
+  // NOTIFY: mobil GPS + selfie check-in/out
+  // ──────────────────────────────────────────
+
+  /**
+   * Xodim mobil ilovadan ish joyida check-in/out qilganda directorga xabar yuboradi.
+   * Selfie rasm + GPS joylashuv (interaktiv xarita) birgalikda jo'natiladi.
+   *
+   * @param employee   — employee with hospital, department, position
+   * @param action     — 'CHECK_IN' | 'CHECK_OUT'
+   * @param attendance — saved AttendanceRecord
+   * @param selfieBuffer — optional selfie image buffer
+   */
+  async notifyMobileCheckin(
+    employee: any,
+    action: 'CHECK_IN' | 'CHECK_OUT',
+    attendance: any,
+    selfieBuffer?: Buffer,
+  ): Promise<void> {
+    if (!this.bot) return;
+
+    const subscribers = await this.prisma.telegramSubscription.findMany({
+      where: { isActive: true, hospitalId: employee.hospitalId },
+    });
+    if (!subscribers.length) return;
+
+    const isCheckIn = action === 'CHECK_IN';
+    const checkTime = isCheckIn ? attendance.checkIn : attendance.checkOut;
+    const timeStr   = new Date(checkTime).toLocaleTimeString('uz-UZ', {
+      hour: '2-digit', minute: '2-digit', timeZone: TZ,
+    });
+
+    const emoji      = isCheckIn ? (attendance.lateMinutes > 0 ? '⚠️' : '✅') : '🚶';
+    const actionText = isCheckIn ? 'KELDI (mobil)' : 'KETDI (mobil)';
+
+    let extra = '';
+    if (isCheckIn && attendance.lateMinutes > 0) {
+      extra = `\n⏱ <b>${formatMinutes(attendance.lateMinutes)} kechikdi</b>`;
+    } else if (!isCheckIn && attendance.earlyLeaveMin > 0) {
+      extra = `\n⚡ <b>${formatMinutes(attendance.earlyLeaveMin)} erta ketdi</b>`;
+    }
+
+    // GPS manzil
+    const lat = attendance.gpsLat ?? employee.gpsLat;
+    const lng = attendance.gpsLng ?? employee.gpsLng;
+    const gpsLine = (lat && lng)
+      ? `\n📍 <a href="https://maps.google.com/?q=${lat},${lng}">Xaritada ko'rish</a>`
+      : '';
+    const accuracyLine = attendance.gpsAccuracy
+      ? ` (±${Math.round(attendance.gpsAccuracy)}m)`
+      : '';
+
+    const caption =
+      `${emoji} <b>${employee.fullName}</b> ${actionText}\n` +
+      `🕐 Vaqt: <b>${timeStr}</b>\n` +
+      `🏥 Tashkilot: ${employee.hospital?.name || '—'}\n` +
+      `🏢 Bo'lim: ${employee.department?.name || '—'}\n` +
+      `💼 Lavozim: ${employee.position?.name || '—'}` +
+      extra +
+      gpsLine +
+      (gpsLine && accuracyLine ? `\n🎯 GPS aniqlik: ${accuracyLine.trim()}` : '');
+
+    // Selfie: check-in selfie file yoki xodim profil rasmi
+    let photoBuffer: Buffer | null = selfieBuffer || null;
+    if (!photoBuffer && employee.photoUrl) {
+      const uploadDir = process.env.UPLOAD_DIR || './uploads';
+      const filename  = (employee.photoUrl as string).replace(/^\/uploads\//, '');
+      const filePath  = path.join(uploadDir, filename);
+      if (fs.existsSync(filePath)) {
+        try { photoBuffer = fs.readFileSync(filePath); } catch { /* skip */ }
+      }
+    }
+
+    const photoSource = photoBuffer
+      ? { source: photoBuffer, filename: 'selfie.jpg' }
+      : null;
+
+    for (const sub of subscribers) {
+      try {
+        // 1. Selfie + matn
+        if (photoSource) {
+          await this.bot.telegram.sendPhoto(sub.chatId, photoSource, {
+            caption,
+            parse_mode: 'HTML',
+          });
+        } else {
+          await this.bot.telegram.sendMessage(sub.chatId, caption, { parse_mode: 'HTML' });
+        }
+
+        // 2. Interaktiv GPS xarita (check-in bo'lsa yuboriladi — ish joyini ko'rsatish uchun)
+        if (lat && lng && isCheckIn) {
+          await this.bot.telegram.sendLocation(sub.chatId, lat, lng);
+        }
+      } catch (e) {
+        this.logger.warn(`notifyMobileCheckin failed to ${sub.chatId}: ${e.message}`);
+      }
+    }
+  }
+
+  // ──────────────────────────────────────────
   // BROADCAST
   // ──────────────────────────────────────────
   async broadcast(message: string) {

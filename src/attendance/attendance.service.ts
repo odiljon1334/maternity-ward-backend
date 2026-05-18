@@ -1,16 +1,20 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { AttendanceStatus, TerminalEventType } from '@prisma/client';
 import dayjs from 'dayjs';
 import type { Dayjs } from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
 import isoWeek from 'dayjs/plugin/isoWeek';
+import * as path from 'path';
 
 import { PrismaService } from '../prisma/prisma.service';
+import { TelegramService } from '../telegram/telegram.service';
 import { DateUtil } from '../common/utils/date.util';
 import { isHospitalBlocked } from '../common/utils/payment.util';
 import { calcNetWorkMin } from '../common/utils/shift.util';
+import { processAndSavePhoto } from '../common/utils/image.util';
 import { LATE_GRACE_MINUTES, WEEKLY_LATE_THRESHOLD_MIN } from '../common/constants';
+import { SelfCheckInDto } from './dto/self-check-in.dto';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -58,7 +62,10 @@ export interface ProcessResult {
 export class AttendanceService {
   private readonly logger = new Logger(AttendanceService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma:    PrismaService,
+    private readonly telegram:  TelegramService,
+  ) {}
 
   // ──────────────────────────────────────────────────────────────────────────────
   // PUBLIC: HIKVISION WEBHOOK — asosiy kirish nuqtasi
@@ -673,6 +680,132 @@ export class AttendanceService {
     });
   }
 
+  /**
+   * Mobil ilovadan GPS + selfie bilan check-in / check-out.
+   * Schema yangi maydonlari: checkInSource='MOBILE', selfieUrl, gpsLat, gpsLng, gpsAccuracy.
+   */
+  async selfCheckIn(
+    userId: string,
+    dto: SelfCheckInDto,
+    selfieBuffer?: Buffer,
+  ): Promise<{ action: 'CHECK_IN' | 'CHECK_OUT'; attendance: any }> {
+    // 1. Foydalanuvchi + xodim + tashkilot
+    const user = await this.prisma.user.findUnique({
+      where:   { id: userId },
+      include: { employee: { include: { hospital: true, department: true, position: true } } },
+    });
+    if (!user?.employee) throw new NotFoundException('Xodim profili topilmadi');
+
+    const employee = user.employee;
+
+    // 2. Tashkilot blok tekshiruvi
+    if (await isHospitalBlocked(this.prisma, employee.hospitalId)) {
+      throw new BadRequestException("Tashkilot to'lovlarini kechiktirdi, davomat yozilmayapti");
+    }
+
+    const eventDate = new Date();
+    const tzDate    = dayjs(eventDate).tz(TZ);
+    const workDate  = DateUtil.startOfDay(eventDate);
+
+    // 3. Bugungi jadval
+    const schedule      = await this.findTodaySchedule(employee.id, workDate, tzDate);
+    const fallbackShift = !schedule
+      ? await this.findFallbackShift(employee.hospitalId, tzDate)
+      : null;
+
+    // 4. Selfie saqlash (ish joyi isboti sifatida)
+    let selfieUrl: string | undefined;
+    if (selfieBuffer?.length) {
+      const uploadDir    = path.join(process.env.UPLOAD_DIR || './uploads', 'selfies');
+      const base         = `${dayjs(workDate).format('YYYY-MM-DD')}-${employee.id.slice(-8)}`;
+      const { filename } = await processAndSavePhoto(selfieBuffer, uploadDir, base);
+      selfieUrl          = `/uploads/selfies/${filename}`;
+    }
+
+    // 5. Mavjud davomat yozuvi
+    const existing = await this.prisma.attendanceRecord.findFirst({
+      where: { employeeId: employee.id, workDate },
+    });
+
+    // ── CHECK-IN ───────────────────────────────────────────────────────────────
+    if (!existing || !existing.checkIn) {
+      const expectedCheckIn  = this.buildExpectedCheckIn(workDate, schedule, fallbackShift);
+      const expectedCheckOut = this.buildExpectedCheckOut(workDate, schedule, fallbackShift);
+      const graceMin         = schedule?.shift?.graceMinutes ?? fallbackShift?.graceMinutes ?? LATE_GRACE_MINUTES;
+      const lateMinutes      = this.calcLateMinutes(eventDate, expectedCheckIn, graceMin);
+      const status: AttendanceStatus = lateMinutes > 0 ? 'LATE' : 'PRESENT';
+
+      // GPS — xodim hozir qayerda ekanini saqlaydi (geofencing yo'q, faqat dalil)
+      const gpsData = {
+        checkInSource: 'MOBILE',
+        selfieUrl:     selfieUrl ?? existing?.selfieUrl ?? undefined,
+        gpsLat:        dto.gpsLat,
+        gpsLng:        dto.gpsLng,
+        gpsAccuracy:   dto.gpsAccuracy,
+      };
+
+      let attendance: any;
+      if (existing) {
+        attendance = await this.prisma.attendanceRecord.update({
+          where: { id: existing.id },
+          data:  { checkIn: eventDate, rawCheckInTime: eventDate, expectedCheckIn, expectedCheckOut, status, lateMinutes, ...gpsData },
+        });
+      } else {
+        attendance = await this.prisma.attendanceRecord.create({
+          data: {
+            employeeId: employee.id, scheduleId: schedule?.id,
+            checkIn: eventDate, rawCheckInTime: eventDate,
+            expectedCheckIn, expectedCheckOut, workDate, status, lateMinutes,
+            ...gpsData,
+          },
+        });
+      }
+
+      await this.updateWeeklyStats(employee.id, eventDate, lateMinutes, 0, 0, true);
+      this.logger.log(`MOBILE CHECK_IN: ${employee.fullName ?? employee.id} late=${lateMinutes}min gps=(${dto.gpsLat},${dto.gpsLng})`);
+
+      // Telegram: selfie + Google Maps havolasi → directorga yuboriladi (async, xatolik to'xtatmaydi)
+      this.telegram.notifyMobileCheckin(employee, 'CHECK_IN', attendance, selfieBuffer).catch((e) =>
+        this.logger.warn(`Telegram notify failed: ${e.message}`),
+      );
+
+      return { action: 'CHECK_IN' as const, attendance };
+    }
+
+    // ── CHECK-OUT ──────────────────────────────────────────────────────────────
+    if (!existing.checkOut) {
+      const expectedEnd     = existing.expectedCheckOut
+        ?? this.buildExpectedCheckOut(workDate, schedule, fallbackShift);
+      const earlyLeaveMin   = this.calcEarlyLeaveMinutes(eventDate, expectedEnd);
+      const overtimeMinutes = this.calcOvertimeMinutes(eventDate, expectedEnd);
+      const shift           = schedule?.shift ?? fallbackShift;
+      const netWorkMin      = calcNetWorkMin(
+        existing.checkIn!, eventDate,
+        existing.lunchOut, existing.lunchIn,
+        shift?.lunchStart, shift?.lunchEnd,
+      );
+      const newStatus = this.recalcStatus(existing.status, existing.lateMinutes, earlyLeaveMin);
+
+      const attendance = await this.prisma.attendanceRecord.update({
+        where: { id: existing.id },
+        data:  { checkOut: eventDate, rawCheckOutTime: eventDate, earlyLeaveMin, overtimeMinutes, netWorkMin, status: newStatus },
+      });
+
+      await this.updateWeeklyStats(employee.id, eventDate, 0, earlyLeaveMin, overtimeMinutes);
+      this.logger.log(`MOBILE CHECK_OUT: ${employee.fullName ?? employee.id}`);
+
+      // Telegram: check-out xabari
+      this.telegram.notifyMobileCheckin(employee, 'CHECK_OUT', attendance).catch((e) =>
+        this.logger.warn(`Telegram notify failed: ${e.message}`),
+      );
+
+      return { action: 'CHECK_OUT' as const, attendance };
+    }
+
+    // ── Allaqachon yakunlangan ─────────────────────────────────────────────────
+    throw new BadRequestException('Bugun uchun davomat allaqachon yakunlangan');
+  }
+
   async markAbsentForToday() {
     const workDate = DateUtil.startOfDay(new Date());
 
@@ -744,6 +877,23 @@ export class AttendanceService {
   // ──────────────────────────────────────────────────────────────────────────────
   // PRIVATE: CALCULATION HELPERS
   // ──────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Haversine formula — ikki koordinata orasidagi masofa (metr).
+   */
+  private calcHaversineMeters(
+    lat1: number, lng1: number,
+    lat2: number, lng2: number,
+  ): number {
+    const R   = 6_371_000; // Yer radiusi, metr
+    const d2r = Math.PI / 180;
+    const φ1  = lat1 * d2r;
+    const φ2  = lat2 * d2r;
+    const Δφ  = (lat2 - lat1) * d2r;
+    const Δλ  = (lng2 - lng1) * d2r;
+    const a   = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(a));
+  }
 
   private buildExpectedCheckIn(
     workDate: Date,

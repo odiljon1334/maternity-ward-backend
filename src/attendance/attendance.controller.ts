@@ -1,12 +1,16 @@
 import {
-  Body, Controller, Get, Param, Post, Put, Query, UseGuards,
+  Body, Controller, Get, Param, Post, Put, Query,
+  UploadedFile, UseGuards, UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import { AttendanceService } from './attendance.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
+import { SelfCheckInDto } from './dto/self-check-in.dto';
 
 @Controller('attendance')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -56,6 +60,27 @@ export class AttendanceController {
     @Query('weekStart') weekStart: string,
   ) {
     return this.service.getWeeklyStats(employeeId, weekStart);
+  }
+
+  /**
+   * EMPLOYEE o'zi GPS + selfie bilan davomat belgilaydi.
+   * multipart/form-data: selfie (optional) + JSON maydonlar.
+   */
+  @Post('self-checkin')
+  @Roles(UserRole.EMPLOYEE)
+  @UseInterceptors(FileInterceptor('selfie', { storage: memoryStorage() }))
+  selfCheckIn(
+    @CurrentUser('sub') userId: string,
+    @Body('gpsLat') gpsLat?: string,
+    @Body('gpsLng') gpsLng?: string,
+    @Body('gpsAccuracy') gpsAccuracy?: string,
+    @UploadedFile() file?: Express.Multer.File,
+  ) {
+    const dto = new SelfCheckInDto();
+    if (gpsLat)      dto.gpsLat      = parseFloat(gpsLat);
+    if (gpsLng)      dto.gpsLng      = parseFloat(gpsLng);
+    if (gpsAccuracy) dto.gpsAccuracy = parseFloat(gpsAccuracy);
+    return this.service.selfCheckIn(userId, dto, file?.buffer);
   }
 
   @Post('manual-checkin')

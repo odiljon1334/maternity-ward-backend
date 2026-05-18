@@ -122,6 +122,11 @@ model Hospital {
   isActive  Boolean @default(true)
   isBlocked Boolean @default(false)   // Manual admin blok
 
+  // GPS geofencing — mobil check-in uchun (ixtiyoriy)
+  gpsLat    Float?                     // Kasalxona kengligi
+  gpsLng    Float?                     // Kasalxona uzunligi
+  gpsRadius Int?   @default(200)       // Ruxsat etilgan radius (metr)
+
   users         User[]
   employees     Employee[]
   departments   Department[]
@@ -359,6 +364,13 @@ model AttendanceRecord {
   coffeeOut     DateTime?
   coffeeIn      DateTime?
   coffeeLateMin Int @default(0)
+
+  // Mobil self check-in ma'lumotlari
+  checkInSource  String?   @default("TERMINAL") // TERMINAL | MOBILE | MANUAL
+  selfieUrl      String?                         // Selfie rasmi yo'li
+  gpsLat         Float?                          // Check-in paytidagi koordinata
+  gpsLng         Float?
+  gpsAccuracy    Float?                          // GPS aniqligi (metr)
 
   status          AttendanceStatus @default(ABSENT)
   lateMinutes     Int  @default(0)
