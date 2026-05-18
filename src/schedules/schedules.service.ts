@@ -27,6 +27,20 @@ export class SchedulesService {
   constructor(private readonly prisma: PrismaService) {}
 
   // ──────────────────────────────────────────
+  // GET my schedule (current user's employee)
+  // ──────────────────────────────────────────
+  async getMySchedule(userId: string, month: number, year: number) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { employee: true },
+    });
+    if (!user?.employee) {
+      throw new NotFoundException('Bu foydalanuvchi uchun xodim profili topilmadi');
+    }
+    return this.getEmployeeSchedule(user.employee.id, month, year);
+  }
+
+  // ──────────────────────────────────────────
   // GET schedules for employee by month
   // ──────────────────────────────────────────
   async getEmployeeSchedule(employeeId: string, month: number, year: number) {

@@ -22,6 +22,17 @@ function resolveHospitalId(jwtHospId: string | null, targetHospId?: string): str
 export class SchedulesController {
   constructor(private readonly service: SchedulesService) {}
 
+  @Get('my')
+  getMySchedule(
+    @CurrentUser('sub') userId: string,
+    @Query('month') month: string,
+    @Query('year') year: string,
+  ) {
+    const m = +month || new Date().getMonth() + 1;
+    const y = +year  || new Date().getFullYear();
+    return this.service.getMySchedule(userId, m, y);
+  }
+
   @Get('employee/:id')
   getEmployeeSchedule(
     @Param('id') id: string,
