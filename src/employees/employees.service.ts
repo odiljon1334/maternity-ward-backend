@@ -163,10 +163,18 @@ export class EmployeesService {
       if (username || password) {
         const emp = await tx.employee.findUnique({ where: { id }, select: { userId: true } });
         if (emp?.userId) {
+          // Mavjud user ni yangilash
           const updateData: any = {};
           if (username) updateData.username = username;
           if (password) updateData.passwordHash = await bcrypt.hash(password, 12);
           await tx.user.update({ where: { id: emp.userId }, data: updateData });
+        } else if (username && password) {
+          // userId yo'q — yangi EMPLOYEE user yaratish va bog'lash
+          const hash = await bcrypt.hash(password, 12);
+          const newUser = await tx.user.create({
+            data: { username, passwordHash: hash, role: 'EMPLOYEE', hospitalId },
+          });
+          await tx.employee.update({ where: { id }, data: { userId: newUser.id } });
         }
       }
 
