@@ -50,7 +50,7 @@ docker image prune -f >/dev/null 2>&1
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-docker compose -f docker-compose.production.yml ps frontend
+docker compose -f docker-compose.production.yml --env-file .env.prod ps frontend
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 ok "Frontend deploy yakunlandi! 🚀"

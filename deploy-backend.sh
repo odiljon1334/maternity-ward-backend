@@ -81,7 +81,7 @@ docker image prune -f >/dev/null 2>&1
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-docker compose -f docker-compose.production.yml ps backend
+docker compose -f docker-compose.production.yml --env-file .env.prod ps backend
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 ok "Backend deploy yakunlandi! 🚀"
