@@ -79,7 +79,7 @@ sleep 15  # Backend container va DB to'liq ishga tushsin
 
 MIGRATE_OK=false
 for i in 1 2 3; do
-    if docker exec maternity_backend npx prisma migrate deploy 2>&1; then
+    if docker exec maternity-ward-backend-backend-1 npx prisma migrate deploy 2>&1; then
         success "Migratsiya bajarildi"
         MIGRATE_OK=true
         break
@@ -104,7 +104,7 @@ for i in $(seq 1 $MAX_TRIES); do
     fi
     if [ $i -eq $MAX_TRIES ]; then
         warn "Health check muvaffaqiyatsiz — loglarni tekshiring:"
-        docker logs maternity_backend --tail=50
+        docker logs maternity-ward-backend-backend-1 --tail=50
     fi
     log "Kutilmoqda... ($i/$MAX_TRIES)"
     sleep 10
