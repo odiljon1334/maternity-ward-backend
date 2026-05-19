@@ -208,11 +208,20 @@ export class EmployeesService {
 
     // Auto-generate numeric employeeNo for Hikvision terminal (only if not set yet)
     if (!emp?.employeeNo) {
-      const count = await this.prisma.employee.count({ where: { hospitalId } });
-      // Format: {YY}{sequential 5-digit} — e.g. 2600001
+      // count + 1 ishlatmay, MAX mavjud raqamdan keyingisini olish
+      // (count unique constraint xatosiga olib kelishi mumkin edi)
+      const allNos = await this.prisma.employee.findMany({
+        where: { hospitalId, employeeNo: { not: null } },
+        select: { employeeNo: true },
+      });
+      const maxNo = allNos
+        .map(e => e.employeeNo!)
+        .filter(n => /^\d+$/.test(n))
+        .map(n => parseInt(n, 10))
+        .reduce((a, b) => Math.max(a, b), 0);
       const yy = new Date().getFullYear().toString().slice(-2);
-      const seq = String(count + 1).padStart(5, '0');
-      updateData.employeeNo = `${yy}${seq}`;
+      const nextSeq = String(maxNo + 1).padStart(5, '0');
+      updateData.employeeNo = `${yy}${nextSeq}`;
     }
 
     return this.prisma.employee.update({ where: { id }, data: updateData });
