@@ -73,9 +73,27 @@ log "5. Servislar ishga tushirilmoqda..."
 docker compose -f docker-compose.production.yml --env-file .env.prod up -d
 success "Servislar ishga tushdi"
 
-# ── 6. Health check ──────────────────────────────────────────
-log "6. Health check (60s kutilmoqda)..."
-sleep 60
+# ── 6. Database migratsiyasi ─────────────────────────────────
+log "6. Database migratsiyasi ishga tushirilmoqda..."
+sleep 15  # Backend container va DB to'liq ishga tushsin
+
+MIGRATE_OK=false
+for i in 1 2 3; do
+    if docker exec maternity_backend npx prisma migrate deploy 2>&1; then
+        success "Migratsiya bajarildi"
+        MIGRATE_OK=true
+        break
+    fi
+    warn "Migratsiya urinishi $i muvaffaqiyatsiz, 10s kutilmoqda..."
+    sleep 10
+done
+if [ "$MIGRATE_OK" = false ]; then
+    error "Migratsiya 3 marta urinishdan keyin ham bajarilmadi!"
+fi
+
+# ── 7. Health check ──────────────────────────────────────────
+log "7. Health check (45s kutilmoqda)..."
+sleep 45
 
 MAX_TRIES=10
 for i in $(seq 1 $MAX_TRIES); do
@@ -92,12 +110,12 @@ for i in $(seq 1 $MAX_TRIES); do
     sleep 10
 done
 
-# ── 7. Eski image larni tozalash ─────────────────────────────
-log "7. Eski Docker imagelar tozalanmoqda..."
+# ── 8. Eski image larni tozalash ─────────────────────────────
+log "8. Eski Docker imagelar tozalanmoqda..."
 docker image prune -f
 success "Eski imagelar o'chirildi"
 
-# ── 8. Status ────────────────────────────────────────────────
+# ── 9. Status ────────────────────────────────────────────────
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 docker compose -f docker-compose.production.yml ps
