@@ -83,6 +83,20 @@ export class AttendanceController {
     return this.service.selfCheckIn(userId, dto, file?.buffer);
   }
 
+  /**
+   * Xodim birinchi marta ish joyi GPS ni o'rnatadi (Hospital.gpsLat/gpsLng).
+   * Faqat hospital GPS null bo'lsa saqlanadi.
+   */
+  @Post('set-hospital-gps')
+  @Roles(UserRole.EMPLOYEE)
+  setHospitalGps(
+    @CurrentUser('sub') userId: string,
+    @Body('lat') lat: string,
+    @Body('lng') lng: string,
+  ) {
+    return this.service.setHospitalGps(userId, parseFloat(lat), parseFloat(lng));
+  }
+
   @Post('manual-checkin')
   @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
   manualCheckIn(

@@ -22,7 +22,9 @@ import { PaymentsModule } from './payments/payments.module';
 import { AuditLogModule } from './audit-log/audit-log.module';
 import { MinistryModule } from './ministry/ministry.module';
 import { HikConnectModule } from './hikconnect/hikconnect.module';
-import { HealthModule } from './health/health.module';
+import { HealthModule }     from './health/health.module';
+import { LeaveModule }      from './leave/leave.module';
+import { PushModule }       from './push/push.module';
 
 @Module({
   imports: [
@@ -61,6 +63,8 @@ import { HealthModule } from './health/health.module';
     MinistryModule,
     HikConnectModule,
     HealthModule,
+    LeaveModule,
+    PushModule,
   ],
   providers: [],
 })

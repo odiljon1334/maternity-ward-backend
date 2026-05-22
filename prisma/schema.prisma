@@ -73,6 +73,21 @@ enum NotificationType {
   ALERT
 }
 
+enum LeaveType {
+  VACATION   // Yillik ta'til
+  SICK       // Kasallik (vaqtinchalik mehnatga layoqatsizlik)
+  PERSONAL   // Shaxsiy sabab
+  MATERNITY  // Tug'ruq ta'tili
+  UNPAID     // Haqsiz ta'til
+}
+
+enum LeaveStatus {
+  PENDING    // Kutilmoqda (direktor ko'rmagan)
+  APPROVED   // Tasdiqlandi
+  REJECTED   // Rad etildi
+  CANCELLED  // Xodim o'zi bekor qildi
+}
+
 enum PaymentType {
   MONTHLY
   ANNUAL
@@ -136,6 +151,7 @@ model Hospital {
   notifications Notification[]
   payments      Payment[]
   cameras       Camera[]
+  leaveRequests LeaveRequest[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -183,10 +199,31 @@ model User {
   hospitalId   String?
   hospital     Hospital?  @relation(fields: [hospitalId], references: [id])
 
-  employee     Employee?
+  employee          Employee?
+  pushSubscriptions PushSubscription[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+// ─────────────────────────────────────────────
+// PUSH SUBSCRIPTIONS (Web Push Notifications)
+// ─────────────────────────────────────────────
+
+model PushSubscription {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  endpoint  String   @unique          // Browser push endpoint URL
+  p256dh    String                    // Encryption key
+  auth      String                    // Auth secret
+  userAgent String?                   // Browser info
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
 }
 
 // ─────────────────────────────────────────────
@@ -269,6 +306,7 @@ model Employee {
   payrolls        PayrollRecord[]
   weeklyStats     WeeklyAttendanceStat[]
   terminalEvents  AttendanceEvent[]
+  leaveRequests   LeaveRequest[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -367,10 +405,16 @@ model AttendanceRecord {
 
   // Mobil self check-in ma'lumotlari
   checkInSource  String?   @default("TERMINAL") // TERMINAL | MOBILE | MANUAL
-  selfieUrl      String?                         // Selfie rasmi yo'li
+  selfieUrl      String?                         // Check-in selfie rasmi yo'li
   gpsLat         Float?                          // Check-in paytidagi koordinata
   gpsLng         Float?
   gpsAccuracy    Float?                          // GPS aniqligi (metr)
+
+  // Check-out selfie + GPS (mobil ilovadan)
+  checkOutSelfieUrl  String?
+  checkOutGpsLat     Float?
+  checkOutGpsLng     Float?
+  checkOutGpsAccuracy Float?
 
   status          AttendanceStatus @default(ABSENT)
   lateMinutes     Int  @default(0)
@@ -619,4 +663,39 @@ model Payment {
 
   @@index([hospitalId, period])
   @@index([hospitalId, validUntil])
+}
+
+// ─────────────────────────────────────────────
+// LEAVE REQUESTS (Ta'til / Kasallik so'rovlari)
+// ─────────────────────────────────────────────
+
+model LeaveRequest {
+  id         String      @id @default(uuid())
+
+  employeeId String
+  employee   Employee    @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  hospitalId String
+  hospital   Hospital    @relation(fields: [hospitalId], references: [id], onDelete: Cascade)
+
+  type       LeaveType   @default(VACATION)
+  startDate  DateTime    // Boshlanish sanasi (UTC midnight)
+  endDate    DateTime    // Tugash sanasi (UTC midnight)
+  daysCount  Int         @default(1)  // Kalendar kunlar soni
+  reason     String?     // Sababni izohlash (ixtiyoriy)
+
+  status     LeaveStatus @default(PENDING)
+
+  reviewedBy String?     // User.id — kim tasdiqladi/rad etdi
+  reviewNote String?     // Direktor izohi
+  reviewedAt DateTime?
+
+  documentUrl String?    // Kasallik uchun hujjat (fayl)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([employeeId])
+  @@index([hospitalId, status])
+  @@index([employeeId, startDate, endDate])
 }

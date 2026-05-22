@@ -54,4 +54,64 @@ export class DashboardController {
     const hospitalId = targetHospitalId || jwtHospitalId || undefined;
     return this.service.getTopLateEmployees(+(limit || 5), hospitalId);
   }
+
+  // ─── Analytics endpoints ────────────────────────────────────────────────
+
+  @Get('analytics/monthly')
+  getMonthlyAttendanceSummary(
+    @CurrentUser('hospitalId') jwtHospitalId: string | null,
+    @Query('months') months?: string,
+    @Query('targetHospitalId') targetHospitalId?: string,
+  ) {
+    const hospitalId = targetHospitalId || jwtHospitalId || undefined;
+    return this.service.getMonthlyAttendanceSummary(+(months || 6), hospitalId);
+  }
+
+  @Get('analytics/performance')
+  getEmployeePerformanceRanking(
+    @CurrentUser('hospitalId') jwtHospitalId: string | null,
+    @Query('month') month?: string,
+    @Query('year') year?: string,
+    @Query('limit') limit?: string,
+    @Query('targetHospitalId') targetHospitalId?: string,
+  ) {
+    const now = new Date();
+    const hospitalId = targetHospitalId || jwtHospitalId || undefined;
+    return this.service.getEmployeePerformanceRanking(
+      +(month || now.getMonth() + 1),
+      +(year || now.getFullYear()),
+      hospitalId,
+      +(limit || 10),
+    );
+  }
+
+  @Get('analytics/payroll-trend')
+  getPayrollTrend(
+    @CurrentUser('hospitalId') jwtHospitalId: string | null,
+    @Query('months') months?: string,
+    @Query('targetHospitalId') targetHospitalId?: string,
+  ) {
+    const hospitalId = targetHospitalId || jwtHospitalId || undefined;
+    return this.service.getPayrollTrend(+(months || 6), hospitalId);
+  }
+
+  @Get('analytics/leaves')
+  getLeaveStats(
+    @CurrentUser('hospitalId') jwtHospitalId: string | null,
+    @Query('year') year?: string,
+    @Query('targetHospitalId') targetHospitalId?: string,
+  ) {
+    const hospitalId = targetHospitalId || jwtHospitalId || undefined;
+    return this.service.getLeaveStats(+(year || new Date().getFullYear()), hospitalId);
+  }
+
+  @Get('analytics/checkin-heatmap')
+  getCheckinHeatmap(
+    @CurrentUser('hospitalId') jwtHospitalId: string | null,
+    @Query('days') days?: string,
+    @Query('targetHospitalId') targetHospitalId?: string,
+  ) {
+    const hospitalId = targetHospitalId || jwtHospitalId || undefined;
+    return this.service.getCheckinHeatmap(+(days || 30), hospitalId);
+  }
 }

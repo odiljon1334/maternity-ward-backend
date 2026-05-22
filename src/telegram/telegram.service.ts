@@ -4,9 +4,60 @@ import { PrismaService } from '../prisma/prisma.service';
 import { Telegraf, Markup } from 'telegraf';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as https from 'https';
 import { formatMinutes, isHospitalBlocked } from '../common/utils/payment.util';
 
 const TZ = process.env.TIMEZONE || 'Asia/Tashkent';
+
+// ─── Yandex Static Maps ───────────────────────────────────────────────────────
+// API key .env da YANDEX_MAPS_KEY=... sifatida saqlang
+// Key bo'lmasa ham asosiy map ishlaydi (limitlangan)
+const YANDEX_KEY = process.env.YANDEX_MAPS_KEY || '';
+
+/**
+ * Yandex Static Maps URL — map rasmini olish uchun
+ * @param lat, lng — koordinatalar
+ * @param markerColor — 'rd' (red), 'gn' (green), 'bl' (blue)
+ */
+function yandexStaticMapUrl(lat: number, lng: number, markerColor = 'rd'): string {
+  const key = YANDEX_KEY ? `&apikey=${YANDEX_KEY}` : '';
+  return (
+    `https://static-maps.yandex.ru/1.x/?lang=uz_UZ` +
+    `&ll=${lng},${lat}&z=16&l=map&size=450,300` +
+    `&pt=${lng},${lat},pm2${markerColor}m${key}`
+  );
+}
+
+/** Yandex Maps havolasi (interaktiv) */
+function yandexMapLink(lat: number, lng: number): string {
+  return `https://yandex.uz/maps/?pt=${lng},${lat}&z=16&l=map`;
+}
+
+/**
+ * Haversine formulasi — ikkita GPS nuqta orasidagi masofani hisoblab beradi (metr)
+ */
+function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6_371_000; // Yer radiusi metrda
+  const φ1 = (lat1 * Math.PI) / 180;
+  const φ2 = (lat2 * Math.PI) / 180;
+  const Δφ = ((lat2 - lat1) * Math.PI) / 180;
+  const Δλ = ((lng2 - lng1) * Math.PI) / 180;
+  const a = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+/** Yandex Static Maps URL dan rasm buffer ni yuklab olish */
+function fetchImageBuffer(url: string): Promise<Buffer | null> {
+  return new Promise((resolve) => {
+    https.get(url, (res) => {
+      if (res.statusCode !== 200) { resolve(null); return; }
+      const chunks: Buffer[] = [];
+      res.on('data', (c: Buffer) => chunks.push(c));
+      res.on('end', () => resolve(Buffer.concat(chunks)));
+      res.on('error', () => resolve(null));
+    }).on('error', () => resolve(null));
+  });
+}
 
 // Max list length before truncating (Telegram 4096 char limit)
 const MAX_LIST = 50;
@@ -678,6 +729,12 @@ export class TelegramService implements OnModuleInit {
     });
     if (!subscribers.length) return;
 
+    // Kasalxona GPS ni olish (masofa hisoblash uchun)
+    const hospital = await this.prisma.hospital.findUnique({
+      where: { id: employee.hospitalId },
+      select: { gpsLat: true, gpsLng: true, name: true },
+    });
+
     const isCheckIn = action === 'CHECK_IN';
     const checkTime = isCheckIn ? attendance.checkIn : attendance.checkOut;
     const timeStr   = new Date(checkTime).toLocaleTimeString('uz-UZ', {
@@ -694,55 +751,98 @@ export class TelegramService implements OnModuleInit {
       extra = `\n⚡ <b>${formatMinutes(attendance.earlyLeaveMin)} erta ketdi</b>`;
     }
 
-    // GPS manzil
-    const lat = attendance.gpsLat ?? employee.gpsLat;
-    const lng = attendance.gpsLng ?? employee.gpsLng;
+    // GPS — check-in uchun gpsLat/gpsLng, check-out uchun checkOutGps*
+    const lat = isCheckIn
+      ? (attendance.gpsLat      ?? null)
+      : (attendance.checkOutGpsLat ?? null);
+    const lng = isCheckIn
+      ? (attendance.gpsLng      ?? null)
+      : (attendance.checkOutGpsLng ?? null);
+    const accuracy = isCheckIn ? attendance.gpsAccuracy : attendance.checkOutGpsAccuracy;
+
+    // Ish joyi bilan masofa (kasalxona GPS o'rnatilgan bo'lsa)
+    let distanceLine = '';
+    if (lat && lng && hospital?.gpsLat && hospital?.gpsLng) {
+      const meters = haversineMeters(lat, lng, hospital.gpsLat, hospital.gpsLng);
+      const dist   = meters < 1000
+        ? `${Math.round(meters)} m`
+        : `${(meters / 1000).toFixed(1)} km`;
+      const inZone = meters <= (250); // 250m tolerance
+      distanceLine = `\n${inZone ? '🟢' : '🔴'} Ish joyidan: <b>${dist}</b>`;
+    }
+
+    // Yandex Maps havolasi
     const gpsLine = (lat && lng)
-      ? `\n📍 <a href="https://maps.google.com/?q=${lat},${lng}">Xaritada ko'rish</a>`
+      ? `\n🗺 <a href="${yandexMapLink(lat, lng)}">Yandex Maps da ko'rish</a>`
       : '';
-    const accuracyLine = attendance.gpsAccuracy
-      ? ` (±${Math.round(attendance.gpsAccuracy)}m)`
+    const accuracyLine = accuracy
+      ? `\n🎯 GPS aniqlik: ±${Math.round(accuracy)}m`
       : '';
 
     const caption =
       `${emoji} <b>${employee.fullName}</b> ${actionText}\n` +
       `🕐 Vaqt: <b>${timeStr}</b>\n` +
-      `🏥 Tashkilot: ${employee.hospital?.name || '—'}\n` +
+      `🏥 Tashkilot: ${employee.hospital?.name || hospital?.name || '—'}\n` +
       `🏢 Bo'lim: ${employee.department?.name || '—'}\n` +
       `💼 Lavozim: ${employee.position?.name || '—'}` +
       extra +
+      distanceLine +
       gpsLine +
-      (gpsLine && accuracyLine ? `\n🎯 GPS aniqlik: ${accuracyLine.trim()}` : '');
+      accuracyLine;
 
-    // Selfie: check-in selfie file yoki xodim profil rasmi
+    // Selfie buffer
     let photoBuffer: Buffer | null = selfieBuffer || null;
-    if (!photoBuffer && employee.photoUrl) {
-      const uploadDir = process.env.UPLOAD_DIR || './uploads';
-      const filename  = (employee.photoUrl as string).replace(/^\/uploads\//, '');
-      const filePath  = path.join(uploadDir, filename);
-      if (fs.existsSync(filePath)) {
-        try { photoBuffer = fs.readFileSync(filePath); } catch { /* skip */ }
+
+    // Selfie buffer kelmasa — saqlangan fayldan o'qiymiz
+    if (!photoBuffer) {
+      const storedUrl = isCheckIn
+        ? attendance.selfieUrl
+        : (attendance.checkOutSelfieUrl ?? attendance.selfieUrl);
+      if (storedUrl) {
+        const uploadDir = process.env.UPLOAD_DIR || './uploads';
+        const filename  = (storedUrl as string).replace(/^\/uploads\//, '');
+        const filePath  = path.join(uploadDir, filename);
+        if (fs.existsSync(filePath)) {
+          try { photoBuffer = fs.readFileSync(filePath); } catch { /* skip */ }
+        }
+      } else if (employee.photoUrl) {
+        const uploadDir = process.env.UPLOAD_DIR || './uploads';
+        const filename  = (employee.photoUrl as string).replace(/^\/uploads\//, '');
+        const filePath  = path.join(uploadDir, filename);
+        if (fs.existsSync(filePath)) {
+          try { photoBuffer = fs.readFileSync(filePath); } catch { /* skip */ }
+        }
       }
     }
 
-    const photoSource = photoBuffer
-      ? { source: photoBuffer, filename: 'selfie.jpg' }
-      : null;
+    // Yandex Static Maps rasmi (GPS bor bo'lsa)
+    let mapBuffer: Buffer | null = null;
+    if (lat && lng) {
+      mapBuffer = await fetchImageBuffer(yandexStaticMapUrl(lat, lng, isCheckIn ? 'gn' : 'rd')).catch(() => null);
+    }
 
     for (const sub of subscribers) {
       try {
         // 1. Selfie + matn
-        if (photoSource) {
-          await this.bot.telegram.sendPhoto(sub.chatId, photoSource, {
-            caption,
-            parse_mode: 'HTML',
-          });
+        if (photoBuffer) {
+          await this.bot.telegram.sendPhoto(
+            sub.chatId,
+            { source: photoBuffer, filename: 'selfie.jpg' },
+            { caption, parse_mode: 'HTML' },
+          );
         } else {
           await this.bot.telegram.sendMessage(sub.chatId, caption, { parse_mode: 'HTML' });
         }
 
-        // 2. Interaktiv GPS xarita (check-in bo'lsa yuboriladi — ish joyini ko'rsatish uchun)
-        if (lat && lng && isCheckIn) {
+        // 2. Yandex Maps static xarita rasmi
+        if (mapBuffer) {
+          await this.bot.telegram.sendPhoto(
+            sub.chatId,
+            { source: mapBuffer, filename: 'location.jpg' },
+            { caption: `📍 ${isCheckIn ? 'Kelish' : 'Ketish'} joyi`, parse_mode: 'HTML' },
+          );
+        } else if (lat && lng) {
+          // Static map yuklab bo'lmasa — Telegram native location
           await this.bot.telegram.sendLocation(sub.chatId, lat, lng);
         }
       } catch (e) {
@@ -1087,5 +1187,78 @@ export class TelegramService implements OnModuleInit {
     tashkent.setUTCDate(tashkent.getUTCDate() - daysBack);
 
     return new Date(tashkent.getTime() - TZ_OFFSET_MS);
+  }
+
+  // ──────────────────────────────────────────
+  // LEAVE REQUEST NOTIFICATIONS
+  // ──────────────────────────────────────────
+
+  /**
+   * Ta'til so'rovi yaratilganda / tasdiqlanganida / rad etilganda xabar yuborish
+   * @param leave  — LeaveRequest with employee.hospital, employee.department
+   * @param action — 'CREATED' | 'APPROVED' | 'REJECTED'
+   */
+  async notifyLeaveRequest(leave: any, action: 'CREATED' | 'APPROVED' | 'REJECTED'): Promise<void> {
+    if (!this.bot) return;
+
+    const employee  = leave.employee;
+    const hospital  = employee?.hospital;
+    const startStr  = new Date(leave.startDate).toLocaleDateString('uz-UZ', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: TZ });
+    const endStr    = new Date(leave.endDate).toLocaleDateString('uz-UZ',   { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: TZ });
+
+    const LEAVE_LABELS: Record<string, string> = {
+      VACATION:  'Yillik ta\'til',
+      SICK:      'Kasallik',
+      PERSONAL:  'Shaxsiy sabab',
+      MATERNITY: 'Tug\'ruq ta\'tili',
+      UNPAID:    'Haqsiz ta\'til',
+    };
+
+    const typeLabel = LEAVE_LABELS[leave.type] ?? leave.type;
+
+    if (action === 'CREATED') {
+      // Direktorga xabar — PENDING so'rov keldi
+      const subscribers = await this.prisma.telegramSubscription.findMany({
+        where: { isActive: true, hospitalId: leave.hospitalId },
+      });
+      if (!subscribers.length) return;
+
+      const emoji   = leave.type === 'SICK' ? '🤒' : leave.type === 'MATERNITY' ? '🤱' : '🏖';
+      const message =
+        `${emoji} <b>Ta'til so'rovi</b>\n\n` +
+        `👤 Xodim: <b>${employee?.fullName || '—'}</b>\n` +
+        `🏢 Bo'lim: ${employee?.department?.name || '—'}\n` +
+        `📋 Tur: <b>${typeLabel}</b>\n` +
+        `📅 Muddat: <b>${startStr} – ${endStr}</b> (${leave.daysCount} kun)\n` +
+        (leave.reason ? `💬 Sabab: ${leave.reason}\n` : '') +
+        `\n⏳ Tasdiqlash yoki rad etish uchun tizimga kiring.`;
+
+      for (const sub of subscribers) {
+        try {
+          await this.bot.telegram.sendMessage(sub.chatId, message, { parse_mode: 'HTML' });
+        } catch (e) {
+          this.logger.warn(`Leave notify failed to ${sub.chatId}: ${e.message}`);
+        }
+      }
+    } else {
+      // Xodimga shaxsiy xabar — agar telegramChatId bo'lsa
+      if (!employee?.telegramChatId) return;
+
+      const isApproved = action === 'APPROVED';
+      const emoji      = isApproved ? '✅' : '❌';
+      const statusText = isApproved ? 'TASDIQLANDI' : 'RAD ETILDI';
+
+      const message =
+        `${emoji} <b>Ta'til so'rovingiz ${statusText}</b>\n\n` +
+        `📋 Tur: <b>${typeLabel}</b>\n` +
+        `📅 Muddat: <b>${startStr} – ${endStr}</b> (${leave.daysCount} kun)\n` +
+        (leave.reviewNote ? `\n💬 Izoh: <i>${leave.reviewNote}</i>` : '');
+
+      try {
+        await this.bot.telegram.sendMessage(employee.telegramChatId, message, { parse_mode: 'HTML' });
+      } catch (e) {
+        this.logger.warn(`Leave decision notify to employee failed: ${e.message}`);
+      }
+    }
   }
 }

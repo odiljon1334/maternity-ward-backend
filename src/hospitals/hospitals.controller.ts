@@ -9,6 +9,7 @@ import { UserRole } from '@prisma/client';
 
 const SUPER = UserRole.SUPER_ADMIN;
 const ASST  = UserRole.ASSISTANT_ADMIN;
+const DIR   = UserRole.DIRECTOR;
 
 @Controller('hospitals')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -76,6 +77,23 @@ export class HospitalsController {
     @Body() body: { fullName?: string; phone?: string; password?: string },
   ) {
     return this.svc.updateDirector(id, body);
+  }
+
+  /** DIRECTOR/SUPER: GPS radius ni o'zgartirish (50–2000 metr) */
+  @Patch(':id/gps-radius')
+  @Roles(SUPER, ASST, DIR)
+  updateGpsRadius(
+    @Param('id') id: string,
+    @Body('radius') radius: number,
+  ) {
+    return this.svc.updateGpsRadius(id, Number(radius));
+  }
+
+  /** SUPER/DIRECTOR: GPS ni reset qilish (xodim qayta o'rnatishi uchun) */
+  @Patch(':id/gps-reset')
+  @Roles(SUPER, ASST, DIR)
+  resetGps(@Param('id') id: string) {
+    return this.svc.resetGps(id);
   }
 
   /** Kasalxonaning barcha Telegram obunalarini o'chirish (eski direktor qoldiqlari uchun) */

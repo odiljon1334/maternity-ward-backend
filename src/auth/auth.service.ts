@@ -25,7 +25,7 @@ export class AuthService {
     const user = await this.prisma.user.findUnique({
       where: { username: dto.username },
       include: {
-        hospital: { select: { id: true, name: true, code: true } },
+        hospital: { select: { id: true, name: true, code: true, gpsLat: true, gpsLng: true, gpsRadius: true } },
         employee: {
           include: { department: true, position: true },
         },

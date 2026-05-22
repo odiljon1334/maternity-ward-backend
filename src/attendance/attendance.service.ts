@@ -11,7 +11,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { TelegramService } from '../telegram/telegram.service';
 import { DateUtil } from '../common/utils/date.util';
 import { isHospitalBlocked } from '../common/utils/payment.util';
-import { calcNetWorkMin } from '../common/utils/shift.util';
+import { calcNetWorkMin }          from '../common/utils/shift.util';
+import { haversineMeters, formatDistance } from '../common/utils/geo.util';
 import { processAndSavePhoto } from '../common/utils/image.util';
 import { LATE_GRACE_MINUTES, WEEKLY_LATE_THRESHOLD_MIN } from '../common/constants';
 import { SelfCheckInDto } from './dto/self-check-in.dto';
@@ -681,6 +682,38 @@ export class AttendanceService {
   }
 
   /**
+  /**
+   * Xodim birinchi marta ish joyini belgilaganda kasalxona GPS ni saqlash.
+   * Faqat Hospital.gpsLat null bo'lsa ishlaydi (bir martalik setup).
+   */
+  async setHospitalGps(
+    userId: string,
+    lat: number,
+    lng: number,
+  ): Promise<{ saved: boolean; alreadySet: boolean }> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { employee: { include: { hospital: true } } },
+    });
+    if (!user?.employee) throw new NotFoundException('Xodim profili topilmadi');
+
+    const hospital = user.employee.hospital;
+    if (!hospital) throw new NotFoundException('Kasalxona topilmadi');
+
+    if (hospital.gpsLat != null && hospital.gpsLng != null) {
+      return { saved: false, alreadySet: true };
+    }
+
+    await this.prisma.hospital.update({
+      where: { id: hospital.id },
+      data:  { gpsLat: lat, gpsLng: lng },
+    });
+
+    this.logger.log(`Hospital GPS set: ${hospital.name} → (${lat}, ${lng}) by ${user.username}`);
+    return { saved: true, alreadySet: false };
+  }
+
+  /**
    * Mobil ilovadan GPS + selfie bilan check-in / check-out.
    * Schema yangi maydonlari: checkInSource='MOBILE', selfieUrl, gpsLat, gpsLng, gpsAccuracy.
    */
@@ -703,11 +736,30 @@ export class AttendanceService {
       throw new BadRequestException("Tashkilot to'lovlarini kechiktirdi, davomat yozilmayapti");
     }
 
+    // 3. Geofencing — kasalxona GPS o'rnatilgan bo'lsa masofa tekshiruvi
+    const hospital = employee.hospital as any;
+    if (
+      hospital?.gpsLat != null &&
+      hospital?.gpsLng != null &&
+      dto.gpsLat       != null &&
+      dto.gpsLng       != null
+    ) {
+      const radius   = hospital.gpsRadius ?? 200; // metr
+      const distance = haversineMeters(dto.gpsLat, dto.gpsLng, hospital.gpsLat, hospital.gpsLng);
+      if (distance > radius) {
+        const distStr = formatDistance(Math.round(distance));
+        throw new BadRequestException(
+          `Siz ish joyidan ${distStr} uzoqdasiz (ruxsat: ${radius}m). Ish joyida bo'lgan holda check-in qiling.`,
+        );
+      }
+      this.logger.log(`Geofencing OK: ${employee.fullName} — ${Math.round(distance)}m`);
+    }
+
     const eventDate = new Date();
     const tzDate    = dayjs(eventDate).tz(TZ);
     const workDate  = DateUtil.startOfDay(eventDate);
 
-    // 3. Bugungi jadval
+    // 4. Bugungi jadval
     const schedule      = await this.findTodaySchedule(employee.id, workDate, tzDate);
     const fallbackShift = !schedule
       ? await this.findFallbackShift(employee.hospitalId, tzDate)
@@ -786,16 +838,32 @@ export class AttendanceService {
       );
       const newStatus = this.recalcStatus(existing.status, existing.lateMinutes, earlyLeaveMin);
 
+      // Check-out selfie saqlash
+      let checkOutSelfieUrl: string | undefined;
+      if (selfieBuffer?.length) {
+        const uploadDir    = path.join(process.env.UPLOAD_DIR || './uploads', 'selfies');
+        const base         = `checkout-${dayjs(workDate).format('YYYY-MM-DD')}-${employee.id.slice(-8)}`;
+        const { filename } = await processAndSavePhoto(selfieBuffer, uploadDir, base);
+        checkOutSelfieUrl  = `/uploads/selfies/${filename}`;
+      }
+
       const attendance = await this.prisma.attendanceRecord.update({
         where: { id: existing.id },
-        data:  { checkOut: eventDate, rawCheckOutTime: eventDate, earlyLeaveMin, overtimeMinutes, netWorkMin, status: newStatus },
+        data:  {
+          checkOut: eventDate, rawCheckOutTime: eventDate,
+          earlyLeaveMin, overtimeMinutes, netWorkMin, status: newStatus,
+          checkOutSelfieUrl,
+          checkOutGpsLat:      dto.gpsLat,
+          checkOutGpsLng:      dto.gpsLng,
+          checkOutGpsAccuracy: dto.gpsAccuracy,
+        },
       });
 
       await this.updateWeeklyStats(employee.id, eventDate, 0, earlyLeaveMin, overtimeMinutes);
-      this.logger.log(`MOBILE CHECK_OUT: ${employee.fullName ?? employee.id}`);
+      this.logger.log(`MOBILE CHECK_OUT: ${employee.fullName ?? employee.id} gps=(${dto.gpsLat},${dto.gpsLng})`);
 
-      // Telegram: check-out xabari
-      this.telegram.notifyMobileCheckin(employee, 'CHECK_OUT', attendance).catch((e) =>
+      // Telegram: check-out selfie + GPS bilan xabar
+      this.telegram.notifyMobileCheckin(employee, 'CHECK_OUT', attendance, selfieBuffer).catch((e) =>
         this.logger.warn(`Telegram notify failed: ${e.message}`),
       );
 

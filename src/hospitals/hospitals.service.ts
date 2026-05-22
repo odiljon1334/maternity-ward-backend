@@ -217,6 +217,28 @@ export class HospitalsService {
     });
   }
 
+  /** DIRECTOR: geofencing radiusini o'zgartirish (50–2000 metr) */
+  async updateGpsRadius(hospitalId: string, radius: number) {
+    if (radius < 50 || radius > 2000) {
+      const { BadRequestException } = await import('@nestjs/common');
+      throw new BadRequestException('Radius 50 – 2000 metr oralig\'ida bo\'lishi kerak');
+    }
+    return this.prisma.hospital.update({
+      where: { id: hospitalId },
+      data:  { gpsRadius: radius },
+      select: { id: true, gpsRadius: true },
+    });
+  }
+
+  /** DIRECTOR: kasalxona GPS ni reset qilish (qayta o'rnatish uchun) */
+  async resetGps(hospitalId: string) {
+    return this.prisma.hospital.update({
+      where: { id: hospitalId },
+      data:  { gpsLat: null, gpsLng: null },
+      select: { id: true, gpsLat: true, gpsLng: true },
+    });
+  }
+
   /** Kasalxonadagi barcha Telegram obunalarini o'chirish.
    *  Eski direktor o'chirilganda qolib ketgan subscriptionlarni tozalash uchun. */
   async resetTelegramSubs(hospitalId: string) {

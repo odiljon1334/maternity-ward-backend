@@ -83,6 +83,59 @@ export class PayrollController {
     return this.service.approve(id);
   }
 
+  // ── EMPLOYEE: o'z maosh tarixini ko'rish ──────────────────────
+  @Get('my')
+  @Roles(UserRole.EMPLOYEE)
+  findMyPayroll(
+    @CurrentUser('sub') userId: string,
+    @Query('month') month?: string,
+    @Query('year') year?: string,
+  ) {
+    return this.service.findMyRecords(userId, month ? +month : undefined, year ? +year : undefined);
+  }
+
+  // ── EMPLOYEE: o'z maosh varaqasini PDF yuklab olish ────────────
+  @Get('my/payslip')
+  @Roles(UserRole.EMPLOYEE)
+  async downloadMyPayslip(
+    @CurrentUser('sub') userId: string,
+    @Query('month') month: string,
+    @Query('year') year: string,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<StreamableFile> {
+    const now = new Date();
+    const m = +month || now.getMonth() + 1;
+    const y = +year || now.getFullYear();
+    const buffer = await this.service.generateMyPayslipPdf(userId, m, y);
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="maosh_varaqasi_${m}_${y}.pdf"`,
+    });
+    return new StreamableFile(buffer);
+  }
+
+  @Get('payslip/:employeeId')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR, UserRole.ASSISTANT_ADMIN, UserRole.EMPLOYEE)
+  async downloadPayslip(
+    @Param('employeeId') employeeId: string,
+    @Query('month') month: string,
+    @Query('year') year: string,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<StreamableFile> {
+    const now = new Date();
+    const m = +month || now.getMonth() + 1;
+    const y = +year || now.getFullYear();
+    const buffer = await this.service.generatePayslipPdf(employeeId, m, y);
+    const MONTHS = ['', 'Yanvar', 'Fevral', 'Mart', 'Aprel', 'May', 'Iyun',
+                    'Iyul', 'Avgust', 'Sentyabr', 'Oktyabr', 'Noyabr', 'Dekabr'];
+    const filename = `maosh-${m}-${y}.pdf`;
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+    });
+    return new StreamableFile(buffer);
+  }
+
   @Get('export/excel')
   @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR, UserRole.ASSISTANT_ADMIN)
   async exportExcel(
