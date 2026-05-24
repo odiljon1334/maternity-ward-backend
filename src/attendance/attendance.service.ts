@@ -826,6 +826,17 @@ export class AttendanceService {
 
     // ── CHECK-OUT ──────────────────────────────────────────────────────────────
     if (!existing.checkOut) {
+      // Minimum 2 soat o'tganligini tekshirish
+      if (existing.checkIn) {
+        const minutesSinceCheckIn = (eventDate.getTime() - existing.checkIn.getTime()) / 60_000;
+        if (minutesSinceCheckIn < 120) {
+          const remaining = Math.ceil(120 - minutesSinceCheckIn);
+          throw new BadRequestException(
+            `Check-out hali erta. ${remaining} daqiqa kutish kerak (minimum 2 soat ish vaqti).`,
+          );
+        }
+      }
+
       const expectedEnd     = existing.expectedCheckOut
         ?? this.buildExpectedCheckOut(workDate, schedule, fallbackShift);
       const earlyLeaveMin   = this.calcEarlyLeaveMinutes(eventDate, expectedEnd);

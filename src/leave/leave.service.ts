@@ -201,7 +201,8 @@ export class LeaveService {
       },
     });
     if (!leave) throw new NotFoundException('Ta\'til so\'rovi topilmadi');
-    if (leave.hospitalId !== hospitalId) throw new ForbiddenException('Ruxsat yo\'q');
+    // hospitalId bo'sh bo'lsa SUPER_ADMIN (hamma kasalxona) — tekshirish o'tkazib yuboriladi
+    if (hospitalId && leave.hospitalId !== hospitalId) throw new ForbiddenException('Ruxsat yo\'q');
     if (leave.status !== LeaveStatus.PENDING) {
       throw new BadRequestException(`So'rov allaqachon ${leave.status} holatida`);
     }
@@ -277,7 +278,7 @@ export class LeaveService {
       where: { id: leaveId },
     });
     if (!leave) throw new NotFoundException('Ta\'til so\'rovi topilmadi');
-    if (leave.hospitalId !== hospitalId) throw new ForbiddenException('Ruxsat yo\'q');
+    if (hospitalId && leave.hospitalId !== hospitalId) throw new ForbiddenException('Ruxsat yo\'q');
     if (leave.status !== LeaveStatus.APPROVED) {
       throw new BadRequestException('Faqat APPROVED so\'rovni qaytarish mumkin');
     }
