@@ -217,20 +217,26 @@ export class EmployeesService {
       let retries = 5;
       while (retries > 0) {
         try {
-          const allNos = await this.prisma.employee.findMany({
-            where: { hospitalId, employeeNo: { not: null } },
-            select: { employeeNo: true },
-          });
-          const maxNo = allNos
-            .map(e => e.employeeNo!)
-            .filter(n => /^\d+$/.test(n))
-            .map(n => parseInt(n, 10))
-            .reduce((a, b) => Math.max(a, b), 0);
-          const yy = new Date().getFullYear().toString().slice(-2);
-          const nextSeq = String(maxNo + 1).padStart(5, '0');
-          updateData.employeeNo = `${yy}${nextSeq}`;
+          const result = await this.prisma.$transaction(async (tx) => {
+            // Global lock — race condition bo'lmaydi
+            await tx.$executeRaw`SELECT pg_advisory_xact_lock(99999)`;
   
-          return await this.prisma.employee.update({ where: { id }, data: updateData });
+            const allNos = await tx.employee.findMany({
+              where: { hospitalId, employeeNo: { not: null } },
+              select: { employeeNo: true },
+            });
+            const maxNo = allNos
+              .map(e => e.employeeNo!)
+              .filter(n => /^\d+$/.test(n))
+              .map(n => parseInt(n, 10))
+              .reduce((a, b) => Math.max(a, b), 0);
+            const yy = new Date().getFullYear().toString().slice(-2);
+            const nextSeq = String(maxNo + 1).padStart(5, '0');
+            updateData.employeeNo = `${yy}${nextSeq}`;
+  
+            return tx.employee.update({ where: { id }, data: updateData });
+          });
+          return result;
         } catch (e) {
           if (e?.code === 'P2002' && retries > 1) {
             retries--;
