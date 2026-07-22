@@ -205,7 +205,6 @@ export class EmployeesService {
     const { filename } = await processAndSavePhoto(imageBuffer, uploadDir, filenameBase);
     const photoUrl = `/uploads/${filename}`;
   
-    // Eski rasmni o'chirish
     if (emp?.photoUrl) {
       const oldFile = path.join(uploadDir, emp.photoUrl.replace(/^\/uploads\//, ''));
       if (fs.existsSync(oldFile)) fs.unlinkSync(oldFile);
@@ -214,37 +213,9 @@ export class EmployeesService {
     const updateData: any = { photoUrl };
   
     if (!emp?.employeeNo) {
-      let retries = 5;
-      while (retries > 0) {
-        try {
-          const result = await this.prisma.$transaction(async (tx) => {
-            // Global lock — race condition bo'lmaydi
-            await tx.$executeRaw`SELECT pg_advisory_xact_lock(99999)`;
-  
-            const allNos = await tx.employee.findMany({
-              where: { hospitalId, employeeNo: { not: null } },
-              select: { employeeNo: true },
-            });
-            const maxNo = allNos
-              .map(e => e.employeeNo!)
-              .filter(n => /^\d+$/.test(n))
-              .map(n => parseInt(n, 10))
-              .reduce((a, b) => Math.max(a, b), 0);
-            const yy = new Date().getFullYear().toString().slice(-2);
-            const nextSeq = String(maxNo + 1).padStart(5, '0');
-            updateData.employeeNo = `${yy}${nextSeq}`;
-  
-            return tx.employee.update({ where: { id }, data: updateData });
-          });
-          return result;
-        } catch (e) {
-          if (e?.code === 'P2002' && retries > 1) {
-            retries--;
-            continue;
-          }
-          throw e;
-        }
-      }
+      const yy = new Date().getFullYear().toString().slice(-2);
+      const unique = `${yy}${process.hrtime.bigint().toString().slice(-6)}`;
+      updateData.employeeNo = unique;
     }
   
     return this.prisma.employee.update({ where: { id }, data: updateData });
