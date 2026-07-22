@@ -199,39 +199,48 @@ export class EmployeesService {
   async updatePhoto(id: string, imageBuffer: Buffer, hospitalId: string) {
     await this.findOne(id, hospitalId);
     const emp = await this.prisma.employee.findUnique({ where: { id } });
-
-    // Rasmni qayta ishlash: EXIF rotate + resize 800x800 + JPEG 85% siqish
+  
     const uploadDir = process.env.UPLOAD_DIR || './uploads';
     const filenameBase = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
     const { filename } = await processAndSavePhoto(imageBuffer, uploadDir, filenameBase);
     const photoUrl = `/uploads/${filename}`;
-
+  
     // Eski rasmni o'chirish
     if (emp?.photoUrl) {
       const oldFile = path.join(uploadDir, emp.photoUrl.replace(/^\/uploads\//, ''));
       if (fs.existsSync(oldFile)) fs.unlinkSync(oldFile);
     }
-
+  
     const updateData: any = { photoUrl };
-
-    // Auto-generate numeric employeeNo for Hikvision terminal (only if not set yet)
+  
     if (!emp?.employeeNo) {
-      // count + 1 ishlatmay, MAX mavjud raqamdan keyingisini olish
-      // (count unique constraint xatosiga olib kelishi mumkin edi)
-      const allNos = await this.prisma.employee.findMany({
-        where: { hospitalId, employeeNo: { not: null } },
-        select: { employeeNo: true },
-      });
-      const maxNo = allNos
-        .map(e => e.employeeNo!)
-        .filter(n => /^\d+$/.test(n))
-        .map(n => parseInt(n, 10))
-        .reduce((a, b) => Math.max(a, b), 0);
-      const yy = new Date().getFullYear().toString().slice(-2);
-      const nextSeq = String(maxNo + 1).padStart(5, '0');
-      updateData.employeeNo = `${yy}${nextSeq}`;
+      let retries = 5;
+      while (retries > 0) {
+        try {
+          const allNos = await this.prisma.employee.findMany({
+            where: { hospitalId, employeeNo: { not: null } },
+            select: { employeeNo: true },
+          });
+          const maxNo = allNos
+            .map(e => e.employeeNo!)
+            .filter(n => /^\d+$/.test(n))
+            .map(n => parseInt(n, 10))
+            .reduce((a, b) => Math.max(a, b), 0);
+          const yy = new Date().getFullYear().toString().slice(-2);
+          const nextSeq = String(maxNo + 1).padStart(5, '0');
+          updateData.employeeNo = `${yy}${nextSeq}`;
+  
+          return await this.prisma.employee.update({ where: { id }, data: updateData });
+        } catch (e) {
+          if (e?.code === 'P2002' && retries > 1) {
+            retries--;
+            continue;
+          }
+          throw e;
+        }
+      }
     }
-
+  
     return this.prisma.employee.update({ where: { id }, data: updateData });
   }
 
