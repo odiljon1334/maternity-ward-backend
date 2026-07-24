@@ -25,9 +25,32 @@ const CYR_TO_LAT: Record<string, string> = {
   'ъ':"'",'ь':"'",'э':'e','ю':'yu','я':'ya',
   'ғ':'g','қ':'q','ҳ':'h','ў':'o',
 };
+
+// ─── Lotin → Kirill transliteratsiya ────────────────────────────────────────
+const LAT_TO_CYR: Record<string, string> = {
+  'yo':'ё','yu':'ю','ya':'я','ch':'ч','sh':'ш',
+  'a':'а','b':'б','v':'в','g':'г','d':'д','e':'е','j':'ж','z':'з',
+  'i':'и','y':'й','k':'к','l':'л','m':'м','n':'н','o':'о','p':'п','r':'р',
+  's':'с','t':'т','u':'у','f':'ф','x':'х','c':'ц','q':'қ','h':'ҳ',
+};
+
 function cyrToLat(str: string): string {
   return str.toLowerCase().split('').map(c => CYR_TO_LAT[c] ?? c).join('');
 }
+
+function latToCyr(str: string): string {
+  let result = str.toLowerCase();
+  // Ko'p harfli kombinatsiyalarni avval almashtirish (ch, sh, yo, yu, ya)
+  result = result
+    .replace(/yo/g, 'ё')
+    .replace(/yu/g, 'ю')
+    .replace(/ya/g, 'я')
+    .replace(/ch/g, 'ч')
+    .replace(/sh/g, 'ш');
+  // Qolgan harflarni almashtirish
+  return result.split('').map(c => LAT_TO_CYR[c] ?? c).join('');
+}
+
 function hasCyrillic(str: string): boolean {
   return /[а-яёА-ЯЁҒғҚқҲҳЎў]/.test(str);
 }
@@ -48,7 +71,7 @@ export class EmployeesService {
       ...(positionId && { positionId }),
       ...(search && (() => {
         // Kirill kiritilsa → Lotin ekvivalentini ham qidiramiz (va aksincha)
-        const alt = hasCyrillic(search) ? cyrToLat(search) : null;
+        const alt = hasCyrillic(search) ? cyrToLat(search) : latToCyr(search);
         const nameFilters: any[] = [
           { fullName: { startsWith: search, mode: 'insensitive' } },
           { fullName: { contains: ` ${search}`, mode: 'insensitive' } },
