@@ -11,3 +11,9 @@ export class UpdateEmployeeDto extends PartialType(CreateEmployeeDto) {
   @IsString()
   password?: string;
 }
+
+export class FireEmployeeDto {
+  firedAt?:    string;
+  fireReason?: string; // RESIGNED | FIRED | RETIRED | TRANSFERRED | OTHER
+  fireNote?:   string;
+}

@@ -5,6 +5,7 @@ import { TelegramService } from '../telegram/telegram.service';
 import { SchedulesService } from '../schedules/schedules.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { DateUtil } from '../common/utils/date.util';
+import { LeaveService } from '../leave/leave.service';
 import dayjs from 'dayjs';
 import timezone from 'dayjs/plugin/timezone';
 import utc from 'dayjs/plugin/utc';
@@ -21,6 +22,7 @@ export class CronService {
     private readonly telegramService: TelegramService,
     private readonly schedulesService: SchedulesService,
     private readonly prisma: PrismaService,
+    private readonly leaveService:      LeaveService,
   ) {}
 
   /**
@@ -344,4 +346,18 @@ export class CronService {
       this.logger.error('monthlyScheduleRollover failed:', err);
     }
   }
+
+  /**
+ * Har kuni 01:00 da — muddati o'tgan ta'tillarni COMPLETED ga o'tkazadi
+ * va xodim statusini ACTIVE ga qaytaradi
+ */
+@Cron('0 1 * * *', { timeZone: TZ })
+async completeExpiredLeaves() {
+  this.logger.log('Running completeExpiredLeaves...');
+  try {
+    await this.leaveService.completeExpiredLeaves();
+  } catch (err) {
+    this.logger.error('completeExpiredLeaves failed:', err);
+  }
+}
 }

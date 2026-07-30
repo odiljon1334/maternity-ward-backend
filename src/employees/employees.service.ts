@@ -282,21 +282,191 @@ export class EmployeesService {
     return { fixed, skipped };
   }
 
-  async fire(id: string, hospitalId: string, firedAt?: string) {
+  async fire(id: string, hospitalId: string, firedAt?: string, fireReason?: string, fireNote?: string) {
     const emp = await this.findOne(id, hospitalId);
+    
     const result = await this.prisma.employee.update({
       where: { id },
-      data: { firedAt: firedAt ? new Date(firedAt) : new Date() },
+      data: { 
+        firedAt:    firedAt ? new Date(firedAt) : new Date(),
+        status:     'FIRED',
+        fireReason: fireReason ?? null,
+        fireNote:   fireNote   ?? null,
+      },
     });
-    // Agar DIRECTOR bo'lsa — Telegram obunasini o'chirish
+  
     if (emp.user?.role === 'DIRECTOR' && emp.hospitalId) {
       await this.prisma.telegramSubscription.updateMany({
         where: { hospitalId: emp.hospitalId, isActive: true },
-        data: { isActive: false },
+        data:  { isActive: false },
       });
     }
     return result;
   }
+
+  // ──────────────────────────────────────────
+// ARXIV — ketgan xodimlar
+// ──────────────────────────────────────────
+async getArchive(
+  hospitalId: string,
+  params?: { search?: string; page?: number; limit?: number },
+) {
+  const page  = params?.page  ?? 1;
+  const limit = params?.limit ?? 20;
+  const skip  = (page - 1) * limit;
+
+  const where: any = {
+    ...(hospitalId ? { hospitalId } : {}),
+    firedAt: { not: null },
+  };
+
+  if (params?.search) {
+    where.OR = [
+      { fullName: { contains: params.search, mode: 'insensitive' } },
+      { phone:    { contains: params.search, mode: 'insensitive' } },
+    ];
+  }
+
+  const [data, total] = await Promise.all([
+    this.prisma.employee.findMany({
+      where,
+      skip,
+      take: limit,
+      include: {
+        department: true,
+        position:   true,
+        hospital:   true,
+        payrolls:   {
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+        },
+      },
+      orderBy: { firedAt: 'desc' },
+    }),
+    this.prisma.employee.count({ where }),
+  ]);
+
+  return {
+    data,
+    meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+  };
+}
+
+// ──────────────────────────────────────────
+// LOOKUP — telefon bo'yicha cross-hospital qidiruv
+// ──────────────────────────────────────────
+async lookupByPhone(phone: string, currentHospitalId: string) {
+  if (!phone || phone.length < 9) return [];
+
+  const found = await this.prisma.employee.findMany({
+    where: {
+      phone:      { contains: phone, mode: 'insensitive' },
+      firedAt:    { not: null },
+      hospitalId: { not: currentHospitalId }, // boshqa kasalxonalardagi
+    },
+    include: {
+      department: true,
+      position:   true,
+      hospital:   { select: { id: true, name: true, phone: true, address: true } },
+      payrolls: {
+        orderBy: { createdAt: 'desc' },
+        take: 3,
+      },
+    },
+    orderBy: { firedAt: 'desc' },
+    take: 5,
+  });
+
+  return found.map(emp => {
+    const hiredAt  = new Date(emp.hiredAt);
+    const firedAt  = new Date(emp.firedAt!);
+    const diffMs   = firedAt.getTime() - hiredAt.getTime();
+    const months   = Math.floor(diffMs / (1000 * 60 * 60 * 24 * 30));
+    const years    = Math.floor(months / 12);
+    const remMonths = months % 12;
+
+    const duration = years > 0
+      ? `${years} yil ${remMonths > 0 ? remMonths + ' oy' : ''}`
+      : `${months} oy`;
+
+    return {
+      id:           emp.id,
+      fullName:     emp.fullName,
+      phone:        emp.phone,
+      gender:       emp.gender,
+      photoUrl:     emp.photoUrl,
+      department:   emp.department?.name,
+      position:     emp.position?.name,
+      hiredAt:      emp.hiredAt,
+      firedAt:      emp.firedAt,
+      duration,
+      fireReason:   emp.fireReason,
+      fireNote:     emp.fireNote,
+      lastSalary:   emp.payrolls[0]?.netSalary ?? emp.baseSalary,
+      hospital: {
+        name:    emp.hospital.name,
+        phone:   emp.hospital.phone,
+        address: emp.hospital.address,
+      },
+    };
+  });
+}
+
+// ──────────────────────────────────────────
+// ARXIV — bitta ketgan xodim to'liq profili
+// ──────────────────────────────────────────
+async getArchivedEmployee(id: string) {
+  const emp = await this.prisma.employee.findFirst({
+    where:   { id, firedAt: { not: null } },
+    include: {
+      department: true,
+      position:   true,
+      hospital:   true,
+      payrolls: {
+        orderBy: { year: 'desc' },
+        take: 12,
+      },
+      leaveRequests: {
+        orderBy: { createdAt: 'desc' },
+      },
+    },
+  });
+
+  if (!emp) throw new NotFoundException('Arxivdagi xodim topilmadi');
+
+  const hiredAt   = new Date(emp.hiredAt);
+  const firedAt   = new Date(emp.firedAt!);
+  const diffMs    = firedAt.getTime() - hiredAt.getTime();
+  const months    = Math.floor(diffMs / (1000 * 60 * 60 * 24 * 30));
+  const years     = Math.floor(months / 12);
+  const remMonths = months % 12;
+
+  const duration = years > 0
+    ? `${years} yil ${remMonths > 0 ? remMonths + ' oy' : ''}`
+    : `${months} oy`;
+
+  // Davomat statistikasi
+  const attStats = await this.prisma.attendanceRecord.groupBy({
+    by:    ['status'],
+    where: { employeeId: id },
+    _count: { status: true },
+  });
+
+  const statsMap = Object.fromEntries(
+    attStats.map(s => [s.status, s._count.status])
+  );
+
+  return {
+    ...emp,
+    duration,
+    attendanceStats: {
+      present:    statsMap['PRESENT']     ?? 0,
+      late:       statsMap['LATE']        ?? 0,
+      absent:     statsMap['ABSENT']      ?? 0,
+      earlyLeave: statsMap['EARLY_LEAVE'] ?? 0,
+    },
+  };
+}
 
   async remove(id: string, hospitalId: string) {
     const emp = await this.findOne(id, hospitalId);
@@ -439,7 +609,7 @@ export class EmployeesService {
         });
         imported++;
       } catch (e) {
-        errors.push(`${fullName}: ${e.message}`);
+        errors.push(`${fullName}: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
 

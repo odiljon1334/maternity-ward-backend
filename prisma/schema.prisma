@@ -86,6 +86,14 @@ enum LeaveStatus {
   APPROVED   // Tasdiqlandi
   REJECTED   // Rad etildi
   CANCELLED  // Xodim o'zi bekor qildi
+  COMPLETED
+}
+
+enum EmployeeStatus {
+  ACTIVE
+  ON_LEAVE
+  INACTIVE
+  FIRED
 }
 
 enum PaymentType {
@@ -300,6 +308,9 @@ model Employee {
 
   hiredAt  DateTime  @default(now())
   firedAt  DateTime?
+  fireReason  String?   // Ketish sababi: RESIGNED, FIRED, RETIRED, TRANSFERRED, OTHER
+  fireNote    String?   // Qo'shimcha izoh
+  status   EmployeeStatus @default(ACTIVE)
 
   schedules       Schedule[]
   attendances     AttendanceRecord[]

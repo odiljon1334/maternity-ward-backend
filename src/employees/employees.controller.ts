@@ -1,6 +1,7 @@
 import {
   Body, Controller, Delete, Get, Param, Post, Put, Query,
   UseGuards, UploadedFile, UseInterceptors, Res, StreamableFile,
+  Req,
 } from '@nestjs/common';
 import { EmployeesService } from './employees.service';
 import { CreateEmployeeDto } from './dto/create-employee.dto';
@@ -82,6 +83,38 @@ export class EmployeesController {
       'Content-Disposition': `attachment; filename="${filename}"`,
     });
     return new StreamableFile(buffer);
+  }
+
+  @Get('archive')
+  async getArchive(
+    @Query('page')   page:   string,
+    @Query('limit')  limit:  string,
+    @Query('search') search: string,
+    @Req() req: any,
+  ) {
+    const hospitalId = req.user.hospitalId ?? '';
+    const result = await this.service.getArchive(hospitalId, {
+      search: search || undefined,
+      page:  page  ? +page  : 1,
+      limit: limit ? +limit : 20,
+    });
+    return { success: true, data: result.data, meta: result.meta };
+  }
+  
+  @Get('archive/:id')
+  async getArchivedEmployee(@Param('id') id: string) {
+    const result = await this.service.getArchivedEmployee(id);
+    return { success: true, data: result };
+  }
+  
+  @Get('lookup')
+  async lookup(
+    @Query('phone') phone: string,
+    @Req() req: any,
+  ) {
+    const hospitalId = req.user.hospitalId ?? '';
+    const result = await this.service.lookupByPhone(phone, hospitalId);
+    return { success: true, data: result };
   }
 
   @Get(':id')
@@ -177,26 +210,27 @@ export class EmployeesController {
   }
 
   @Put(':id/fire')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
-  async fire(
-    @Param('id') id: string,
-    @CurrentUser('sub') userId: string,
-    @CurrentUser('hospitalId') hospitalId: string,
-    @Query('targetHospitalId') targetHospitalId?: string,
-    @Body('firedAt') firedAt?: string,
-  ) {
-    const hId = resolveHospitalId(hospitalId, targetHospitalId);
-    const result = await this.service.fire(id, hId, firedAt);
-    this.auditLog.log({
-      userId,
-      hospitalId: hId,
-      action: 'FIRE',
-      entity: 'Employee',
-      entityId: id,
-      details: { firedAt },
-    });
-    return result;
-  }
+async fire(
+  @Param('id') id: string,
+  @CurrentUser('sub') userId: string,
+  @CurrentUser('hospitalId') hospitalId: string,
+  @Query('targetHospitalId') targetHospitalId?: string,
+  @Body('firedAt')     firedAt?:     string,
+  @Body('fireReason')  fireReason?:  string,  // ← qo'shilmagan!
+  @Body('fireNote')    fireNote?:    string,   // ← qo'shilmagan!
+) {
+  const hId = resolveHospitalId(hospitalId, targetHospitalId);
+  const result = await this.service.fire(id, hId, firedAt, fireReason, fireNote);
+  this.auditLog.log({
+    userId,
+    hospitalId: hId,
+    action: 'FIRE',
+    entity: 'Employee',
+    entityId: id,
+    details: { firedAt, fireReason },
+  });
+  return result;
+}
 
   @Post('bulk-delete')
   @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN)

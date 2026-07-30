@@ -3,9 +3,15 @@ import { CronService } from './cron.service';
 import { AttendanceModule } from '../attendance/attendance.module';
 import { TelegramModule } from '../telegram/telegram.module';
 import { SchedulesModule } from '../schedules/schedules.module';
+import { LeaveModule } from 'src/leave/leave.module';
 
 @Module({
-  imports: [AttendanceModule, TelegramModule, SchedulesModule],
+  imports: [
+    AttendanceModule, 
+    TelegramModule, 
+    SchedulesModule,
+    LeaveModule,
+  ],
   providers: [CronService],
 })
 export class CronModule {}
