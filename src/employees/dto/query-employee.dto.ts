@@ -1,6 +1,6 @@
-import { IsOptional, IsString, IsEnum, IsInt, Min } from 'class-validator';
+import { IsOptional, IsString, IsInt, Min } from 'class-validator';
 import { Type } from 'class-transformer';
-import { UserStatus } from '@prisma/client';
+import { EmployeeStatus } from '@prisma/client';
 
 export class QueryEmployeeDto {
   @IsOptional()
@@ -16,8 +16,8 @@ export class QueryEmployeeDto {
   positionId?: string;
 
   @IsOptional()
-  @IsEnum(UserStatus)
-  status?: UserStatus;
+  @IsString()
+  employeeStatus?: string; // ACTIVE | ON_LEAVE | FIRED | ALL
 
   @IsOptional()
   @Type(() => Number)

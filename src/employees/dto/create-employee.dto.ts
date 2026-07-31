@@ -18,6 +18,10 @@ export class CreateEmployeeDto {
   @IsString()
   fullName: string;
 
+  @IsOptional()
+  @IsDateString()
+  birthDate?: string;
+
   @IsEnum(Gender)
   gender: Gender;
 

@@ -108,14 +108,15 @@ export class EmployeesController {
   }
   
   @Get('lookup')
-  async lookup(
-    @Query('phone') phone: string,
-    @Req() req: any,
-  ) {
-    const hospitalId = req.user.hospitalId ?? '';
-    const result = await this.service.lookupByPhone(phone, hospitalId);
-    return { success: true, data: result };
-  }
+async lookup(
+  @Query('fullName')  fullName:  string,
+  @Query('birthDate') birthDate: string,
+  @Req() req: any,
+) {
+  const hospitalId = req.user.hospitalId ?? '';
+  const result = await this.service.lookupByName(fullName, birthDate, hospitalId);
+  return { success: true, data: result };
+}
 
   @Get(':id')
   findOne(

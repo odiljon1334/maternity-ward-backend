@@ -60,17 +60,25 @@ export class EmployeesService {
   constructor(private readonly prisma: PrismaService) {}
 
   async findAll(query: QueryEmployeeDto, hospitalId: string) {
-    const { search, departmentId, positionId, page = 1, limit = 20 } = query;
+    const { search, departmentId, positionId, page = 1, limit = 20, employeeStatus } = query; // ← employeeStatus qo'shildi
     const skip = (page - 1) * limit;
-
-    // hospitalId bo'sh string bo'lsa (SUPER_ADMIN kasalxona tanlamagan) — barcha xodimlar
+  
+    // Status filter logikasi
+    const statusFilter: any =
+      employeeStatus === 'FIRED'
+        ? { firedAt: { not: null } }
+        : employeeStatus === 'ON_LEAVE'
+        ? { firedAt: null, status: 'ON_LEAVE' }
+        : employeeStatus === 'ACTIVE'
+        ? { firedAt: null, status: 'ACTIVE' }
+        : { firedAt: null }; // default — ketganlar ko'rinmasin
+  
     const where: any = {
       ...(hospitalId ? { hospitalId } : {}),
-      firedAt: null,
+      ...statusFilter, // ← firedAt: null o'rniga
       ...(departmentId && { departmentId }),
       ...(positionId && { positionId }),
       ...(search && (() => {
-        // Kirill kiritilsa → Lotin ekvivalentini ham qidiramiz (va aksincha)
         const alt = hasCyrillic(search) ? cyrToLat(search) : latToCyr(search);
         const nameFilters: any[] = [
           { fullName: { startsWith: search, mode: 'insensitive' } },
@@ -89,7 +97,7 @@ export class EmployeesService {
         };
       })()),
     };
-
+  
     const [data, total] = await Promise.all([
       this.prisma.employee.findMany({
         where,
@@ -100,7 +108,7 @@ export class EmployeesService {
       }),
       this.prisma.employee.count({ where }),
     ]);
-
+  
     return {
       data,
       meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
@@ -163,6 +171,7 @@ export class EmployeesService {
           employeeNo: dto.employeeNo || undefined,
           fullName: dto.fullName,
           gender: dto.gender,
+          birthDate: dto.birthDate ? new Date(dto.birthDate) : undefined,
           phone: dto.phone,
           email: dto.email,
           departmentId: dto.departmentId,
@@ -353,56 +362,94 @@ async getArchive(
 }
 
 // ──────────────────────────────────────────
-// LOOKUP — telefon bo'yicha cross-hospital qidiruv
+// LOOKUP — ism + tug'ilgan sana bo'yicha cross-hospital qidiruv
 // ──────────────────────────────────────────
-async lookupByPhone(phone: string, currentHospitalId: string) {
-  if (!phone || phone.length < 9) return [];
+async lookupByName(
+  fullName:  string,
+  birthDate?: string,
+  currentHospitalId?: string,
+): Promise<any[]> {
+  if (!fullName || fullName.trim().length < 3) return [];
 
-  const found = await this.prisma.employee.findMany({
+  const nameParts = fullName.trim().toLowerCase().split(/\s+/).filter(Boolean);
+
+  // Barcha ketgan xodimlarni qidiramiz (boshqa kasalxonalarda ham)
+  const candidates = await this.prisma.employee.findMany({
     where: {
-      phone:      { contains: phone, mode: 'insensitive' },
-      firedAt:    { not: null },
-      hospitalId: { not: currentHospitalId }, // boshqa kasalxonalardagi
+      firedAt: { not: null },
+      ...(currentHospitalId ? { hospitalId: { not: currentHospitalId } } : {}),
     },
     include: {
       department: true,
       position:   true,
       hospital:   { select: { id: true, name: true, phone: true, address: true } },
-      payrolls: {
-        orderBy: { createdAt: 'desc' },
-        take: 3,
-      },
+      payrolls:   { orderBy: { createdAt: 'desc' }, take: 1 },
     },
-    orderBy: { firedAt: 'desc' },
-    take: 5,
+    take: 100,
   });
 
-  return found.map(emp => {
+  // Moslik skori hisoblash
+  const scored = candidates.map(emp => {
+    const empNameParts = emp.fullName.toLowerCase().split(/\s+/).filter(Boolean);
+    let score = 0;
+
+    // Ism qismlari mos kelsa — har biri uchun ball
+    for (const part of nameParts) {
+      if (empNameParts.some(ep => ep.startsWith(part) || part.startsWith(ep))) {
+        score += 30;
+      }
+    }
+
+    // To'liq ism exact match — bonus
+    if (emp.fullName.toLowerCase() === fullName.trim().toLowerCase()) {
+      score += 40;
+    }
+
+    // Tug'ilgan sana mos kelsa — katta bonus
+    if (birthDate && emp.birthDate) {
+      const bd1 = new Date(birthDate).toISOString().slice(0, 10);
+      const bd2 = new Date(emp.birthDate).toISOString().slice(0, 10);
+      if (bd1 === bd2) score += 50;
+    }
+
+    return { emp, score };
+  });
+
+  // Faqat 50+ ball olganlarni qaytarish
+  const matched = scored
+    .filter(s => s.score >= 50)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 5);
+
+  return matched.map(({ emp, score }) => {
     const hiredAt  = new Date(emp.hiredAt);
     const firedAt  = new Date(emp.firedAt!);
-    const diffMs   = firedAt.getTime() - hiredAt.getTime();
-    const months   = Math.floor(diffMs / (1000 * 60 * 60 * 24 * 30));
+    const months   = Math.floor((firedAt.getTime() - hiredAt.getTime()) / (1000 * 60 * 60 * 24 * 30));
     const years    = Math.floor(months / 12);
     const remMonths = months % 12;
-
     const duration = years > 0
       ? `${years} yil ${remMonths > 0 ? remMonths + ' oy' : ''}`
       : `${months} oy`;
 
+    const confidence = score >= 120 ? 'HIGH' : score >= 80 ? 'MEDIUM' : 'LOW';
+
     return {
-      id:           emp.id,
-      fullName:     emp.fullName,
-      phone:        emp.phone,
-      gender:       emp.gender,
-      photoUrl:     emp.photoUrl,
-      department:   emp.department?.name,
-      position:     emp.position?.name,
-      hiredAt:      emp.hiredAt,
-      firedAt:      emp.firedAt,
+      id:         emp.id,
+      fullName:   emp.fullName,
+      phone:      emp.phone,
+      gender:     emp.gender,
+      photoUrl:   emp.photoUrl,
+      birthDate:  emp.birthDate,
+      department: emp.department?.name,
+      position:   emp.position?.name,
+      hiredAt:    emp.hiredAt,
+      firedAt:    emp.firedAt,
       duration,
-      fireReason:   emp.fireReason,
-      fireNote:     emp.fireNote,
-      lastSalary:   emp.payrolls[0]?.netSalary ?? emp.baseSalary,
+      fireReason: emp.fireReason,
+      fireNote:   emp.fireNote,
+      lastSalary: emp.payrolls[0]?.netSalary ?? emp.baseSalary,
+      confidence, // HIGH | MEDIUM | LOW
+      score,
       hospital: {
         name:    emp.hospital.name,
         phone:   emp.hospital.phone,

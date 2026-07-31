@@ -310,6 +310,7 @@ model Employee {
   firedAt  DateTime?
   fireReason  String?   // Ketish sababi: RESIGNED, FIRED, RETIRED, TRANSFERRED, OTHER
   fireNote    String?   // Qo'shimcha izoh
+  birthDate  DateTime?
   status   EmployeeStatus @default(ACTIVE)
 
   schedules       Schedule[]
