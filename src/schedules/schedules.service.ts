@@ -101,6 +101,121 @@ export class SchedulesService {
   }
 
   // ──────────────────────────────────────────
+  // STATISTICS for Cards (Jami, Grafikli, Grafiksiz, Kunduzgi/Tungi)
+  // ──────────────────────────────────────────
+  async getScheduleStatistics(month: number, year: number, hospitalId?: string | null) {
+    const start = DateUtil.startOfMonth(year, month);
+    const end = DateUtil.endOfMonth(year, month);
+
+    const empWhere: any = { firedAt: null };
+    if (hospitalId) empWhere.hospitalId = hospitalId;
+
+    // 1. Shu kasalxonadagi barcha faol xodimlar ID lari
+    const activeEmployees = await this.prisma.employee.findMany({
+      where: empWhere,
+      select: { id: true },
+    });
+    const activeEmpIds = new Set(activeEmployees.map(e => e.id));
+    const totalEmployees = activeEmpIds.size;
+
+    // 2. Shu oydagi barcha WORKING yozuvlar va ularning shift turlari
+    const schedulesInMonth = await this.prisma.schedule.findMany({
+      where: {
+        date: { gte: start, lte: end },
+        status: 'WORKING',
+        employeeId: { in: [...activeEmpIds] }, // Faqat shu kasalxona xodimlari
+      },
+      select: { 
+        employeeId: true, 
+        shift: { select: { type: true } } 
+      },
+    });
+
+    // 3. Unikal xodimlar va smenalar sonini hisoblash
+    const uniqueEmployeesWithSchedule = new Set<string>();
+    let daytimeCount = 0;
+    let nighttimeCount = 0;
+
+    for (const s of schedulesInMonth) {
+      uniqueEmployeesWithSchedule.add(s.employeeId);
+      
+      if (s.shift?.type === 'DAYTIME') daytimeCount++;
+      if (s.shift?.type === 'NIGHTTIME') nighttimeCount++;
+    }
+
+    const withScheduleCount = uniqueEmployeesWithSchedule.size;
+    const withoutScheduleCount = Math.max(0, totalEmployees - withScheduleCount);
+
+    return {
+      totalEmployees,
+      withSchedule: withScheduleCount,
+      withoutSchedule: withoutScheduleCount,
+      daytime: daytimeCount,
+      nighttime: nighttimeCount,
+    };
+  }
+
+  // ──────────────────────────────────────────
+  // PAGINATED monthly schedules for Infinite Scroll
+  // ──────────────────────────────────────────
+  async getMonthlySchedulesPaginated(
+    month: number,
+    year: number,
+    page: number = 1,
+    limit: number = 20,
+    hospitalId?: string | null,
+  ) {
+    const start = DateUtil.startOfMonth(year, month);
+    const end = DateUtil.endOfMonth(year, month);
+    const skip = (page - 1) * limit;
+
+    const empWhere: any = { firedAt: null };
+    if (hospitalId) empWhere.hospitalId = hospitalId;
+
+    // Faqat shu sahifa uchun kerakli xodimlarni olamiz (Pagination)
+    const employees = await this.prisma.employee.findMany({
+      where: empWhere,
+      include: { department: true, position: true },
+      orderBy: { fullName: 'asc' },
+      skip,
+      take: limit,
+    });
+
+    const employeeIds = employees.map(e => e.id);
+
+    // Shu xodimlarning shu oydagi grafiklarini tortamiz
+    const schedules = await this.prisma.schedule.findMany({
+      where: {
+        employeeId: { in: employeeIds },
+        date: { gte: start, lte: end },
+      },
+      include: {
+        shift: true,
+      },
+      orderBy: { date: 'asc' },
+    });
+
+    // Xodimlarga grafiklarini moslab biriktiramiz
+    const data = employees.map(emp => ({
+      ...emp,
+      schedules: schedules.filter(s => s.employeeId === emp.id),
+    }));
+
+    // Jami sahifalar sonini aniqlash uchun
+    const totalCount = await this.prisma.employee.count({ where: empWhere });
+
+    return {
+      data,
+      meta: {
+        total: totalCount,
+        page,
+        limit,
+        totalPages: Math.ceil(totalCount / limit),
+      },
+    };
+  }
+
+  // ──────────────────────────────────────────
   // GENERATE schedule by pattern
   // ──────────────────────────────────────────
   async generate(dto: GenerateScheduleDto) {
@@ -259,7 +374,7 @@ export class SchedulesService {
         } as any);
         results.push({ employeeId: empId, ...result });
       } catch (e) {
-        results.push({ employeeId: empId, error: e.message });
+        results.push({ employeeId: empId, error: e instanceof Error ? e.message : String(e) });
       }
     }
     return results;

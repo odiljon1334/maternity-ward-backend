@@ -68,6 +68,40 @@ export class SchedulesController {
     );
   }
 
+  // 1. Card'lar uchun umumiy statistika (scroll qilinganda o'zgarmaydi)
+  @Get('statistics/summary')
+  getScheduleStatistics(
+    @Query('month') month: string,
+    @Query('year') year: string,
+    @CurrentUser('hospitalId') hospitalId: string | null,
+    @Query('targetHospitalId') targetHospitalId?: string,
+  ) {
+    return this.service.getScheduleStatistics(
+      +month || new Date().getMonth() + 1,
+      +year  || new Date().getFullYear(),
+      resolveHospitalId(hospitalId, targetHospitalId),
+    );
+  }
+
+  // 2. Sahifalangan (paginated) oylik grafiklar ro'yxati (Infinite Scroll uchun)
+  @Get('monthly-paginated')
+  getMonthlySchedulesPaginated(
+    @Query('month') month: string,
+    @Query('year') year: string,
+    @Query('page') page: string,
+    @Query('limit') limit: string,
+    @CurrentUser('hospitalId') hospitalId: string | null,
+    @Query('targetHospitalId') targetHospitalId?: string,
+  ) {
+    return this.service.getMonthlySchedulesPaginated(
+      +month || new Date().getMonth() + 1,
+      +year  || new Date().getFullYear(),
+      +page  || 1,
+      +limit || 20,
+      resolveHospitalId(hospitalId, targetHospitalId),
+    );
+  }
+
   @Post('generate')
   @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
   generate(@Body() dto: GenerateScheduleDto) {
