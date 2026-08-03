@@ -123,7 +123,7 @@ export class TelegramService implements OnModuleInit {
     private readonly prisma: PrismaService,
   ) {}
 
-  onModuleInit() {
+  async onModuleInit() {
     const token = this.config.get<string>('TELEGRAM_BOT_TOKEN');
     if (!token || token === 'your_telegram_bot_token') {
       this.logger.warn('TELEGRAM_BOT_TOKEN not set — bot disabled');
@@ -132,18 +132,16 @@ export class TelegramService implements OnModuleInit {
 
     this.bot = new Telegraf(token);
     this.setupCommands();
-    this.bot.launch().then(async () => {
-      // Android va boshqa qurilmalarda / menyusida ko'rinishi uchun
-      await this.bot.telegram.setMyCommands([
-        { command: 'start',       description: '🏠 Botni ishga tushirish / Asosiy menyu' },
-        { command: 'bugun',       description: '📊 Bugungi davomat xulosasi' },
-        { command: 'kelmaganlar', description: '⏳ Hali kelmagan hodimlar' },
-        { command: 'haftalik',    description: '📈 Haftalik kechikishlar hisoboti' },
-        { command: 'oylik',       description: '💰 Oylik maosh hisoboti' },
-        { command: 'stop',        description: '🔕 Bildirishnomalarni o\'chirish' },
-      ]).catch(() => {});
-    }).catch((err) => this.logger.error('Bot launch failed:', err));
-    this.logger.log('Telegram bot started');
+    await this.bot.telegram.setMyCommands([
+      { command: 'start',       description: '🏠 Botni ishga tushirish / Asosiy menyu' },
+      { command: 'bugun',       description: '📊 Bugungi davomat xulosasi' },
+      { command: 'kelmaganlar', description: '⏳ Hali kelmagan hodimlar' },
+      { command: 'haftalik',    description: '📈 Haftalik kechikishlar hisoboti' },
+      { command: 'oylik',       description: '💰 Oylik maosh hisoboti' },
+      { command: 'stop',        description: '🔕 Bildirishnomalarni o\'chirish' },
+    ]).catch(() => {});
+    
+    this.logger.log('Telegram bot started (webhook mode)');
   }
 
   private setupCommands() {
@@ -698,7 +696,7 @@ export class TelegramService implements OnModuleInit {
           await this.bot.telegram.sendMessage(sub.chatId, caption, { parse_mode: 'HTML' });
         }
       } catch (e) {
-        this.logger.warn(`Failed to send to ${sub.chatId}: ${e.message}`);
+        this.logger.warn(`Failed to send to ${sub.chatId}: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
   }
@@ -846,7 +844,7 @@ export class TelegramService implements OnModuleInit {
           await this.bot.telegram.sendLocation(sub.chatId, lat, lng);
         }
       } catch (e) {
-        this.logger.warn(`notifyMobileCheckin failed to ${sub.chatId}: ${e.message}`);
+        this.logger.warn(`notifyMobileCheckin failed to ${sub.chatId}: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
   }
@@ -1237,7 +1235,7 @@ export class TelegramService implements OnModuleInit {
         try {
           await this.bot.telegram.sendMessage(sub.chatId, message, { parse_mode: 'HTML' });
         } catch (e) {
-          this.logger.warn(`Leave notify failed to ${sub.chatId}: ${e.message}`);
+          this.logger.warn(`Leave notify failed to ${sub.chatId}: ${e instanceof Error ? e.message : String(e)}`);
         }
       }
     } else {
@@ -1257,8 +1255,13 @@ export class TelegramService implements OnModuleInit {
       try {
         await this.bot.telegram.sendMessage(employee.telegramChatId, message, { parse_mode: 'HTML' });
       } catch (e) {
-        this.logger.warn(`Leave decision notify to employee failed: ${e.message}`);
+        this.logger.warn(`Leave decision notify to employee failed: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
+  }
+
+  async handleUpdate(update: any): Promise<void> {
+    if (!this.bot) return;
+    await this.bot.handleUpdate(update);
   }
 }
