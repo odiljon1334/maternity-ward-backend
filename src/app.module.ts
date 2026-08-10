@@ -25,6 +25,7 @@ import { HikConnectModule } from './hikconnect/hikconnect.module';
 import { HealthModule }     from './health/health.module';
 import { LeaveModule }      from './leave/leave.module';
 import { PushModule }       from './push/push.module';
+import { BirthdayModule } from './birthday/birthday.module';
 
 @Module({
   imports: [
@@ -65,6 +66,7 @@ import { PushModule }       from './push/push.module';
     HealthModule,
     LeaveModule,
     PushModule,
+    BirthdayModule,
   ],
   providers: [],
 })

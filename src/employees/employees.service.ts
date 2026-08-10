@@ -222,6 +222,7 @@ export class EmployeesService {
           ...(rest.baseSalary  !== undefined   && { baseSalary:     rest.baseSalary }),
           ...(rest.employeeNo  !== undefined   && rest.employeeNo !== '' && { employeeNo: rest.employeeNo }),
           ...(rest.telegramChatId !== undefined && { telegramChatId: rest.telegramChatId }),
+          ...(rest.birthDate !== undefined && { birthDate: rest.birthDate ? new Date(rest.birthDate) : null }),
         },
         include: { department: true, position: true },
       });
