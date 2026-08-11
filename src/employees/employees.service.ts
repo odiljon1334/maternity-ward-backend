@@ -374,6 +374,8 @@ async lookupByName(
 
   const nameParts = fullName.trim().toLowerCase().split(/\s+/).filter(Boolean);
 
+  const namepartsAlt = nameParts.map(p => hasCyrillic(p) ? cyrToLat(p) : latToCyr(p));
+
   // Barcha ketgan xodimlarni qidiramiz (boshqa kasalxonalarda ham)
   const candidates = await this.prisma.employee.findMany({
     where: {
@@ -395,14 +397,28 @@ async lookupByName(
     let score = 0;
 
     // Ism qismlari mos kelsa — har biri uchun ball
-    for (const part of nameParts) {
-      if (empNameParts.some(ep => ep.startsWith(part) || part.startsWith(ep))) {
+    for (let i = 0; i < nameParts.length; i++) {
+      const part    = nameParts[i];
+      const partAlt = namepartsAlt[i];
+      
+      if (empNameParts.some(ep => 
+        ep.startsWith(part)    || part.startsWith(ep) ||
+        ep.startsWith(partAlt) || partAlt.startsWith(ep)
+      )) {
         score += 30;
       }
     }
 
-    // To'liq ism exact match — bonus
-    if (emp.fullName.toLowerCase() === fullName.trim().toLowerCase()) {
+    // To'liq ism exact match — transliteratsiya bilan ham tekshirish
+    const fullNameLat = hasCyrillic(fullName) ? cyrToLat(fullName.trim().toLowerCase()) : fullName.trim().toLowerCase();
+    const fullNameCyr = !hasCyrillic(fullName) ? latToCyr(fullName.trim().toLowerCase()) : fullName.trim().toLowerCase();
+    const empNameLow  = emp.fullName.toLowerCase();
+
+    if (
+      empNameLow === fullName.trim().toLowerCase() ||
+      empNameLow === fullNameLat ||
+      empNameLow === fullNameCyr
+    ) {
       score += 40;
     }
 
