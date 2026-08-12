@@ -15,75 +15,8 @@ import { Response } from 'express';
 export class PayrollController {
   constructor(private readonly service: PayrollService) {}
 
-  @Get()
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR, UserRole.ASSISTANT_ADMIN)
-  findAll(
-    @CurrentUser('hospitalId') jwtHospitalId: string | null,
-    @Query('month') month: string,
-    @Query('year') year: string,
-    @Query('targetHospitalId') targetHospitalId?: string,
-    @Query('departmentId') departmentId?: string,
-  ) {
-    const now = new Date();
-    const hospitalId = targetHospitalId || jwtHospitalId || undefined;
-    return this.service.findAll(+month || now.getMonth() + 1, +year || now.getFullYear(), hospitalId, departmentId);
-  }
+  // ── STATIK VA MAXSUS ROUTELAR (DOIM TEPADA BO'LISHI KERAK) ──
 
-  @Get('preview/:employeeId')
-    @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR, UserRole.ASSISTANT_ADMIN)
-  preview(
-    @Param('employeeId') employeeId: string,
-    @Query('month') month: string,
-    @Query('year') year: string,
-  ) {
-    const now = new Date();
-    return this.service.calculate(employeeId, +month || now.getMonth() + 1, +year || now.getFullYear());
-  }
-
-  @Get(':employeeId')
-    @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR, UserRole.ASSISTANT_ADMIN)
-  findOne(
-    @Param('employeeId') employeeId: string,
-    @Query('month') month: string,
-    @Query('year') year: string,
-  ) {
-    const now = new Date();
-    return this.service.findOne(employeeId, +month || now.getMonth() + 1, +year || now.getFullYear());
-  }
-
-  @Post('generate')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR, UserRole.ASSISTANT_ADMIN)
-  generate(
-    @CurrentUser('hospitalId') jwtHospitalId: string | null,
-    @Body() body: { month: number; year: number; departmentId?: string },
-    @Query('targetHospitalId') targetHospitalId?: string,
-  ) {
-    const hospitalId = targetHospitalId || jwtHospitalId || undefined;
-    return this.service.generateMonthlyPayroll(body.month, body.year, hospitalId, body.departmentId);
-  }
-
-  @Post('save/:employeeId')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN)
-  save(
-    @Param('employeeId') employeeId: string,
-    @Body() body: {
-      month: number; year: number;
-      manualBonus?: number; manualDeduction?: number; note?: string;
-    },
-  ) {
-    return this.service.createOrUpdate(
-      employeeId, body.month, body.year,
-      body.manualBonus, body.manualDeduction, body.note,
-    );
-  }
-
-  @Put('approve/:id')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
-  approve(@Param('id') id: string) {
-    return this.service.approve(id);
-  }
-
-  // ── EMPLOYEE: o'z maosh tarixini ko'rish ──────────────────────
   @Get('my')
   @Roles(UserRole.EMPLOYEE)
   findMyPayroll(
@@ -94,7 +27,6 @@ export class PayrollController {
     return this.service.findMyRecords(userId, month ? +month : undefined, year ? +year : undefined);
   }
 
-  // ── EMPLOYEE: o'z maosh varaqasini PDF yuklab olish ────────────
   @Get('my/payslip')
   @Roles(UserRole.EMPLOYEE)
   async downloadMyPayslip(
@@ -114,26 +46,29 @@ export class PayrollController {
     return new StreamableFile(buffer);
   }
 
-  @Get('payslip/:employeeId')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR, UserRole.ASSISTANT_ADMIN, UserRole.EMPLOYEE)
-  async downloadPayslip(
-    @Param('employeeId') employeeId: string,
+  @Get()
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR, UserRole.ASSISTANT_ADMIN)
+  findAll(
+    @CurrentUser('hospitalId') jwtHospitalId: string | null,
     @Query('month') month: string,
     @Query('year') year: string,
-    @Res({ passthrough: true }) res: Response,
-  ): Promise<StreamableFile> {
+    @Query('targetHospitalId') targetHospitalId?: string,
+    @Query('departmentId') departmentId?: string,
+  ) {
     const now = new Date();
-    const m = +month || now.getMonth() + 1;
-    const y = +year || now.getFullYear();
-    const buffer = await this.service.generatePayslipPdf(employeeId, m, y);
-    const MONTHS = ['', 'Yanvar', 'Fevral', 'Mart', 'Aprel', 'May', 'Iyun',
-                    'Iyul', 'Avgust', 'Sentyabr', 'Oktyabr', 'Noyabr', 'Dekabr'];
-    const filename = `maosh-${m}-${y}.pdf`;
-    res.set({
-      'Content-Type': 'application/pdf',
-      'Content-Disposition': `attachment; filename="${filename}"`,
-    });
-    return new StreamableFile(buffer);
+    const hospitalId = targetHospitalId || jwtHospitalId || undefined;
+    return this.service.findAll(+month || now.getMonth() + 1, +year || now.getFullYear(), hospitalId, departmentId);
+  }
+
+  @Post('generate')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR, UserRole.ASSISTANT_ADMIN)
+  generate(
+    @CurrentUser('hospitalId') jwtHospitalId: string | null,
+    @Body() body: { month: number; year: number; departmentId?: string },
+    @Query('targetHospitalId') targetHospitalId?: string,
+  ) {
+    const hospitalId = targetHospitalId || jwtHospitalId || undefined;
+    return this.service.generateMonthlyPayroll(body.month, body.year, hospitalId, body.departmentId);
   }
 
   @Get('export/excel')
@@ -157,5 +92,70 @@ export class PayrollController {
       'Content-Disposition': `attachment; filename="${filename}"`,
     });
     return new StreamableFile(buffer);
+  }
+
+  @Post('save/:employeeId')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN)
+  save(
+    @Param('employeeId') employeeId: string,
+    @Body() body: {
+      month: number; year: number;
+      manualBonus?: number; manualDeduction?: number; note?: string;
+    },
+  ) {
+    return this.service.createOrUpdate(
+      employeeId, body.month, body.year,
+      body.manualBonus, body.manualDeduction, body.note,
+    );
+  }
+
+  @Put('approve/:id')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  approve(@Param('id') id: string) {
+    return this.service.approve(id);
+  }
+
+  // ── DINAMIK PARAMETRLI ROUTELAR (DOIM PASTDA BO'LISHI KERAK) ──
+
+  @Get('preview/:employeeId')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR, UserRole.ASSISTANT_ADMIN)
+  preview(
+    @Param('employeeId') employeeId: string,
+    @Query('month') month: string,
+    @Query('year') year: string,
+  ) {
+    const now = new Date();
+    return this.service.calculate(employeeId, +month || now.getMonth() + 1, +year || now.getFullYear());
+  }
+
+  @Get('payslip/:employeeId')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR, UserRole.ASSISTANT_ADMIN, UserRole.EMPLOYEE)
+  async downloadPayslip(
+    @Param('employeeId') employeeId: string,
+    @Query('month') month: string,
+    @Query('year') year: string,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<StreamableFile> {
+    const now = new Date();
+    const m = +month || now.getMonth() + 1;
+    const y = +year || now.getFullYear();
+    const buffer = await this.service.generatePayslipPdf(employeeId, m, y);
+    const filename = `maosh-${m}-${y}.pdf`;
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+    });
+    return new StreamableFile(buffer);
+  }
+
+  @Get(':employeeId')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR, UserRole.ASSISTANT_ADMIN)
+  findOne(
+    @Param('employeeId') employeeId: string,
+    @Query('month') month: string,
+    @Query('year') year: string,
+  ) {
+    const now = new Date();
+    return this.service.findOne(employeeId, +month || now.getMonth() + 1, +year || now.getFullYear());
   }
 }

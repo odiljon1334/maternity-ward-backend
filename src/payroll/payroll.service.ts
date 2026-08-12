@@ -205,7 +205,7 @@ export class PayrollService {
           this.push.notifyPayrollGenerated(uid, month, year, Number(record.netSalary)).catch(() => null);
         }
       } catch (e) {
-        results.push({ employeeId: emp.id, status: 'error', error: e.message });
+        results.push({ employeeId: emp.id, status: 'error', error: e instanceof Error ? e.message : String(e) });
       }
     }
 
