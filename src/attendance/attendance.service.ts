@@ -458,7 +458,7 @@ export class AttendanceService {
       });
     } catch (err) {
       // Audit log xatosi asosiy jarayonni to'xtatmasin
-      this.logger.error(`AttendanceEvent saqlanmadi: ${err.message}`);
+      this.logger.error(`AttendanceEvent saqlanmadi: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -518,42 +518,114 @@ export class AttendanceService {
     return { records, stats };
   }
 
-  async getDailyAttendance(date: string, departmentId?: string, hospitalId?: string) {
-    const workDate = DateUtil.startOfDay(date);
+ // ──────────────────────────────────────────────────────────────────────────────
+// PRIVATE: WEEKEND HELPER
+// ──────────────────────────────────────────────────────────────────────────────
 
-    const empFilter: any = { firedAt: null };
-    if (hospitalId)   empFilter.hospitalId   = hospitalId;
-    if (departmentId) empFilter.departmentId = departmentId;
+private isWeekend(date: Date): boolean {
+  const day = dayjs(date).tz(TZ).day(); // 0=Yakshanba, 6=Shanba
+  return day === 0 || day === 6;
+}
 
-    const records = await this.prisma.attendanceRecord.findMany({
-      where:   { workDate, employee: empFilter },
-      include: {
-        employee: { include: { department: true, position: true } },
-        schedule: { include: { shift: true } },
-        breaks:   true,
-      },
-      orderBy: { employee: { fullName: 'asc' } },
+// ──────────────────────────────────────────────────────────────────────────────
+// PUBLIC: DAILY ATTENDANCE
+// ──────────────────────────────────────────────────────────────────────────────
+
+async getDailyAttendance(date: string, departmentId?: string, hospitalId?: string) {
+  const workDate  = DateUtil.startOfDay(date);
+  const weekend   = this.isWeekend(workDate);
+
+  const empFilter: any = { firedAt: null };
+  if (hospitalId)   empFilter.hospitalId   = hospitalId;
+  if (departmentId) empFilter.departmentId = departmentId;
+
+  // 1. Haqiqiy davomat yozuvlari (har doim olinadi)
+  const records = await this.prisma.attendanceRecord.findMany({
+    where:   { workDate, employee: empFilter },
+    include: {
+      employee: { include: { department: true, position: true } },
+      schedule: { include: { shift: true } },
+      breaks:   true,
+    },
+    orderBy: { employee: { fullName: 'asc' } },
+  });
+
+  const attendedIds = new Set(records.map(r => r.employeeId));
+
+  // 2. Dam olish kuni bo'lsa — virtual ABSENT yaratmaymiz
+  //    Faqat haqiqiy kelganlarni qaytaramiz
+  if (weekend) {
+    return records.sort((a, b) =>
+      a.employee.fullName.localeCompare(b.employee.fullName),
+    );
+  }
+
+  // 3. Ish kuni — grafigi bor lekin kelmagan xodimlar (virtual ABSENT)
+  const scheduledMissing = await this.prisma.schedule.findMany({
+    where: {
+      date:       workDate,
+      status:     'WORKING',
+      employeeId: { notIn: [...attendedIds] },
+      employee:   empFilter,
+    },
+    include: {
+      shift:    true,
+      employee: { include: { department: true, position: true } },
+    },
+  });
+
+  const absentVirtual = scheduledMissing.map(sch => ({
+    id:               `absent-${sch.employeeId}`,
+    employeeId:       sch.employeeId,
+    scheduleId:       sch.id,
+    deviceId:         null,
+    rawCheckInTime:   null,
+    rawCheckOutTime:  null,
+    checkIn:          null,
+    checkOut:         null,
+    lunchOut:         null,
+    lunchIn:          null,
+    lunchLateMin:     0,
+    coffeeOut:        null,
+    coffeeIn:         null,
+    coffeeLateMin:    0,
+    expectedCheckIn:  sch.shift
+      ? DateUtil.buildDateTime(workDate, sch.shift.startTime)
+      : new Date(workDate.getTime() + 8 * 3600 * 1000),
+    expectedCheckOut: sch.shift
+      ? (sch.shift.isOvernight
+          ? DateUtil.buildDateTime(dayjs(workDate).add(1, 'day').toDate(), sch.shift.endTime)
+          : DateUtil.buildDateTime(workDate, sch.shift.endTime))
+      : new Date(workDate.getTime() + 20 * 3600 * 1000),
+    status:           'ABSENT' as AttendanceStatus,
+    lateMinutes:      0,
+    earlyLeaveMin:    0,
+    overtimeMinutes:  0,
+    workDate,
+    note:             null,
+    breaks:           [],
+    createdAt:        workDate,
+    updatedAt:        workDate,
+    employee:         sch.employee,
+    schedule:         sch,
+  }));
+
+  const allVirtual = [...records, ...absentVirtual];
+
+  // 4. Hech kim yo'q (na davomat, na jadval) — grafik yo'q xodimlar
+  //    Lekin ularni ABSENT emas, "grafik yo'q" deb ko'rsatamiz
+  if (allVirtual.length === 0) {
+    const allEmployees = await this.prisma.employee.findMany({
+      where:   empFilter,
+      include: { department: true, position: true },
+      orderBy: { fullName: 'asc' },
     });
+    if (allEmployees.length === 0) return [];
 
-    const attendedIds = new Set(records.map(r => r.employeeId));
-
-    const scheduledMissing = await this.prisma.schedule.findMany({
-      where: {
-        date:       workDate,
-        status:     'WORKING',
-        employeeId: { notIn: [...attendedIds] },
-        employee:   empFilter,
-      },
-      include: {
-        shift:    true,
-        employee: { include: { department: true, position: true } },
-      },
-    });
-
-    const absentVirtual = scheduledMissing.map(sch => ({
-      id:               `absent-${sch.employeeId}`,
-      employeeId:       sch.employeeId,
-      scheduleId:       sch.id,
+    return allEmployees.map(emp => ({
+      id:               `noschedule-${emp.id}`,
+      employeeId:       emp.id,
+      scheduleId:       null,
       deviceId:         null,
       rawCheckInTime:   null,
       rawCheckOutTime:  null,
@@ -565,70 +637,123 @@ export class AttendanceService {
       coffeeOut:        null,
       coffeeIn:         null,
       coffeeLateMin:    0,
-      expectedCheckIn:  sch.shift
-        ? DateUtil.buildDateTime(workDate, sch.shift.startTime)
-        : new Date(workDate.getTime() + 8 * 3600 * 1000),
-      expectedCheckOut: sch.shift
-        ? (sch.shift.isOvernight
-            ? DateUtil.buildDateTime(dayjs(workDate).add(1, 'day').toDate(), sch.shift.endTime)
-            : DateUtil.buildDateTime(workDate, sch.shift.endTime))
-        : new Date(workDate.getTime() + 20 * 3600 * 1000),
-      status:           'ABSENT' as AttendanceStatus,
+      expectedCheckIn:  null,
+      expectedCheckOut: null,
+      // ⚠️ ABSENT EMAS — grafik yo'q xodim "kelmagan" hisoblanmaydi
+      status:           'NO_SCHEDULE' as any,
       lateMinutes:      0,
       earlyLeaveMin:    0,
       overtimeMinutes:  0,
       workDate,
-      note:             null,
+      note:             "Grafik yo'q",
       breaks:           [],
       createdAt:        workDate,
       updatedAt:        workDate,
-      employee:         sch.employee,
-      schedule:         sch,
+      employee:         emp,
+      schedule:         null,
+    }));
+  }
+
+  // 5. Aralash holat: ba'zi xodimlarning grafigi bor (records/absentVirtual),
+  //    ba'zilarining yo'q — ularni ham NO_SCHEDULE sifatida qo'shamiz
+  const allIds = new Set(allVirtual.map(r => r.employeeId));
+
+  const noScheduleEmployees = await this.prisma.employee.findMany({
+    where: {
+      ...empFilter,
+      id: { notIn: [...allIds] },
+    },
+    include: { department: true, position: true },
+    orderBy: { fullName: 'asc' },
+  });
+
+  const noScheduleVirtual = noScheduleEmployees.map(emp => ({
+    id:               `noschedule-${emp.id}`,
+    employeeId:       emp.id,
+    scheduleId:       null,
+    deviceId:         null,
+    rawCheckInTime:   null,
+    rawCheckOutTime:  null,
+    checkIn:          null,
+    checkOut:         null,
+    lunchOut:         null,
+    lunchIn:          null,
+    lunchLateMin:     0,
+    coffeeOut:        null,
+    coffeeIn:         null,
+    coffeeLateMin:    0,
+    expectedCheckIn:  null,
+    expectedCheckOut: null,
+    status:           'NO_SCHEDULE' as any,
+    lateMinutes:      0,
+    earlyLeaveMin:    0,
+    overtimeMinutes:  0,
+    workDate,
+    note:             "Grafik yo'q",
+    breaks:           [],
+    createdAt:        workDate,
+    updatedAt:        workDate,
+    employee:         emp,
+    schedule:         null,
+  }));
+
+  return [...allVirtual, ...noScheduleVirtual].sort((a, b) =>
+    (a.employee as any).fullName.localeCompare((b.employee as any).fullName),
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// PUBLIC: CRON — Kunning oxirida grafigi bor lekin kelmaganlarni ABSENT qiladi
+// ──────────────────────────────────────────────────────────────────────────────
+
+async markAbsentForToday() {
+  const workDate = DateUtil.startOfDay(new Date());
+
+  // Dam olish kunida ishlatmaymiz
+  if (this.isWeekend(workDate)) {
+    this.logger.log('markAbsentForToday: dam olish kuni — skip');
+    return { marked: 0, skipped: true, reason: 'weekend' };
+  }
+
+  // Faqat grafigi WORKING bo'lgan xodimlar
+  const scheduledToday = await this.prisma.schedule.findMany({
+    where:  { date: workDate, status: 'WORKING' },
+    select: { id: true, employeeId: true, shiftId: true, shift: true },
+  });
+
+  if (scheduledToday.length === 0) {
+    return { marked: 0, skipped: false };
+  }
+
+  // Bugun allaqachon davomat yozuvi bor xodimlar
+  const existingRecords = await this.prisma.attendanceRecord.findMany({
+    where:  { workDate },
+    select: { employeeId: true },
+  });
+  const attendedSet = new Set(existingRecords.map(r => r.employeeId));
+
+  // Grafigi bor, shift mavjud, lekin kelmagan xodimlar
+  const toCreate = scheduledToday
+    .filter(sch => !attendedSet.has(sch.employeeId) && sch.shift)
+    .map(sch => ({
+      employeeId:       sch.employeeId,
+      scheduleId:       sch.id,
+      expectedCheckIn:  DateUtil.buildDateTime(workDate, sch.shift!.startTime),
+      expectedCheckOut: this.buildExpectedCheckOut(workDate, sch as any, null),
+      workDate,
+      status:           'ABSENT' as AttendanceStatus,
     }));
 
-    const allVirtual = [...records, ...absentVirtual];
-
-    if (allVirtual.length === 0) {
-      const allEmployees = await this.prisma.employee.findMany({
-        where:   empFilter,
-        include: { department: true, position: true },
-        orderBy: { fullName: 'asc' },
-      });
-      if (allEmployees.length === 0) return [];
-
-      return allEmployees.map(emp => ({
-        id:              `noschedule-${emp.id}`,
-        employeeId:      emp.id,
-        scheduleId:      null,
-        deviceId:        null,
-        checkIn:         null,
-        checkOut:        null,
-        lunchOut:        null,
-        lunchIn:         null,
-        lunchLateMin:    0,
-        coffeeOut:       null,
-        coffeeIn:        null,
-        coffeeLateMin:   0,
-        expectedCheckIn:  null,
-        expectedCheckOut: null,
-        status:          'ABSENT' as AttendanceStatus,
-        lateMinutes:     0,
-        earlyLeaveMin:   0,
-        overtimeMinutes: 0,
-        workDate,
-        note:            "Grafik yo'q",
-        breaks:          [],
-        createdAt:       workDate,
-        updatedAt:       workDate,
-        employee:        emp,
-        schedule:        null,
-      }));
-    }
-
-    return allVirtual.sort((a, b) =>
-      (a.employee as any).fullName.localeCompare((b.employee as any).fullName),
-    );
+  if (toCreate.length > 0) {
+    await this.prisma.attendanceRecord.createMany({
+      data:           toCreate,
+      skipDuplicates: true,
+    });
+    this.logger.log(`markAbsentForToday: ${toCreate.length} xodim ABSENT belgilandi`);
   }
+
+  return { marked: toCreate.length, skipped: false };
+}
 
   async getWeeklyStats(employeeId: string, weekStart: string) {
     const start = DateUtil.startOfWeek(weekStart);
@@ -883,38 +1008,6 @@ export class AttendanceService {
 
     // ── Allaqachon yakunlangan ─────────────────────────────────────────────────
     throw new BadRequestException('Bugun uchun davomat allaqachon yakunlangan');
-  }
-
-  async markAbsentForToday() {
-    const workDate = DateUtil.startOfDay(new Date());
-
-    const scheduledToday = await this.prisma.schedule.findMany({
-      where:  { date: workDate, status: 'WORKING' },
-      select: { id: true, employeeId: true, shiftId: true, shift: true },
-    });
-
-    const existingIds = await this.prisma.attendanceRecord.findMany({
-      where:  { workDate },
-      select: { employeeId: true },
-    });
-    const attendedSet = new Set(existingIds.map(r => r.employeeId));
-
-    const toCreate = scheduledToday
-      .filter(sch => !attendedSet.has(sch.employeeId) && sch.shift)
-      .map(sch => ({
-        employeeId:       sch.employeeId,
-        scheduleId:       sch.id,
-        expectedCheckIn:  DateUtil.buildDateTime(workDate, sch.shift!.startTime),
-        expectedCheckOut: this.buildExpectedCheckOut(workDate, sch as any, null),
-        workDate,
-        status:           'ABSENT' as AttendanceStatus,
-      }));
-
-    if (toCreate.length > 0) {
-      await this.prisma.attendanceRecord.createMany({ data: toCreate, skipDuplicates: true });
-    }
-
-    return { marked: toCreate.length };
   }
 
   // ──────────────────────────────────────────────────────────────────────────────
