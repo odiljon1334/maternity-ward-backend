@@ -25,7 +25,16 @@ export class AuthService {
     const user = await this.prisma.user.findUnique({
       where: { username: dto.username },
       include: {
-        hospital: { select: { id: true, name: true, code: true, gpsLat: true, gpsLng: true, gpsRadius: true } },
+        hospital: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+            gpsLat: true,
+            gpsLng: true,
+            gpsRadius: true,
+          },
+        },
         employee: {
           include: { department: true, position: true },
         },
@@ -69,7 +78,7 @@ export class AuthService {
         details: { username: user.username, reason: 'wrong_password' },
         ip,
       });
-      throw new UnauthorizedException('Parol noto\'g\'ri');
+      throw new UnauthorizedException("Parol noto'g'ri");
     }
 
     const payload = {
@@ -109,8 +118,11 @@ export class AuthService {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new UnauthorizedException();
 
-    const isMatch = await bcrypt.compare(dto.currentPassword, user.passwordHash);
-    if (!isMatch) throw new BadRequestException('Joriy parol noto\'g\'ri');
+    const isMatch = await bcrypt.compare(
+      dto.currentPassword,
+      user.passwordHash,
+    );
+    if (!isMatch) throw new BadRequestException("Joriy parol noto'g'ri");
 
     const newHash = await bcrypt.hash(dto.newPassword, 12);
     await this.prisma.user.update({
@@ -127,11 +139,13 @@ export class AuthService {
       ip,
     });
 
-    return { message: 'Parol muvaffaqiyatli o\'zgartirildi' };
+    return { message: "Parol muvaffaqiyatli o'zgartirildi" };
   }
 
   async register(dto: RegisterDto, createdByUserId?: string) {
-    const exists = await this.prisma.user.findUnique({ where: { username: dto.username } });
+    const exists = await this.prisma.user.findUnique({
+      where: { username: dto.username },
+    });
     if (exists) throw new ConflictException('Bu username band');
 
     const passwordHash = await bcrypt.hash(dto.password, 12);
@@ -139,7 +153,13 @@ export class AuthService {
 
     const user = await this.prisma.user.create({
       data: { username: dto.username, passwordHash, role },
-      select: { id: true, username: true, role: true, status: true, createdAt: true },
+      select: {
+        id: true,
+        username: true,
+        role: true,
+        status: true,
+        createdAt: true,
+      },
     });
 
     this.auditLog.log({

@@ -10,13 +10,19 @@ export class DashboardService {
   // ─── Overview ─────────────────────────────────────────────────────────────
   async getOverview(params?: { date?: string; hospitalId?: string }) {
     const today = params?.date
-      ? (() => { const d = new Date(params.date); d.setHours(0, 0, 0, 0); return d; })()
+      ? (() => {
+          const d = new Date(params.date);
+          d.setHours(0, 0, 0, 0);
+          return d;
+        })()
       : DateUtil.startOfDay(new Date());
 
     const now = new Date();
     const month = now.getMonth() + 1;
     const year = now.getFullYear();
-    const hospitalFilter = params?.hospitalId ? { hospitalId: params.hospitalId } : {};
+    const hospitalFilter = params?.hospitalId
+      ? { hospitalId: params.hospitalId }
+      : {};
     const empFilter = { firedAt: null, ...hospitalFilter };
 
     const [
@@ -75,7 +81,8 @@ export class DashboardService {
 
     // Kelmagan = bugun rejada bor - kelgan
     // Agar jadval yo'q bo'lsa, jami xodimlar - kelgan
-    const expectedToday = scheduledTodayCount > 0 ? scheduledTodayCount : totalEmployees;
+    const expectedToday =
+      scheduledTodayCount > 0 ? scheduledTodayCount : totalEmployees;
     const todayAbsentCount = Math.max(0, expectedToday - todayPresentCount);
     const total = todayPresentCount + todayAbsentCount;
 
@@ -113,7 +120,8 @@ export class DashboardService {
       todayAbsent: todayAbsentCount,
       todayLate: todayLateCount,
       todayLunchLate: todayLunchLateCount,
-      attendanceRate: total > 0 ? Math.round((todayPresentCount / total) * 100) : 0,
+      attendanceRate:
+        total > 0 ? Math.round((todayPresentCount / total) * 100) : 0,
       monthlyPayrollTotal: Number(monthlyPayroll._sum.netSalary || 0),
       todayAttendances: [
         ...todayAttendances.map((a) => ({
@@ -153,8 +161,10 @@ export class DashboardService {
     const byDate: Record<string, any> = {};
     for (const r of records) {
       const dateStr = r.workDate.toISOString().slice(0, 10);
-      if (!byDate[dateStr]) byDate[dateStr] = { date: dateStr, present: 0, absent: 0, late: 0 };
-      if (['PRESENT', 'EARLY_LEAVE'].includes(r.status)) byDate[dateStr].present += r._count.status;
+      if (!byDate[dateStr])
+        byDate[dateStr] = { date: dateStr, present: 0, absent: 0, late: 0 };
+      if (['PRESENT', 'EARLY_LEAVE'].includes(r.status))
+        byDate[dateStr].present += r._count.status;
       if (r.status === 'ABSENT') byDate[dateStr].absent += r._count.status;
       if (['LATE', 'LATE_EARLY'].includes(r.status)) {
         byDate[dateStr].late += r._count.status;
@@ -227,12 +237,19 @@ export class DashboardService {
       const allRecords = d.employees.flatMap((e) => e.attendances);
       const present = allRecords.filter((r) => r.status !== 'ABSENT').length;
       const absent = allRecords.filter((r) => r.status === 'ABSENT').length;
-      const late = allRecords.filter((r) => ['LATE', 'LATE_EARLY'].includes(r.status)).length;
+      const late = allRecords.filter((r) =>
+        ['LATE', 'LATE_EARLY'].includes(r.status),
+      ).length;
       return {
         department: { id: d.id, name: d.name },
         employeeCount: d.employees.length,
-        present, absent, late,
-        attendanceRate: present + absent > 0 ? Math.round((present / (present + absent)) * 100) : 0,
+        present,
+        absent,
+        late,
+        attendanceRate:
+          present + absent > 0
+            ? Math.round((present / (present + absent)) * 100)
+            : 0,
       };
     });
   }
@@ -247,7 +264,7 @@ export class DashboardService {
       const m = d.month() + 1;
       const y = d.year();
       const start = DateUtil.startOfMonth(y, m);
-      const end   = DateUtil.endOfMonth(y, m);
+      const end = DateUtil.endOfMonth(y, m);
 
       const hospitalFilter = hospitalId ? { employee: { hospitalId } } : {};
 
@@ -260,10 +277,15 @@ export class DashboardService {
       const byStatus: Record<string, number> = {};
       for (const r of records) byStatus[r.status] = r._count.status;
 
-      const present    = (byStatus['PRESENT'] ?? 0) + (byStatus['LATE'] ?? 0) + (byStatus['LATE_EARLY'] ?? 0) + (byStatus['EARLY_LEAVE'] ?? 0);
-      const absent     = byStatus['ABSENT'] ?? 0;
-      const late       = (byStatus['LATE'] ?? 0) + (byStatus['LATE_EARLY'] ?? 0);
-      const earlyLeave = (byStatus['EARLY_LEAVE'] ?? 0) + (byStatus['LATE_EARLY'] ?? 0);
+      const present =
+        (byStatus['PRESENT'] ?? 0) +
+        (byStatus['LATE'] ?? 0) +
+        (byStatus['LATE_EARLY'] ?? 0) +
+        (byStatus['EARLY_LEAVE'] ?? 0);
+      const absent = byStatus['ABSENT'] ?? 0;
+      const late = (byStatus['LATE'] ?? 0) + (byStatus['LATE_EARLY'] ?? 0);
+      const earlyLeave =
+        (byStatus['EARLY_LEAVE'] ?? 0) + (byStatus['LATE_EARLY'] ?? 0);
 
       result.push({
         month: `${y}-${String(m).padStart(2, '0')}`,
@@ -273,16 +295,24 @@ export class DashboardService {
         late,
         earlyLeave,
         total: present + absent,
-        attendanceRate: present + absent > 0 ? Math.round((present / (present + absent)) * 100) : 0,
+        attendanceRate:
+          present + absent > 0
+            ? Math.round((present / (present + absent)) * 100)
+            : 0,
       });
     }
     return result;
   }
 
   // ─── Analytics: Employee performance ranking ───────────────────────────────
-  async getEmployeePerformanceRanking(month: number, year: number, hospitalId?: string, limit = 10) {
+  async getEmployeePerformanceRanking(
+    month: number,
+    year: number,
+    hospitalId?: string,
+    limit = 10,
+  ) {
     const start = DateUtil.startOfMonth(year, month);
-    const end   = DateUtil.endOfMonth(year, month);
+    const end = DateUtil.endOfMonth(year, month);
     const hospitalFilter = hospitalId ? { hospitalId } : {};
 
     const records = await this.prisma.attendanceRecord.groupBy({
@@ -292,7 +322,7 @@ export class DashboardService {
         employee: { firedAt: null, ...hospitalFilter },
       },
       _count: { employeeId: true },
-      _sum:   { lateMinutes: true },
+      _sum: { lateMinutes: true },
     });
 
     // Per employee, count by status
@@ -304,19 +334,41 @@ export class DashboardService {
       select: { employeeId: true, status: true, lateMinutes: true },
     });
 
-    const empMap: Record<string, { present: number; absent: number; late: number; earlyLeave: number; totalLateMin: number }> = {};
+    const empMap: Record<
+      string,
+      {
+        present: number;
+        absent: number;
+        late: number;
+        earlyLeave: number;
+        totalLateMin: number;
+      }
+    > = {};
     for (const r of allRecords) {
-      if (!empMap[r.employeeId]) empMap[r.employeeId] = { present: 0, absent: 0, late: 0, earlyLeave: 0, totalLateMin: 0 };
+      if (!empMap[r.employeeId])
+        empMap[r.employeeId] = {
+          present: 0,
+          absent: 0,
+          late: 0,
+          earlyLeave: 0,
+          totalLateMin: 0,
+        };
       const e = empMap[r.employeeId];
       if (['PRESENT'].includes(r.status)) e.present++;
       else if (r.status === 'ABSENT') e.absent++;
-      else if (['LATE', 'LATE_EARLY'].includes(r.status)) { e.late++; e.present++; }
-      else if (r.status === 'EARLY_LEAVE') { e.earlyLeave++; e.present++; }
+      else if (['LATE', 'LATE_EARLY'].includes(r.status)) {
+        e.late++;
+        e.present++;
+      } else if (r.status === 'EARLY_LEAVE') {
+        e.earlyLeave++;
+        e.present++;
+      }
       e.totalLateMin += r.lateMinutes ?? 0;
     }
 
     const empIds = Object.keys(empMap);
-    if (empIds.length === 0) return { topPerformers: [], mostAbsent: [], mostLate: [] };
+    if (empIds.length === 0)
+      return { topPerformers: [], mostAbsent: [], mostLate: [] };
 
     const employees = await this.prisma.employee.findMany({
       where: { id: { in: empIds } },
@@ -344,9 +396,15 @@ export class DashboardService {
     });
 
     return {
-      topPerformers: [...ranked].sort((a, b) => b.attendanceRate - a.attendanceRate).slice(0, limit),
-      mostAbsent:    [...ranked].sort((a, b) => b.absent - a.absent).slice(0, limit),
-      mostLate:      [...ranked].sort((a, b) => b.totalLateMin - a.totalLateMin).slice(0, limit),
+      topPerformers: [...ranked]
+        .sort((a, b) => b.attendanceRate - a.attendanceRate)
+        .slice(0, limit),
+      mostAbsent: [...ranked]
+        .sort((a, b) => b.absent - a.absent)
+        .slice(0, limit),
+      mostLate: [...ranked]
+        .sort((a, b) => b.totalLateMin - a.totalLateMin)
+        .slice(0, limit),
     };
   }
 
@@ -378,20 +436,19 @@ export class DashboardService {
       });
 
       const totalDeductions =
-        Number(agg._sum.absenceDeduction   ?? 0) +
-        Number(agg._sum.lateDeduction      ?? 0) +
+        Number(agg._sum.absenceDeduction ?? 0) +
+        Number(agg._sum.lateDeduction ?? 0) +
         Number(agg._sum.earlyLeaveDeduction ?? 0) +
-        Number(agg._sum.manualDeduction    ?? 0);
+        Number(agg._sum.manualDeduction ?? 0);
 
       const totalBonuses =
-        Number(agg._sum.overtimeBonus ?? 0) +
-        Number(agg._sum.manualBonus   ?? 0);
+        Number(agg._sum.overtimeBonus ?? 0) + Number(agg._sum.manualBonus ?? 0);
 
       result.push({
         month: `${y}-${String(m).padStart(2, '0')}`,
         label: d.format('MMM YYYY'),
-        baseSalary:    Number(agg._sum.baseSalary ?? 0),
-        netSalary:     Number(agg._sum.netSalary  ?? 0),
+        baseSalary: Number(agg._sum.baseSalary ?? 0),
+        netSalary: Number(agg._sum.netSalary ?? 0),
         totalDeductions,
         totalBonuses,
         employeeCount: agg._count._all,
@@ -403,7 +460,7 @@ export class DashboardService {
   // ─── Analytics: Leave statistics ───────────────────────────────────────────
   async getLeaveStats(year: number, hospitalId?: string) {
     const start = new Date(`${year}-01-01T00:00:00`);
-    const end   = new Date(`${year}-12-31T23:59:59`);
+    const end = new Date(`${year}-12-31T23:59:59`);
     const hospitalFilter = hospitalId ? { employee: { hospitalId } } : {};
 
     // By type
@@ -416,15 +473,28 @@ export class DashboardService {
     // By month (approved only)
     const byMonth = await this.prisma.leaveRequest.groupBy({
       by: ['startDate'],
-      where: { startDate: { gte: start, lte: end }, status: 'APPROVED', ...hospitalFilter },
+      where: {
+        startDate: { gte: start, lte: end },
+        status: 'APPROVED',
+        ...hospitalFilter,
+      },
       _count: { id: true },
     });
 
     // Aggregate by type
-    const typeMap: Record<string, { pending: number; approved: number; rejected: number; cancelled: number }> = {};
+    const typeMap: Record<
+      string,
+      { pending: number; approved: number; rejected: number; cancelled: number }
+    > = {};
     for (const r of byType) {
-      if (!typeMap[r.type]) typeMap[r.type] = { pending: 0, approved: 0, rejected: 0, cancelled: 0 };
-      const st = r.status.toLowerCase() as keyof typeof typeMap[string];
+      if (!typeMap[r.type])
+        typeMap[r.type] = {
+          pending: 0,
+          approved: 0,
+          rejected: 0,
+          cancelled: 0,
+        };
+      const st = r.status.toLowerCase() as keyof (typeof typeMap)[string];
       if (st in typeMap[r.type]) typeMap[r.type][st] = r._count.id;
     }
 
@@ -438,11 +508,20 @@ export class DashboardService {
     const monthlyLeaves = Array.from({ length: 12 }, (_, i) => {
       const m = i + 1;
       const key = `${year}-${String(m).padStart(2, '0')}`;
-      return { month: key, label: dayjs(`${year}-${String(m).padStart(2, '0')}-01`).format('MMM'), count: monthMap[key] ?? 0 };
+      return {
+        month: key,
+        label: dayjs(`${year}-${String(m).padStart(2, '0')}-01`).format('MMM'),
+        count: monthMap[key] ?? 0,
+      };
     });
 
     return {
-      byType: Object.entries(typeMap).map(([type, counts]) => ({ type, ...counts, total: counts.pending + counts.approved + counts.rejected + counts.cancelled })),
+      byType: Object.entries(typeMap).map(([type, counts]) => ({
+        type,
+        ...counts,
+        total:
+          counts.pending + counts.approved + counts.rejected + counts.cancelled,
+      })),
       monthlyApproved: monthlyLeaves,
     };
   }

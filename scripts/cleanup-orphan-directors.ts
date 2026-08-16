@@ -26,14 +26,21 @@ async function main() {
 
   console.log(`⚠️  ${orphans.length} ta yetim direktor topildi:\n`);
   for (const emp of orphans) {
-    console.log(`  - ${emp.fullName} | tel: ${emp.phone ?? '—'} | kasalxona: ${emp.hospital?.name ?? '—'}`);
+    console.log(
+      `  - ${emp.fullName} | tel: ${emp.phone ?? '—'} | kasalxona: ${emp.hospital?.name ?? '—'}`,
+    );
   }
 
-  const ids = orphans.map(e => e.id);
-  const result = await prisma.employee.deleteMany({ where: { id: { in: ids } } });
+  const ids = orphans.map((e) => e.id);
+  const result = await prisma.employee.deleteMany({
+    where: { id: { in: ids } },
+  });
   console.log(`\n✅ ${result.count} ta yetim yozuv o'chirildi.`);
 }
 
 main()
-  .catch(e => { console.error(e); process.exit(1); })
+  .catch((e) => {
+    console.error(e);
+    process.exit(1);
+  })
   .finally(() => prisma.$disconnect());

@@ -1,4 +1,8 @@
-import { Injectable, ConflictException, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateShiftDto } from './dto/create-shift.dto';
 import { calcAutoLunch } from '../common/utils/shift.util';
@@ -30,9 +34,10 @@ export class ShiftsService {
 
     // Tushlik vaqti berilmagan bo'lsa — avtomatik hisoblash
     const isOvernight = dto.isOvernight ?? false;
-    const autoLunch = (!dto.lunchStart && !dto.lunchEnd)
-      ? calcAutoLunch(dto.startTime, dto.endTime, isOvernight)
-      : {};
+    const autoLunch =
+      !dto.lunchStart && !dto.lunchEnd
+        ? calcAutoLunch(dto.startTime, dto.endTime, isOvernight)
+        : {};
 
     return this.prisma.shiftTemplate.create({
       data: { ...dto, hospitalId, ...autoLunch },
@@ -54,20 +59,20 @@ export class ShiftsService {
     const defaults = [
       {
         name: 'Kunduzgi smen',
-        type: 'DAYTIME'   as const,
+        type: 'DAYTIME' as const,
         startTime: '08:00',
-        endTime:   '20:00',
+        endTime: '20:00',
         isOvernight: false,
-        durationH:   12,
+        durationH: 12,
         graceMinutes: 15,
       },
       {
         name: 'Kechki smen',
         type: 'NIGHTTIME' as const,
         startTime: '20:00',
-        endTime:   '08:00',
+        endTime: '08:00',
         isOvernight: true,
-        durationH:   12,
+        durationH: 12,
         graceMinutes: 15,
       },
     ];

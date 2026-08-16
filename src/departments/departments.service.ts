@@ -1,4 +1,8 @@
-import { Injectable, ConflictException, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -25,19 +29,26 @@ export class DepartmentsService {
         },
       },
     });
-    if (!dept) throw new NotFoundException('Bo\'lim topilmadi');
+    if (!dept) throw new NotFoundException("Bo'lim topilmadi");
     return dept;
   }
 
-  async create(data: { name: string; code: string; description?: string }, hospitalId: string) {
+  async create(
+    data: { name: string; code: string; description?: string },
+    hospitalId: string,
+  ) {
     const exists = await this.prisma.department.findFirst({
       where: { hospitalId, code: data.code },
     });
-    if (exists) throw new ConflictException('Bu kod bilan bo\'lim mavjud');
+    if (exists) throw new ConflictException("Bu kod bilan bo'lim mavjud");
     return this.prisma.department.create({ data: { ...data, hospitalId } });
   }
 
-  async update(id: string, data: { name?: string; description?: string }, hospitalId: string | null) {
+  async update(
+    id: string,
+    data: { name?: string; description?: string },
+    hospitalId: string | null,
+  ) {
     await this.findOne(id, hospitalId);
     return this.prisma.department.update({ where: { id }, data });
   }
@@ -45,7 +56,7 @@ export class DepartmentsService {
   async remove(id: string, hospitalId: string | null) {
     const dept = await this.findOne(id, hospitalId);
     if (dept.employees.length > 0) {
-      throw new ConflictException('Bo\'limda hodimlar bor, o\'chirib bo\'lmaydi');
+      throw new ConflictException("Bo'limda hodimlar bor, o'chirib bo'lmaydi");
     }
     return this.prisma.department.delete({ where: { id } });
   }

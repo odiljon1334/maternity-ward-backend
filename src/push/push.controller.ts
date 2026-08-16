@@ -1,6 +1,12 @@
 import {
-  Controller, Post, Delete, Get, Body, Query,
-  UseGuards, HttpCode, HttpStatus,
+  Controller,
+  Post,
+  Delete,
+  Get,
+  Body,
+  UseGuards,
+  HttpCode,
+  HttpStatus,
 } from '@nestjs/common';
 import { PushService } from './push.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -19,7 +25,8 @@ export class PushController {
   @HttpCode(HttpStatus.OK)
   subscribe(
     @CurrentUser('sub') userId: string,
-    @Body() body: {
+    @Body()
+    body: {
       endpoint: string;
       keys: { p256dh: string; auth: string };
       userAgent?: string;
@@ -54,9 +61,9 @@ export class PushController {
   ) {
     return this.svc.sendToUser(userId, {
       title: body.title ?? 'Test xabarnoma 🔔',
-      body:  body.body  ?? 'Push notification ishlayapti!',
-      url:   '/dashboard',
-      tag:   'test',
+      body: body.body ?? 'Push notification ishlayapti!',
+      url: '/dashboard',
+      tag: 'test',
     });
   }
 }

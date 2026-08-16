@@ -2,10 +2,10 @@ import { Module, Global } from '@nestjs/common';
 import { PushService } from './push.service';
 import { PushController } from './push.controller';
 
-@Global()  // Global: boshqa modullar import qilmasdan ishlatadi
+@Global() // Global: boshqa modullar import qilmasdan ishlatadi
 @Module({
   controllers: [PushController],
-  providers:   [PushService],
-  exports:     [PushService],
+  providers: [PushService],
+  exports: [PushService],
 })
 export class PushModule {}

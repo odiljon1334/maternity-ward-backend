@@ -29,10 +29,16 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
     // 401/403/400 uchun faqat qisqa log, stack trace yo'q
     if (status >= 500) {
-      this.logger.error(`${request.method} ${request.url} - ${status}`, exception instanceof Error ? exception.stack : '');
+      this.logger.error(
+        `${request.method} ${request.url} - ${status}`,
+        exception instanceof Error ? exception.stack : '',
+      );
     } else {
-      const msg = typeof message === 'object' ? (message as any).message : message;
-      this.logger.warn(`${request.method} ${request.url} - ${status} ${Array.isArray(msg) ? msg[0] : msg}`);
+      const msg =
+        typeof message === 'object' ? (message as any).message : message;
+      this.logger.warn(
+        `${request.method} ${request.url} - ${status} ${Array.isArray(msg) ? msg[0] : msg}`,
+      );
     }
 
     response.status(status).json({

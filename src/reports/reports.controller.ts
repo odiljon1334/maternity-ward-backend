@@ -9,7 +9,13 @@ import { UserRole } from '@prisma/client';
 
 @Controller('reports')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR, UserRole.DEPARTMENT_HEAD, UserRole.ASSISTANT_ADMIN)
+@Roles(
+  UserRole.SUPER_ADMIN,
+  UserRole.ADMIN,
+  UserRole.DIRECTOR,
+  UserRole.DEPARTMENT_HEAD,
+  UserRole.ASSISTANT_ADMIN,
+)
 export class ReportsController {
   constructor(private readonly reportsService: ReportsService) {}
 
@@ -33,7 +39,8 @@ export class ReportsController {
 
     const filename = `davomat-${year}-${String(month).padStart(2, '0')}.xlsx`;
     res.set({
-      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Type':
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'Content-Disposition': `attachment; filename="${filename}"`,
     });
     res.send(buffer);
@@ -59,7 +66,8 @@ export class ReportsController {
 
     const filename = `maosh-${year}-${String(month).padStart(2, '0')}.xlsx`;
     res.set({
-      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Type':
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'Content-Disposition': `attachment; filename="${filename}"`,
     });
     res.send(buffer);
@@ -83,7 +91,8 @@ export class ReportsController {
 
     const filename = `haftalik-${weekStart}.xlsx`;
     res.set({
-      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Type':
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'Content-Disposition': `attachment; filename="${filename}"`,
     });
     res.send(buffer);

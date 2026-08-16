@@ -4,8 +4,8 @@
  * - Sof ish vaqtini (netWorkMin) hisoblash
  */
 
-const LUNCH_DURATION_MIN  = 60;  // 1 soat tushlik
-const MIN_WORK_FOR_LUNCH  = 240; // 4 soatdan ko'p bo'lsa tushlik qo'shiladi
+const LUNCH_DURATION_MIN = 60; // 1 soat tushlik
+const MIN_WORK_FOR_LUNCH = 240; // 4 soatdan ko'p bo'lsa tushlik qo'shiladi
 
 /** HH:MM satrini daqiqaga o'girish */
 function toMin(time: string): number {
@@ -40,7 +40,7 @@ export function calcAutoLunch(
   isOvernight = false,
 ): { lunchStart: string | null; lunchEnd: string | null } {
   const startMin = toMin(startTime);
-  const endMin   = toMin(endTime);
+  const endMin = toMin(endTime);
 
   let durationMin = endMin - startMin;
   if (isOvernight || durationMin <= 0) durationMin += 24 * 60;
@@ -50,11 +50,11 @@ export function calcAutoLunch(
   }
 
   const lunchStartMin = startMin + MIN_WORK_FOR_LUNCH;
-  const lunchEndMin   = lunchStartMin + LUNCH_DURATION_MIN;
+  const lunchEndMin = lunchStartMin + LUNCH_DURATION_MIN;
 
   return {
     lunchStart: toTime(lunchStartMin),
-    lunchEnd:   toTime(lunchEndMin),
+    lunchEnd: toTime(lunchEndMin),
   };
 }
 
@@ -69,18 +69,23 @@ export function calcAutoLunch(
  * @param shiftLunchEnd   - Smenaning rejalashtirilgan tushlik oxiri (ixtiyoriy)
  */
 export function calcNetWorkMin(
-  checkIn:         Date,
-  checkOut:        Date,
-  lunchOut?:       Date | null,
-  lunchIn?:        Date | null,
+  checkIn: Date,
+  checkOut: Date,
+  lunchOut?: Date | null,
+  lunchIn?: Date | null,
   shiftLunchStart?: string | null,
-  shiftLunchEnd?:   string | null,
+  shiftLunchEnd?: string | null,
 ): number {
-  const grossMin = Math.max(0, Math.round((checkOut.getTime() - checkIn.getTime()) / 60_000));
+  const grossMin = Math.max(
+    0,
+    Math.round((checkOut.getTime() - checkIn.getTime()) / 60_000),
+  );
 
   // Haqiqiy tushlik vaqti (skanerlangan bo'lsa)
   if (lunchOut && lunchIn && lunchIn > lunchOut) {
-    const actualLunchMin = Math.round((lunchIn.getTime() - lunchOut.getTime()) / 60_000);
+    const actualLunchMin = Math.round(
+      (lunchIn.getTime() - lunchOut.getTime()) / 60_000,
+    );
     return Math.max(0, grossMin - actualLunchMin);
   }
 

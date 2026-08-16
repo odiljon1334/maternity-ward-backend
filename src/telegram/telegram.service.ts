@@ -19,7 +19,11 @@ const YANDEX_KEY = process.env.YANDEX_MAPS_KEY || '';
  * @param lat, lng — koordinatalar
  * @param markerColor — 'rd' (red), 'gn' (green), 'bl' (blue)
  */
-function yandexStaticMapUrl(lat: number, lng: number, markerColor = 'rd'): string {
+function yandexStaticMapUrl(
+  lat: number,
+  lng: number,
+  markerColor = 'rd',
+): string {
   const key = YANDEX_KEY ? `&apikey=${YANDEX_KEY}` : '';
   return (
     `https://static-maps.yandex.ru/1.x/?lang=uz_UZ` +
@@ -36,26 +40,37 @@ function yandexMapLink(lat: number, lng: number): string {
 /**
  * Haversine formulasi — ikkita GPS nuqta orasidagi masofani hisoblab beradi (metr)
  */
-function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
+function haversineMeters(
+  lat1: number,
+  lng1: number,
+  lat2: number,
+  lng2: number,
+): number {
   const R = 6_371_000; // Yer radiusi metrda
   const φ1 = (lat1 * Math.PI) / 180;
   const φ2 = (lat2 * Math.PI) / 180;
   const Δφ = ((lat2 - lat1) * Math.PI) / 180;
   const Δλ = ((lng2 - lng1) * Math.PI) / 180;
-  const a = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
+  const a =
+    Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
 /** Yandex Static Maps URL dan rasm buffer ni yuklab olish */
 function fetchImageBuffer(url: string): Promise<Buffer | null> {
   return new Promise((resolve) => {
-    https.get(url, (res) => {
-      if (res.statusCode !== 200) { resolve(null); return; }
-      const chunks: Buffer[] = [];
-      res.on('data', (c: Buffer) => chunks.push(c));
-      res.on('end', () => resolve(Buffer.concat(chunks)));
-      res.on('error', () => resolve(null));
-    }).on('error', () => resolve(null));
+    https
+      .get(url, (res) => {
+        if (res.statusCode !== 200) {
+          resolve(null);
+          return;
+        }
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('end', () => resolve(Buffer.concat(chunks)));
+        res.on('error', () => resolve(null));
+      })
+      .on('error', () => resolve(null));
   });
 }
 
@@ -64,13 +79,18 @@ const MAX_LIST = 50;
 
 function nowStr() {
   return new Date().toLocaleTimeString('uz-UZ', {
-    hour: '2-digit', minute: '2-digit', timeZone: TZ,
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: TZ,
   });
 }
 
 function todayDateStr() {
   return new Date().toLocaleDateString('uz-UZ', {
-    day: '2-digit', month: '2-digit', year: 'numeric', timeZone: TZ,
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    timeZone: TZ,
   });
 }
 
@@ -90,12 +110,8 @@ function mainKeyboard(linked: boolean) {
       Markup.button.callback('📈 Haftalik', 'cmd_week'),
       Markup.button.callback('💰 Oylik', 'cmd_month'),
     ],
-    [
-      Markup.button.callback('💳 Obuna', 'cmd_subscription'),
-    ],
-    [
-      Markup.button.callback('⚙️ Sozlamalar', 'cmd_settings'),
-    ],
+    [Markup.button.callback('💳 Obuna', 'cmd_subscription')],
+    [Markup.button.callback('⚙️ Sozlamalar', 'cmd_settings')],
   ]);
 }
 
@@ -104,8 +120,8 @@ function todayDetailKeyboard(hospitalId: string | null) {
   const hid = hospitalId || 'null';
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback('📋 Kelganlar ro\'yhati', `cmd_came:${hid}`),
-      Markup.button.callback('❌ Kelmaganlar ro\'yhati', `cmd_notcame:${hid}`),
+      Markup.button.callback("📋 Kelganlar ro'yhati", `cmd_came:${hid}`),
+      Markup.button.callback("❌ Kelmaganlar ro'yhati", `cmd_notcame:${hid}`),
     ],
   ]);
 }
@@ -132,15 +148,23 @@ export class TelegramService implements OnModuleInit {
 
     this.bot = new Telegraf(token);
     this.setupCommands();
-    await this.bot.telegram.setMyCommands([
-      { command: 'start',       description: '🏠 Botni ishga tushirish / Asosiy menyu' },
-      { command: 'bugun',       description: '📊 Bugungi davomat xulosasi' },
-      { command: 'kelmaganlar', description: '⏳ Hali kelmagan hodimlar' },
-      { command: 'haftalik',    description: '📈 Haftalik kechikishlar hisoboti' },
-      { command: 'oylik',       description: '💰 Oylik maosh hisoboti' },
-      { command: 'stop',        description: '🔕 Bildirishnomalarni o\'chirish' },
-    ]).catch(() => {});
-    
+    await this.bot.telegram
+      .setMyCommands([
+        {
+          command: 'start',
+          description: '🏠 Botni ishga tushirish / Asosiy menyu',
+        },
+        { command: 'bugun', description: '📊 Bugungi davomat xulosasi' },
+        { command: 'kelmaganlar', description: '⏳ Hali kelmagan hodimlar' },
+        {
+          command: 'haftalik',
+          description: '📈 Haftalik kechikishlar hisoboti',
+        },
+        { command: 'oylik', description: '💰 Oylik maosh hisoboti' },
+        { command: 'stop', description: "🔕 Bildirishnomalarni o'chirish" },
+      ])
+      .catch(() => {});
+
     this.logger.log('Telegram bot started (webhook mode)');
   }
 
@@ -164,7 +188,7 @@ export class TelegramService implements OnModuleInit {
       if (activeExisting) {
         await this.prisma.telegramSubscription.update({
           where: { id: activeExisting.id },
-          data: { username },   // faqat username, isActive TEGINMAYMİZ
+          data: { username }, // faqat username, isActive TEGINMAYMİZ
         });
       }
 
@@ -175,9 +199,9 @@ export class TelegramService implements OnModuleInit {
 
       await ctx.reply(
         `👋 Assalomu alaykum, <b>${firstName}</b>!\n\n` +
-        `MaternityCare — shifoxona davomat monitoring tizimi.` +
-        hospitalLine +
-        `\n\nQuyidagi tugmalardan foydalaning:`,
+          `MaternityCare — shifoxona davomat monitoring tizimi.` +
+          hospitalLine +
+          `\n\nQuyidagi tugmalardan foydalaning:`,
         { parse_mode: 'HTML', ...mainKeyboard(!!linked) },
       );
     });
@@ -188,14 +212,18 @@ export class TelegramService implements OnModuleInit {
         where: { chatId: String(ctx.chat.id) },
         data: { isActive: false },
       });
-      await ctx.reply('🔕 Bildirishnomalar o\'chirildi.\n/start buyrug\'i bilan qayta ulaning.');
+      await ctx.reply(
+        "🔕 Bildirishnomalar o'chirildi.\n/start buyrug'i bilan qayta ulaning.",
+      );
     });
 
     // ── Text commands ─────────────────────────────────────────────────────────
     // ── /today | /bugun ───────────────────────────────────────────────────────
     const handleToday = async (ctx: any) => {
       const sub = await this.getSubscriber(ctx);
-      const { text, keyboard } = await this.buildTodaySummary(sub?.hospitalId || null);
+      const { text, keyboard } = await this.buildTodaySummary(
+        sub?.hospitalId || null,
+      );
       await ctx.reply(text, { parse_mode: 'HTML', ...keyboard });
     };
     bot.command('today', handleToday);
@@ -204,7 +232,10 @@ export class TelegramService implements OnModuleInit {
     // ── /absent | /kechikganlar | /kelmaganlar ────────────────────────────────
     const handleAbsent = async (ctx: any) => {
       const sub = await this.getSubscriber(ctx);
-      await ctx.reply(await this.buildNotCheckedInList(sub?.hospitalId || null), { parse_mode: 'HTML' });
+      await ctx.reply(
+        await this.buildNotCheckedInList(sub?.hospitalId || null),
+        { parse_mode: 'HTML' },
+      );
     };
     bot.command('absent', handleAbsent);
     bot.command('kechikganlar', handleAbsent);
@@ -213,7 +244,9 @@ export class TelegramService implements OnModuleInit {
     // ── /week | /haftalik ─────────────────────────────────────────────────────
     const handleWeek = async (ctx: any) => {
       const sub = await this.getSubscriber(ctx);
-      await ctx.reply(await this.buildWeeklyReport(sub?.hospitalId || null), { parse_mode: 'HTML' });
+      await ctx.reply(await this.buildWeeklyReport(sub?.hospitalId || null), {
+        parse_mode: 'HTML',
+      });
     };
     bot.command('week', handleWeek);
     bot.command('haftalik', handleWeek);
@@ -223,7 +256,11 @@ export class TelegramService implements OnModuleInit {
       const sub = await this.getSubscriber(ctx);
       const now = new Date();
       await ctx.reply(
-        await this.buildMonthlyReport(now.getMonth() + 1, now.getFullYear(), sub?.hospitalId || null),
+        await this.buildMonthlyReport(
+          now.getMonth() + 1,
+          now.getFullYear(),
+          sub?.hospitalId || null,
+        ),
         { parse_mode: 'HTML' },
       );
     };
@@ -235,13 +272,13 @@ export class TelegramService implements OnModuleInit {
     const handleHelp = async (ctx: any) => {
       await ctx.reply(
         `📖 <b>Mavjud buyruqlar:</b>\n\n` +
-        `/bugun — Bugungi davomat xulosasi\n` +
-        `/kelmaganlar — Bugun hali kelmagan hodimlar\n` +
-        `/haftalik — Haftalik hisobot\n` +
-        `/oylik — Oylik maosh hisoboti\n` +
-        `/hisobot — Oylik hisobot\n` +
-        `/stop — Bildirishnomalarni o'chirish\n\n` +
-        `Yoki quyidagi tugmalardan foydalaning 👇`,
+          `/bugun — Bugungi davomat xulosasi\n` +
+          `/kelmaganlar — Bugun hali kelmagan hodimlar\n` +
+          `/haftalik — Haftalik hisobot\n` +
+          `/oylik — Oylik maosh hisoboti\n` +
+          `/hisobot — Oylik hisobot\n` +
+          `/stop — Bildirishnomalarni o'chirish\n\n` +
+          `Yoki quyidagi tugmalardan foydalaning 👇`,
         { parse_mode: 'HTML' },
       );
     };
@@ -253,7 +290,9 @@ export class TelegramService implements OnModuleInit {
       await ctx.answerCbQuery();
       const chatId = this.chatIdFromCtx(ctx);
       const sub = await this.getSubscriberByChatId(chatId);
-      const { text, keyboard } = await this.buildTodaySummary(sub?.hospitalId || null);
+      const { text, keyboard } = await this.buildTodaySummary(
+        sub?.hospitalId || null,
+      );
       await ctx.reply(text, { parse_mode: 'HTML', ...keyboard });
     });
 
@@ -261,14 +300,19 @@ export class TelegramService implements OnModuleInit {
       await ctx.answerCbQuery();
       const chatId = this.chatIdFromCtx(ctx);
       const sub = await this.getSubscriberByChatId(chatId);
-      await ctx.reply(await this.buildNotCheckedInList(sub?.hospitalId || null), { parse_mode: 'HTML' });
+      await ctx.reply(
+        await this.buildNotCheckedInList(sub?.hospitalId || null),
+        { parse_mode: 'HTML' },
+      );
     });
 
     bot.action('cmd_week', async (ctx) => {
       await ctx.answerCbQuery();
       const chatId = this.chatIdFromCtx(ctx);
       const sub = await this.getSubscriberByChatId(chatId);
-      await ctx.reply(await this.buildWeeklyReport(sub?.hospitalId || null), { parse_mode: 'HTML' });
+      await ctx.reply(await this.buildWeeklyReport(sub?.hospitalId || null), {
+        parse_mode: 'HTML',
+      });
     });
 
     bot.action('cmd_month', async (ctx) => {
@@ -277,7 +321,11 @@ export class TelegramService implements OnModuleInit {
       const sub = await this.getSubscriberByChatId(chatId);
       const now = new Date();
       await ctx.reply(
-        await this.buildMonthlyReport(now.getMonth() + 1, now.getFullYear(), sub?.hospitalId || null),
+        await this.buildMonthlyReport(
+          now.getMonth() + 1,
+          now.getFullYear(),
+          sub?.hospitalId || null,
+        ),
         { parse_mode: 'HTML' },
       );
     });
@@ -304,10 +352,10 @@ export class TelegramService implements OnModuleInit {
       });
 
       const MONTHLY_PER_EMP = 12_000;
-      const ANNUAL_PER_EMP  = 100_000;
-      const monthlyTotal    = empCount * MONTHLY_PER_EMP;
-      const annualTotal     = empCount * ANNUAL_PER_EMP;
-      const saving          = monthlyTotal * 12 - annualTotal;
+      const ANNUAL_PER_EMP = 100_000;
+      const monthlyTotal = empCount * MONTHLY_PER_EMP;
+      const annualTotal = empCount * ANNUAL_PER_EMP;
+      const saving = monthlyTotal * 12 - annualTotal;
 
       const subLine = activeSub
         ? `✅ <b>Faol obuna:</b> ${activeSub.type === 'MONTHLY' ? 'Oylik' : 'Yillik'}\n` +
@@ -316,21 +364,27 @@ export class TelegramService implements OnModuleInit {
 
       await ctx.reply(
         `💳 <b>Obuna boshqaruvi</b>\n\n` +
-        `🏥 ${linked.name}\n` +
-        `👥 Faol xodimlar: <b>${empCount} nafar</b>\n\n` +
-        `${subLine}\n\n` +
-        `📌 <b>Tariflar:</b>\n` +
-        `📅 Oylik: ${empCount} × 12,000 = <b>${monthlyTotal.toLocaleString()} so'm</b>\n` +
-        `📆 Yillik: ${empCount} × 100,000 = <b>${annualTotal.toLocaleString()} so'm</b>\n` +
-        `   <i>(${saving.toLocaleString()} so'm tejaysiz)</i>`,
+          `🏥 ${linked.name}\n` +
+          `👥 Faol xodimlar: <b>${empCount} nafar</b>\n\n` +
+          `${subLine}\n\n` +
+          `📌 <b>Tariflar:</b>\n` +
+          `📅 Oylik: ${empCount} × 12,000 = <b>${monthlyTotal.toLocaleString()} so'm</b>\n` +
+          `📆 Yillik: ${empCount} × 100,000 = <b>${annualTotal.toLocaleString()} so'm</b>\n` +
+          `   <i>(${saving.toLocaleString()} so'm tejaysiz)</i>`,
         {
           parse_mode: 'HTML',
           ...Markup.inlineKeyboard([
             [
-              Markup.button.callback(`📅 Oylik — ${monthlyTotal.toLocaleString()} so'm`, `pay_monthly:${linked.id}`),
+              Markup.button.callback(
+                `📅 Oylik — ${monthlyTotal.toLocaleString()} so'm`,
+                `pay_monthly:${linked.id}`,
+              ),
             ],
             [
-              Markup.button.callback(`📆 Yillik — ${annualTotal.toLocaleString()} so'm`, `pay_annual:${linked.id}`),
+              Markup.button.callback(
+                `📆 Yillik — ${annualTotal.toLocaleString()} so'm`,
+                `pay_annual:${linked.id}`,
+              ),
             ],
             [Markup.button.callback('⬅️ Orqaga', 'cmd_back')],
           ]),
@@ -339,27 +393,36 @@ export class TelegramService implements OnModuleInit {
     });
 
     // ── TO'LOV: invoice yuborish ─────────────────────────────────────────────
-    const sendSubscriptionInvoice = async (ctx: any, hospitalId: string, type: 'MONTHLY' | 'ANNUAL') => {
+    const sendSubscriptionInvoice = async (
+      ctx: any,
+      hospitalId: string,
+      type: 'MONTHLY' | 'ANNUAL',
+    ) => {
       const paymentToken = this.config.get<string>('TELEGRAM_PAYMENT_TOKEN');
-      if (!paymentToken) return ctx.reply('⚠️ To\'lov tizimi sozlanmagan. Admin bilan bog\'laning.');
+      if (!paymentToken)
+        return ctx.reply(
+          "⚠️ To'lov tizimi sozlanmagan. Admin bilan bog'laning.",
+        );
 
-      const hospital = await this.prisma.hospital.findUnique({ where: { id: hospitalId } });
+      const hospital = await this.prisma.hospital.findUnique({
+        where: { id: hospitalId },
+      });
       if (!hospital) return;
 
       const empCount = await this.prisma.employee.count({
         where: { hospitalId, firedAt: null },
       });
 
-      const isMonthly   = type === 'MONTHLY';
+      const isMonthly = type === 'MONTHLY';
       const pricePerEmp = isMonthly ? 12_000 : 100_000;
-      const totalSom    = empCount * pricePerEmp;
-      const title       = isMonthly ? '📅 Oylik obuna' : '📆 Yillik obuna';
-      const period      = isMonthly ? '1 oy' : '1 yil';
+      const totalSom = empCount * pricePerEmp;
+      const title = isMonthly ? '📅 Oylik obuna' : '📆 Yillik obuna';
+      const period = isMonthly ? '1 oy' : '1 yil';
 
       await ctx.replyWithInvoice(
         title,
         `${hospital.name} uchun ${period}lik obuna\n👥 ${empCount} nafar xodim × ${pricePerEmp.toLocaleString()} so'm`,
-        `${type}:${hospitalId}`,           // payload
+        `${type}:${hospitalId}`, // payload
         paymentToken,
         'UZS',
         [{ label: `${empCount} xodim (${period})`, amount: totalSom }],
@@ -389,20 +452,22 @@ export class TelegramService implements OnModuleInit {
       const payment = ctx.message?.successful_payment;
       if (!payment) return next(); // text va boshqa xabarlarni on('text') ga o'tkazish
 
-      const payload   = payment.invoice_payload as string;
+      const payload = payment.invoice_payload as string;
       const [type, hospitalId] = payload.split(':');
-      const chatId    = String(ctx.chat.id);
+      const chatId = String(ctx.chat.id);
       const firstName = ctx.from?.first_name || 'Foydalanuvchi';
-      const totalSom  = payment.total_amount;
+      const totalSom = payment.total_amount;
 
-      const hospital = await this.prisma.hospital.findUnique({ where: { id: hospitalId } });
+      const hospital = await this.prisma.hospital.findUnique({
+        where: { id: hospitalId },
+      });
       if (!hospital) return;
 
       const empCount = await this.prisma.employee.count({
         where: { hospitalId, firedAt: null },
       });
 
-      const now       = new Date();
+      const now = new Date();
       const validUntil = new Date(now);
       if (type === 'MONTHLY') validUntil.setMonth(validUntil.getMonth() + 1);
       else validUntil.setFullYear(validUntil.getFullYear() + 1);
@@ -412,27 +477,27 @@ export class TelegramService implements OnModuleInit {
       await this.prisma.payment.create({
         data: {
           hospitalId,
-          payerName:          firstName,
-          amount:             totalSom,
-          type:               type as any,
+          payerName: firstName,
+          amount: totalSom,
+          type: type as any,
           period,
-          status:             'PAID',
-          employeeCount:      empCount,
+          status: 'PAID',
+          employeeCount: empCount,
           validUntil,
-          telegramPaymentId:  payment.telegram_payment_charge_id,
-          paidByChatId:       chatId,
-          note:               `Telegram orqali to\'lov`,
+          telegramPaymentId: payment.telegram_payment_charge_id,
+          paidByChatId: chatId,
+          note: `Telegram orqali to\'lov`,
         },
       });
 
       const typeLabel = type === 'MONTHLY' ? 'oylik' : 'yillik';
       await ctx.reply(
         `✅ <b>To'lov muvaffaqiyatli!</b>\n\n` +
-        `🏥 ${hospital.name}\n` +
-        `💰 ${totalSom.toLocaleString()} so'm (${typeLabel})\n` +
-        `👥 ${empCount} nafar xodim\n` +
-        `📅 Amal qilish muddati: <b>${validUntil.toLocaleDateString('uz-UZ', { timeZone: 'Asia/Tashkent' })}</b>\n\n` +
-        `Rahmat! 🙏`,
+          `🏥 ${hospital.name}\n` +
+          `💰 ${totalSom.toLocaleString()} so'm (${typeLabel})\n` +
+          `👥 ${empCount} nafar xodim\n` +
+          `📅 Amal qilish muddati: <b>${validUntil.toLocaleDateString('uz-UZ', { timeZone: 'Asia/Tashkent' })}</b>\n\n` +
+          `Rahmat! 🙏`,
         { parse_mode: 'HTML', ...mainKeyboard(true) },
       );
     });
@@ -444,8 +509,8 @@ export class TelegramService implements OnModuleInit {
       if (linked) {
         await ctx.reply(
           `⚙️ <b>Sozlamalar</b>\n\n` +
-          `🏥 Ulangan kasalxona: <b>${linked.name}</b>\n\n` +
-          `Kasalxonani o'zgartirish uchun /start buyrug'ini yuboring.`,
+            `🏥 Ulangan kasalxona: <b>${linked.name}</b>\n\n` +
+            `Kasalxonani o'zgartirish uchun /start buyrug'ini yuboring.`,
           {
             parse_mode: 'HTML',
             ...Markup.inlineKeyboard([
@@ -482,8 +547,8 @@ export class TelegramService implements OnModuleInit {
       const chatId = this.chatIdFromCtx(ctx);
       this.pendingLink.add(chatId);
       await ctx.reply(
-        '📱 Kasalxona tizimiga ro\'yxatdan o\'tgan <b>telefon raqamingizni</b> yuboring.\n\n' +
-        'Misol: <code>+998901234567</code>',
+        "📱 Kasalxona tizimiga ro'yxatdan o'tgan <b>telefon raqamingizni</b> yuboring.\n\n" +
+          'Misol: <code>+998901234567</code>',
         { parse_mode: 'HTML' },
       );
     });
@@ -491,14 +556,24 @@ export class TelegramService implements OnModuleInit {
     // ── Inline button: today came/not-came detail lists ───────────────────────
     bot.action(/^cmd_came:(.+)$/, async (ctx) => {
       await ctx.answerCbQuery();
-      const hospitalId = (ctx.match as RegExpMatchArray)[1] === 'null' ? null : (ctx.match as RegExpMatchArray)[1];
-      await ctx.reply(await this.buildCameList(hospitalId), { parse_mode: 'HTML' });
+      const hospitalId =
+        (ctx.match as RegExpMatchArray)[1] === 'null'
+          ? null
+          : (ctx.match as RegExpMatchArray)[1];
+      await ctx.reply(await this.buildCameList(hospitalId), {
+        parse_mode: 'HTML',
+      });
     });
 
     bot.action(/^cmd_notcame:(.+)$/, async (ctx) => {
       await ctx.answerCbQuery();
-      const hospitalId = (ctx.match as RegExpMatchArray)[1] === 'null' ? null : (ctx.match as RegExpMatchArray)[1];
-      await ctx.reply(await this.buildNotCheckedInList(hospitalId), { parse_mode: 'HTML' });
+      const hospitalId =
+        (ctx.match as RegExpMatchArray)[1] === 'null'
+          ? null
+          : (ctx.match as RegExpMatchArray)[1];
+      await ctx.reply(await this.buildNotCheckedInList(hospitalId), {
+        parse_mode: 'HTML',
+      });
     });
 
     // ── Text: phone number for linking ────────────────────────────────────────
@@ -524,7 +599,7 @@ export class TelegramService implements OnModuleInit {
 
       if (!looksLikePhone) {
         await ctx.reply(
-          '❌ Noto\'g\'ri format. Raqamni to\'liq kiriting.\nMisol: <code>+998901234567</code>',
+          "❌ Noto'g'ri format. Raqamni to'liq kiriting.\nMisol: <code>+998901234567</code>",
           { parse_mode: 'HTML' },
         );
         return;
@@ -545,7 +620,10 @@ export class TelegramService implements OnModuleInit {
       }
 
       if (!employee.hospitalId) {
-        await ctx.reply('❌ Bu hodim hech qanday kasalxonaga biriktirilmagan.', { parse_mode: 'HTML' });
+        await ctx.reply(
+          '❌ Bu hodim hech qanday kasalxonaga biriktirilmagan.',
+          { parse_mode: 'HTML' },
+        );
         return;
       }
 
@@ -557,8 +635,8 @@ export class TelegramService implements OnModuleInit {
           : 'Tizim hisobi mavjud emas';
         await ctx.reply(
           `⛔ <b>Kirish rad etildi</b>\n${roleInfo}\n\n` +
-          'Faqat kasalxona <b>direktori</b> (DIRECTOR yoki ADMIN) Telegram botni ulay oladi.\n\n' +
-          'Tizim administratori bilan bog\'laning.',
+            'Faqat kasalxona <b>direktori</b> (DIRECTOR yoki ADMIN) Telegram botni ulay oladi.\n\n' +
+            "Tizim administratori bilan bog'laning.",
           { parse_mode: 'HTML' },
         );
         return;
@@ -578,14 +656,20 @@ export class TelegramService implements OnModuleInit {
         });
       } else {
         await this.prisma.telegramSubscription.create({
-          data: { chatId, username, role: 'DIRECTOR', hospitalId: employee.hospitalId, isActive: true },
+          data: {
+            chatId,
+            username,
+            role: 'DIRECTOR',
+            hospitalId: employee.hospitalId,
+            isActive: true,
+          },
         });
       }
 
       await ctx.reply(
         `✅ <b>${employee.hospital?.name}</b> kasalxonasiga muvaffaqiyatli ulandi!\n\n` +
-        `👤 Direktor: <b>${employee.fullName}</b>\n\n` +
-        `Endi real vaqtda davomat xabarlari yuboriladi. 🎉`,
+          `👤 Direktor: <b>${employee.fullName}</b>\n\n` +
+          `Endi real vaqtda davomat xabarlari yuboriladi. 🎉`,
         { parse_mode: 'HTML', ...mainKeyboard(true) },
       );
     });
@@ -621,7 +705,7 @@ export class TelegramService implements OnModuleInit {
   // ──────────────────────────────────────────
   async notifyAttendance(
     employee: any,
-    action: string,   // TerminalEventType yoki 'CHECK_IN' | 'CHECK_OUT'
+    action: string, // TerminalEventType yoki 'CHECK_IN' | 'CHECK_OUT'
     attendance: any,
     snapshotBuffer?: Buffer,
   ) {
@@ -636,9 +720,12 @@ export class TelegramService implements OnModuleInit {
     });
     if (!subscribers.length) return;
 
-    const checkTime = action === 'CHECK_IN' ? attendance.checkIn : attendance.checkOut;
+    const checkTime =
+      action === 'CHECK_IN' ? attendance.checkIn : attendance.checkOut;
     const timeStr = new Date(checkTime).toLocaleTimeString('uz-UZ', {
-      hour: '2-digit', minute: '2-digit', timeZone: TZ,
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: TZ,
     });
 
     let emoji = '✅';
@@ -673,30 +760,43 @@ export class TelegramService implements OnModuleInit {
     let photoBuffer: Buffer | null = snapshotBuffer || null;
     if (!photoBuffer && employee.photoUrl) {
       const uploadDir = process.env.UPLOAD_DIR || './uploads';
-      const filename = (employee.photoUrl as string).replace(/^\/uploads\//, '');
+      const filename = (employee.photoUrl as string).replace(
+        /^\/uploads\//,
+        '',
+      );
       const filePath = path.join(uploadDir, filename);
       if (fs.existsSync(filePath)) {
-        try { photoBuffer = fs.readFileSync(filePath); } catch { /* skip */ }
+        try {
+          photoBuffer = fs.readFileSync(filePath);
+        } catch {
+          /* skip */
+        }
       }
     }
 
     const photoSource = photoBuffer
-      ? { source: photoBuffer, filename: snapshotBuffer ? 'snapshot.jpg' : 'photo.jpg' }
+      ? {
+          source: photoBuffer,
+          filename: snapshotBuffer ? 'snapshot.jpg' : 'photo.jpg',
+        }
       : null;
 
     for (const sub of subscribers) {
       try {
         if (photoSource) {
-          await this.bot.telegram.sendPhoto(
-            sub.chatId,
-            photoSource,
-            { caption, parse_mode: 'HTML' },
-          );
+          await this.bot.telegram.sendPhoto(sub.chatId, photoSource, {
+            caption,
+            parse_mode: 'HTML',
+          });
         } else {
-          await this.bot.telegram.sendMessage(sub.chatId, caption, { parse_mode: 'HTML' });
+          await this.bot.telegram.sendMessage(sub.chatId, caption, {
+            parse_mode: 'HTML',
+          });
         }
       } catch (e) {
-        this.logger.warn(`Failed to send to ${sub.chatId}: ${e instanceof Error ? e.message : String(e)}`);
+        this.logger.warn(
+          `Failed to send to ${sub.chatId}: ${e instanceof Error ? e.message : String(e)}`,
+        );
       }
     }
   }
@@ -735,11 +835,13 @@ export class TelegramService implements OnModuleInit {
 
     const isCheckIn = action === 'CHECK_IN';
     const checkTime = isCheckIn ? attendance.checkIn : attendance.checkOut;
-    const timeStr   = new Date(checkTime).toLocaleTimeString('uz-UZ', {
-      hour: '2-digit', minute: '2-digit', timeZone: TZ,
+    const timeStr = new Date(checkTime).toLocaleTimeString('uz-UZ', {
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: TZ,
     });
 
-    const emoji      = isCheckIn ? (attendance.lateMinutes > 0 ? '⚠️' : '✅') : '🚶';
+    const emoji = isCheckIn ? (attendance.lateMinutes > 0 ? '⚠️' : '✅') : '🚶';
     const actionText = isCheckIn ? 'KELDI (mobil)' : 'KETDI (mobil)';
 
     let extra = '';
@@ -751,28 +853,37 @@ export class TelegramService implements OnModuleInit {
 
     // GPS — check-in uchun gpsLat/gpsLng, check-out uchun checkOutGps*
     const lat = isCheckIn
-      ? (attendance.gpsLat      ?? null)
+      ? (attendance.gpsLat ?? null)
       : (attendance.checkOutGpsLat ?? null);
     const lng = isCheckIn
-      ? (attendance.gpsLng      ?? null)
+      ? (attendance.gpsLng ?? null)
       : (attendance.checkOutGpsLng ?? null);
-    const accuracy = isCheckIn ? attendance.gpsAccuracy : attendance.checkOutGpsAccuracy;
+    const accuracy = isCheckIn
+      ? attendance.gpsAccuracy
+      : attendance.checkOutGpsAccuracy;
 
     // Ish joyi bilan masofa (kasalxona GPS o'rnatilgan bo'lsa)
     let distanceLine = '';
     if (lat && lng && hospital?.gpsLat && hospital?.gpsLng) {
-      const meters = haversineMeters(lat, lng, hospital.gpsLat, hospital.gpsLng);
-      const dist   = meters < 1000
-        ? `${Math.round(meters)} m`
-        : `${(meters / 1000).toFixed(1)} km`;
-      const inZone = meters <= (250); // 250m tolerance
+      const meters = haversineMeters(
+        lat,
+        lng,
+        hospital.gpsLat,
+        hospital.gpsLng,
+      );
+      const dist =
+        meters < 1000
+          ? `${Math.round(meters)} m`
+          : `${(meters / 1000).toFixed(1)} km`;
+      const inZone = meters <= 250; // 250m tolerance
       distanceLine = `\n${inZone ? '🟢' : '🔴'} Ish joyidan: <b>${dist}</b>`;
     }
 
     // Yandex Maps havolasi
-    const gpsLine = (lat && lng)
-      ? `\n🗺 <a href="${yandexMapLink(lat, lng)}">Yandex Maps da ko'rish</a>`
-      : '';
+    const gpsLine =
+      lat && lng
+        ? `\n🗺 <a href="${yandexMapLink(lat, lng)}">Yandex Maps da ko'rish</a>`
+        : '';
     const accuracyLine = accuracy
       ? `\n🎯 GPS aniqlik: ±${Math.round(accuracy)}m`
       : '';
@@ -798,17 +909,28 @@ export class TelegramService implements OnModuleInit {
         : (attendance.checkOutSelfieUrl ?? attendance.selfieUrl);
       if (storedUrl) {
         const uploadDir = process.env.UPLOAD_DIR || './uploads';
-        const filename  = (storedUrl as string).replace(/^\/uploads\//, '');
-        const filePath  = path.join(uploadDir, filename);
+        const filename = (storedUrl as string).replace(/^\/uploads\//, '');
+        const filePath = path.join(uploadDir, filename);
         if (fs.existsSync(filePath)) {
-          try { photoBuffer = fs.readFileSync(filePath); } catch { /* skip */ }
+          try {
+            photoBuffer = fs.readFileSync(filePath);
+          } catch {
+            /* skip */
+          }
         }
       } else if (employee.photoUrl) {
         const uploadDir = process.env.UPLOAD_DIR || './uploads';
-        const filename  = (employee.photoUrl as string).replace(/^\/uploads\//, '');
-        const filePath  = path.join(uploadDir, filename);
+        const filename = (employee.photoUrl as string).replace(
+          /^\/uploads\//,
+          '',
+        );
+        const filePath = path.join(uploadDir, filename);
         if (fs.existsSync(filePath)) {
-          try { photoBuffer = fs.readFileSync(filePath); } catch { /* skip */ }
+          try {
+            photoBuffer = fs.readFileSync(filePath);
+          } catch {
+            /* skip */
+          }
         }
       }
     }
@@ -816,7 +938,9 @@ export class TelegramService implements OnModuleInit {
     // Yandex Static Maps rasmi (GPS bor bo'lsa)
     let mapBuffer: Buffer | null = null;
     if (lat && lng) {
-      mapBuffer = await fetchImageBuffer(yandexStaticMapUrl(lat, lng, isCheckIn ? 'gn' : 'rd')).catch(() => null);
+      mapBuffer = await fetchImageBuffer(
+        yandexStaticMapUrl(lat, lng, isCheckIn ? 'gn' : 'rd'),
+      ).catch(() => null);
     }
 
     for (const sub of subscribers) {
@@ -829,7 +953,9 @@ export class TelegramService implements OnModuleInit {
             { caption, parse_mode: 'HTML' },
           );
         } else {
-          await this.bot.telegram.sendMessage(sub.chatId, caption, { parse_mode: 'HTML' });
+          await this.bot.telegram.sendMessage(sub.chatId, caption, {
+            parse_mode: 'HTML',
+          });
         }
 
         // 2. Yandex Maps static xarita rasmi
@@ -837,14 +963,19 @@ export class TelegramService implements OnModuleInit {
           await this.bot.telegram.sendPhoto(
             sub.chatId,
             { source: mapBuffer, filename: 'location.jpg' },
-            { caption: `📍 ${isCheckIn ? 'Kelish' : 'Ketish'} joyi`, parse_mode: 'HTML' },
+            {
+              caption: `📍 ${isCheckIn ? 'Kelish' : 'Ketish'} joyi`,
+              parse_mode: 'HTML',
+            },
           );
         } else if (lat && lng) {
           // Static map yuklab bo'lmasa — Telegram native location
           await this.bot.telegram.sendLocation(sub.chatId, lat, lng);
         }
       } catch (e) {
-        this.logger.warn(`notifyMobileCheckin failed to ${sub.chatId}: ${e instanceof Error ? e.message : String(e)}`);
+        this.logger.warn(
+          `notifyMobileCheckin failed to ${sub.chatId}: ${e instanceof Error ? e.message : String(e)}`,
+        );
       }
     }
   }
@@ -854,10 +985,14 @@ export class TelegramService implements OnModuleInit {
   // ──────────────────────────────────────────
   async broadcast(message: string) {
     if (!this.bot) return;
-    const subscribers = await this.prisma.telegramSubscription.findMany({ where: { isActive: true } });
+    const subscribers = await this.prisma.telegramSubscription.findMany({
+      where: { isActive: true },
+    });
     for (const sub of subscribers) {
       try {
-        await this.bot.telegram.sendMessage(sub.chatId, message, { parse_mode: 'HTML' });
+        await this.bot.telegram.sendMessage(sub.chatId, message, {
+          parse_mode: 'HTML',
+        });
       } catch (e) {
         this.logger.warn(`Broadcast failed to ${sub.chatId}`);
       }
@@ -866,7 +1001,9 @@ export class TelegramService implements OnModuleInit {
 
   async sendToChat(chatId: string, message: string) {
     if (!this.bot) return;
-    await this.bot.telegram.sendMessage(chatId, message, { parse_mode: 'HTML' });
+    await this.bot.telegram.sendMessage(chatId, message, {
+      parse_mode: 'HTML',
+    });
   }
 
   async broadcastToHospital(hospitalId: string | null, message: string) {
@@ -874,15 +1011,14 @@ export class TelegramService implements OnModuleInit {
     const subscribers = await this.prisma.telegramSubscription.findMany({
       where: {
         isActive: true,
-        OR: [
-          { hospitalId },
-          { hospitalId: null },
-        ],
+        OR: [{ hospitalId }, { hospitalId: null }],
       },
     });
     for (const sub of subscribers) {
       try {
-        await this.bot.telegram.sendMessage(sub.chatId, message, { parse_mode: 'HTML' });
+        await this.bot.telegram.sendMessage(sub.chatId, message, {
+          parse_mode: 'HTML',
+        });
       } catch (e) {
         this.logger.warn(`broadcastToHospital failed to ${sub.chatId}`);
       }
@@ -898,7 +1034,10 @@ export class TelegramService implements OnModuleInit {
    */
   private async buildTodaySummary(
     hospitalId: string | null,
-  ): Promise<{ text: string; keyboard: ReturnType<typeof Markup.inlineKeyboard> }> {
+  ): Promise<{
+    text: string;
+    keyboard: ReturnType<typeof Markup.inlineKeyboard>;
+  }> {
     const todayStart = this.todayStart();
     const dateLabel = todayDateStr();
     const timeLabel = nowStr();
@@ -929,17 +1068,19 @@ export class TelegramService implements OnModuleInit {
 
     if (scheduled.length > 0) {
       // Schedule bor — faqat jadvalda bo'lganlarni hisoblash
-      const scheduledIds = new Set(scheduled.map(s => s.employeeId));
-      const cameInSchedule = attendances.filter(a => scheduledIds.has(a.employeeId));
+      const scheduledIds = new Set(scheduled.map((s) => s.employeeId));
+      const cameInSchedule = attendances.filter((a) =>
+        scheduledIds.has(a.employeeId),
+      );
       totalScheduled = scheduled.length;
       cameCount = cameInSchedule.length;
-      lateCount = cameInSchedule.filter(a => a.lateMinutes > 0).length;
+      lateCount = cameInSchedule.filter((a) => a.lateMinutes > 0).length;
       notCameCount = totalScheduled - cameCount;
     } else {
       // Schedule yo'q — barcha xodimlar va attendanceRecord dan hisoblash
       totalScheduled = await this.prisma.employee.count({ where: empWhere });
       cameCount = attendances.length;
-      lateCount = attendances.filter(a => a.lateMinutes > 0).length;
+      lateCount = attendances.filter((a) => a.lateMinutes > 0).length;
       notCameCount = totalScheduled - cameCount;
     }
 
@@ -973,25 +1114,39 @@ export class TelegramService implements OnModuleInit {
     // Schedule bo'lsa, faqat jadvalda bo'lganlarni ko'rsatish
     const schedWhere: any = { date: todayStart, status: 'WORKING' };
     if (hospitalId) schedWhere.employee = { hospitalId };
-    const scheduled = await this.prisma.schedule.findMany({ where: schedWhere, select: { employeeId: true } });
+    const scheduled = await this.prisma.schedule.findMany({
+      where: schedWhere,
+      select: { employeeId: true },
+    });
 
-    const came = scheduled.length > 0
-      ? records.filter(r => new Set(scheduled.map(s => s.employeeId)).has(r.employeeId))
-      : records;
+    const came =
+      scheduled.length > 0
+        ? records.filter((r) =>
+            new Set(scheduled.map((s) => s.employeeId)).has(r.employeeId),
+          )
+        : records;
 
     if (!came.length) {
       return `📋 <b>Kelganlar — ${dateLabel}</b>\n\nHali hech kim kelmagan.`;
     }
 
-    const list = came.slice(0, MAX_LIST).map((r, i) => {
-      const time = new Date(r.checkIn!).toLocaleTimeString('uz-UZ', {
-        hour: '2-digit', minute: '2-digit', timeZone: TZ,
-      });
-      const late = r.lateMinutes > 0 ? ` ⚠️ +${r.lateMinutes} daq` : '';
-      return `${i + 1}. <b>${r.employee.fullName}</b> — ${time}${late}`;
-    }).join('\n');
+    const list = came
+      .slice(0, MAX_LIST)
+      .map((r, i) => {
+        const time = new Date(r.checkIn!).toLocaleTimeString('uz-UZ', {
+          hour: '2-digit',
+          minute: '2-digit',
+          timeZone: TZ,
+        });
+        const late = r.lateMinutes > 0 ? ` ⚠️ +${r.lateMinutes} daq` : '';
+        return `${i + 1}. <b>${r.employee.fullName}</b> — ${time}${late}`;
+      })
+      .join('\n');
 
-    const tail = came.length > MAX_LIST ? `\n\n<i>...va yana ${came.length - MAX_LIST} ta</i>` : '';
+    const tail =
+      came.length > MAX_LIST
+        ? `\n\n<i>...va yana ${came.length - MAX_LIST} ta</i>`
+        : '';
 
     return `✅ <b>Kelganlar — ${dateLabel}</b> (${came.length} ta)\n\n${list}${tail}`;
   }
@@ -999,7 +1154,9 @@ export class TelegramService implements OnModuleInit {
   /**
    * Bugun rejalashtirilgan, lekin hali check-in qilmaganlar
    */
-  private async buildNotCheckedInList(hospitalId: string | null): Promise<string> {
+  private async buildNotCheckedInList(
+    hospitalId: string | null,
+  ): Promise<string> {
     const todayStart = this.todayStart();
     const dateLabel = todayDateStr();
     const timeLabel = nowStr();
@@ -1023,19 +1180,26 @@ export class TelegramService implements OnModuleInit {
       where: attWhere,
       select: { employeeId: true },
     });
-    const checkedInIds = new Set(checkedIn.map(r => r.employeeId));
+    const checkedInIds = new Set(checkedIn.map((r) => r.employeeId));
 
-    const notYet = schedules.filter(s => !checkedInIds.has(s.employeeId));
+    const notYet = schedules.filter((s) => !checkedInIds.has(s.employeeId));
 
     if (!notYet.length) {
       return `✅ <b>${dateLabel}</b>\n\nBarcha ${schedules.length} ta rejalashtirilgan hodim keldi!`;
     }
 
-    const list = notYet.slice(0, MAX_LIST).map((s, i) =>
-      `${i + 1}. <b>${s.employee.fullName}</b> — ${s.employee.department?.name || '—'} ❌`,
-    ).join('\n');
+    const list = notYet
+      .slice(0, MAX_LIST)
+      .map(
+        (s, i) =>
+          `${i + 1}. <b>${s.employee.fullName}</b> — ${s.employee.department?.name || '—'} ❌`,
+      )
+      .join('\n');
 
-    const tail = notYet.length > MAX_LIST ? `\n\n<i>...va yana ${notYet.length - MAX_LIST} ta</i>` : '';
+    const tail =
+      notYet.length > MAX_LIST
+        ? `\n\n<i>...va yana ${notYet.length - MAX_LIST} ta</i>`
+        : '';
 
     return (
       `⏳ <b>Hali kelmaganlar — ${dateLabel}</b>\n` +
@@ -1069,12 +1233,15 @@ export class TelegramService implements OnModuleInit {
     });
 
     if (stats.length) {
-      const list = stats.map((s, i) => {
-        const deduct = Number(s.deductionAmount) > 0
-          ? ` | 💰 -${Math.round(Number(s.deductionAmount)).toLocaleString()} so'm`
-          : '';
-        return `${i + 1}. <b>${s.employee.fullName}</b>\n   ⏱ ${s.totalLateMin} min kech | 🚶 ${s.totalEarlyMin} min erta${deduct}`;
-      }).join('\n\n');
+      const list = stats
+        .map((s, i) => {
+          const deduct =
+            Number(s.deductionAmount) > 0
+              ? ` | 💰 -${Math.round(Number(s.deductionAmount)).toLocaleString()} so'm`
+              : '';
+          return `${i + 1}. <b>${s.employee.fullName}</b>\n   ⏱ ${s.totalLateMin} min kech | 🚶 ${s.totalEarlyMin} min erta${deduct}`;
+        })
+        .join('\n\n');
       return `📈 <b>Haftalik hisobot</b>\n\n${list}`;
     }
 
@@ -1100,13 +1267,24 @@ export class TelegramService implements OnModuleInit {
     }
 
     // Hodim bo'yicha guruhlash
-    const empMap = new Map<string, { name: string; dept: string; lateMin: number; earlyMin: number; absent: number }>();
+    const empMap = new Map<
+      string,
+      {
+        name: string;
+        dept: string;
+        lateMin: number;
+        earlyMin: number;
+        absent: number;
+      }
+    >();
     for (const r of raw) {
       if (!empMap.has(r.employeeId)) {
         empMap.set(r.employeeId, {
           name: r.employee.fullName,
           dept: r.employee.department?.name || '—',
-          lateMin: 0, earlyMin: 0, absent: 0,
+          lateMin: 0,
+          earlyMin: 0,
+          absent: 0,
         });
       }
       const s = empMap.get(r.employeeId)!;
@@ -1115,21 +1293,33 @@ export class TelegramService implements OnModuleInit {
       if (r.status === 'ABSENT') s.absent++;
     }
 
-    const sorted = [...empMap.values()].sort((a, b) => b.lateMin - a.lateMin).slice(0, 20);
-    const weekLabel = weekStart.toLocaleDateString('uz-UZ', { day: '2-digit', month: '2-digit', timeZone: TZ });
+    const sorted = [...empMap.values()]
+      .sort((a, b) => b.lateMin - a.lateMin)
+      .slice(0, 20);
+    const weekLabel = weekStart.toLocaleDateString('uz-UZ', {
+      day: '2-digit',
+      month: '2-digit',
+      timeZone: TZ,
+    });
 
-    const list = sorted.map((s, i) => {
-      const parts: string[] = [];
-      if (s.lateMin > 0) parts.push(`⏱ ${s.lateMin} min kech`);
-      if (s.earlyMin > 0) parts.push(`🚶 ${s.earlyMin} min erta`);
-      if (s.absent > 0) parts.push(`❌ ${s.absent} kun yo'q`);
-      return `${i + 1}. <b>${s.name}</b> (${s.dept})\n   ${parts.join(' | ')}`;
-    }).join('\n\n');
+    const list = sorted
+      .map((s, i) => {
+        const parts: string[] = [];
+        if (s.lateMin > 0) parts.push(`⏱ ${s.lateMin} min kech`);
+        if (s.earlyMin > 0) parts.push(`🚶 ${s.earlyMin} min erta`);
+        if (s.absent > 0) parts.push(`❌ ${s.absent} kun yo'q`);
+        return `${i + 1}. <b>${s.name}</b> (${s.dept})\n   ${parts.join(' | ')}`;
+      })
+      .join('\n\n');
 
     return `📈 <b>Haftalik hisobot</b> (${weekLabel} dan)\n\n${list}`;
   }
 
-  private async buildMonthlyReport(month: number, year: number, hospitalId: string | null): Promise<string> {
+  private async buildMonthlyReport(
+    month: number,
+    year: number,
+    hospitalId: string | null,
+  ): Promise<string> {
     const where: any = { month, year };
     if (hospitalId) where.employee = { hospitalId };
 
@@ -1140,11 +1330,16 @@ export class TelegramService implements OnModuleInit {
       take: 30,
     });
 
-    if (!payrolls.length) return `📋 ${month}/${year} uchun maosh hisoblari yo'q`;
+    if (!payrolls.length)
+      return `📋 ${month}/${year} uchun maosh hisoblari yo'q`;
 
     const totalNet = payrolls.reduce((s, p) => s + Number(p.netSalary), 0);
     const totalDeductions = payrolls.reduce(
-      (s, p) => s + Number(p.lateDeduction) + Number(p.absenceDeduction) + Number(p.earlyLeaveDeduction),
+      (s, p) =>
+        s +
+        Number(p.lateDeduction) +
+        Number(p.absenceDeduction) +
+        Number(p.earlyLeaveDeduction),
       0,
     );
 
@@ -1196,20 +1391,33 @@ export class TelegramService implements OnModuleInit {
    * @param leave  — LeaveRequest with employee.hospital, employee.department
    * @param action — 'CREATED' | 'APPROVED' | 'REJECTED'
    */
-  async notifyLeaveRequest(leave: any, action: 'CREATED' | 'APPROVED' | 'REJECTED'): Promise<void> {
+  async notifyLeaveRequest(
+    leave: any,
+    action: 'CREATED' | 'APPROVED' | 'REJECTED',
+  ): Promise<void> {
     if (!this.bot) return;
 
-    const employee  = leave.employee;
-    const hospital  = employee?.hospital;
-    const startStr  = new Date(leave.startDate).toLocaleDateString('uz-UZ', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: TZ });
-    const endStr    = new Date(leave.endDate).toLocaleDateString('uz-UZ',   { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: TZ });
+    const employee = leave.employee;
+    const hospital = employee?.hospital;
+    const startStr = new Date(leave.startDate).toLocaleDateString('uz-UZ', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      timeZone: TZ,
+    });
+    const endStr = new Date(leave.endDate).toLocaleDateString('uz-UZ', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      timeZone: TZ,
+    });
 
     const LEAVE_LABELS: Record<string, string> = {
-      VACATION:  'Yillik ta\'til',
-      SICK:      'Kasallik',
-      PERSONAL:  'Shaxsiy sabab',
-      MATERNITY: 'Tug\'ruq ta\'tili',
-      UNPAID:    'Haqsiz ta\'til',
+      VACATION: "Yillik ta'til",
+      SICK: 'Kasallik',
+      PERSONAL: 'Shaxsiy sabab',
+      MATERNITY: "Tug'ruq ta'tili",
+      UNPAID: "Haqsiz ta'til",
     };
 
     const typeLabel = LEAVE_LABELS[leave.type] ?? leave.type;
@@ -1221,7 +1429,8 @@ export class TelegramService implements OnModuleInit {
       });
       if (!subscribers.length) return;
 
-      const emoji   = leave.type === 'SICK' ? '🤒' : leave.type === 'MATERNITY' ? '🤱' : '🏖';
+      const emoji =
+        leave.type === 'SICK' ? '🤒' : leave.type === 'MATERNITY' ? '🤱' : '🏖';
       const message =
         `${emoji} <b>Ta'til so'rovi</b>\n\n` +
         `👤 Xodim: <b>${employee?.fullName || '—'}</b>\n` +
@@ -1233,9 +1442,13 @@ export class TelegramService implements OnModuleInit {
 
       for (const sub of subscribers) {
         try {
-          await this.bot.telegram.sendMessage(sub.chatId, message, { parse_mode: 'HTML' });
+          await this.bot.telegram.sendMessage(sub.chatId, message, {
+            parse_mode: 'HTML',
+          });
         } catch (e) {
-          this.logger.warn(`Leave notify failed to ${sub.chatId}: ${e instanceof Error ? e.message : String(e)}`);
+          this.logger.warn(
+            `Leave notify failed to ${sub.chatId}: ${e instanceof Error ? e.message : String(e)}`,
+          );
         }
       }
     } else {
@@ -1243,7 +1456,7 @@ export class TelegramService implements OnModuleInit {
       if (!employee?.telegramChatId) return;
 
       const isApproved = action === 'APPROVED';
-      const emoji      = isApproved ? '✅' : '❌';
+      const emoji = isApproved ? '✅' : '❌';
       const statusText = isApproved ? 'TASDIQLANDI' : 'RAD ETILDI';
 
       const message =
@@ -1253,9 +1466,13 @@ export class TelegramService implements OnModuleInit {
         (leave.reviewNote ? `\n💬 Izoh: <i>${leave.reviewNote}</i>` : '');
 
       try {
-        await this.bot.telegram.sendMessage(employee.telegramChatId, message, { parse_mode: 'HTML' });
+        await this.bot.telegram.sendMessage(employee.telegramChatId, message, {
+          parse_mode: 'HTML',
+        });
       } catch (e) {
-        this.logger.warn(`Leave decision notify to employee failed: ${e instanceof Error ? e.message : String(e)}`);
+        this.logger.warn(
+          `Leave decision notify to employee failed: ${e instanceof Error ? e.message : String(e)}`,
+        );
       }
     }
   }

@@ -32,7 +32,7 @@ export class CreateEmployeeDto {
   // Email: only validate if provided and non-empty
   @IsOptional()
   @ValidateIf((o) => o.email && o.email.trim() !== '')
-  @IsEmail({}, { message: 'Email noto\'g\'ri formatda' })
+  @IsEmail({}, { message: "Email noto'g'ri formatda" })
   @Transform(({ value }) => (value === '' ? undefined : value))
   email?: string;
 

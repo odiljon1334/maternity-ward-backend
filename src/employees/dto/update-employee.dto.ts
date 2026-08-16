@@ -17,7 +17,7 @@ export class UpdateEmployeeDto extends PartialType(CreateEmployeeDto) {
 }
 
 export class FireEmployeeDto {
-  firedAt?:    string;
+  firedAt?: string;
   fireReason?: string; // RESIGNED | FIRED | RETIRED | TRANSFERRED | OTHER
-  fireNote?:   string;
+  fireNote?: string;
 }

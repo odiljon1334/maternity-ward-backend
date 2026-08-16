@@ -1,5 +1,5 @@
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const sharp = require('sharp');
+import sharp from 'sharp';
 import * as path from 'path';
 import * as fs from 'fs';
 
@@ -23,10 +23,10 @@ export async function processAndSavePhoto(
   const outputPath = path.join(uploadDir, filename);
 
   await sharp(buffer)
-    .rotate()                         // EXIF orientatsiyasini avtomatik to'g'rilaydi
+    .rotate() // EXIF orientatsiyasini avtomatik to'g'rilaydi
     .resize(800, 800, {
-      fit: 'inside',                  // Nisbatni saqlaydi
-      withoutEnlargement: true,       // Kichik rasmlarni kattalashtirmaydi
+      fit: 'inside', // Nisbatni saqlaydi
+      withoutEnlargement: true, // Kichik rasmlarni kattalashtirmaydi
     })
     .jpeg({ quality: 85, progressive: true, mozjpeg: false })
     .toFile(outputPath);

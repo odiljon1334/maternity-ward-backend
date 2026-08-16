@@ -58,10 +58,7 @@ export class NotificationsService {
    * SUPER_ADMIN tomonidan Telegram xabar yuborish
    * hospitalIds: konket ID lar | 'all' — hamma kasalxonalar
    */
-  async sendTelegram(data: {
-    hospitalIds: string[] | 'all';
-    message: string;
-  }) {
+  async sendTelegram(data: { hospitalIds: string[] | 'all'; message: string }) {
     const { hospitalIds, message } = data;
 
     let subs: { chatId: string; hospitalId: string | null }[];
@@ -81,14 +78,19 @@ export class NotificationsService {
       });
     }
 
-    const uniqueChats = [...new Map(subs.map(s => [s.chatId, s])).values()];
+    const uniqueChats = [...new Map(subs.map((s) => [s.chatId, s])).values()];
 
     let sentCount = 0;
     for (const sub of uniqueChats) {
       try {
-        await this.telegram.sendToChat(sub.chatId, `📢 <b>MaternityCare xabarnomasi</b>\n\n${message}`);
+        await this.telegram.sendToChat(
+          sub.chatId,
+          `📢 <b>MaternityCare xabarnomasi</b>\n\n${message}`,
+        );
         sentCount++;
-      } catch { /* skip failed */ }
+      } catch {
+        /* skip failed */
+      }
     }
 
     // Notification yozuvi yaratish

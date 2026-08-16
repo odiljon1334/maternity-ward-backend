@@ -38,11 +38,17 @@ export class DateUtil {
   }
 
   static startOfMonth(year: number, month: number): Date {
-    return dayjs.tz(`${year}-${String(month).padStart(2, '0')}-01`, TZ).startOf('month').toDate();
+    return dayjs
+      .tz(`${year}-${String(month).padStart(2, '0')}-01`, TZ)
+      .startOf('month')
+      .toDate();
   }
 
   static endOfMonth(year: number, month: number): Date {
-    return dayjs.tz(`${year}-${String(month).padStart(2, '0')}-01`, TZ).endOf('month').toDate();
+    return dayjs
+      .tz(`${year}-${String(month).padStart(2, '0')}-01`, TZ)
+      .endOf('month')
+      .toDate();
   }
 
   /**
@@ -52,9 +58,10 @@ export class DateUtil {
   static parseTerminalTime(eventTime?: string): Date {
     if (!eventTime) return new Date();
     const hasTimezone = /[Z]$|[+-]\d{2}:?\d{2}$/.test(eventTime.trim());
-    const timeStr = !hasTimezone && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(eventTime.trim())
-      ? `${eventTime.trim()}+05:00`
-      : eventTime.trim();
+    const timeStr =
+      !hasTimezone && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(eventTime.trim())
+        ? `${eventTime.trim()}+05:00`
+        : eventTime.trim();
     const parsed = new Date(timeStr);
     if (isNaN(parsed.getTime())) return new Date();
     const serverNow = new Date();
@@ -69,7 +76,13 @@ export class DateUtil {
    */
   static buildDateTime(date: Date, timeStr: string): Date {
     const [hours, minutes] = timeStr.split(':').map(Number);
-    return dayjs(date).tz(TZ).hour(hours).minute(minutes).second(0).millisecond(0).toDate();
+    return dayjs(date)
+      .tz(TZ)
+      .hour(hours)
+      .minute(minutes)
+      .second(0)
+      .millisecond(0)
+      .toDate();
   }
 
   /**

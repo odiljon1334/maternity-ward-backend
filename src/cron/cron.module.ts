@@ -6,12 +6,7 @@ import { SchedulesModule } from '../schedules/schedules.module';
 import { LeaveModule } from 'src/leave/leave.module';
 
 @Module({
-  imports: [
-    AttendanceModule, 
-    TelegramModule, 
-    SchedulesModule,
-    LeaveModule,
-  ],
+  imports: [AttendanceModule, TelegramModule, SchedulesModule, LeaveModule],
   providers: [CronService],
 })
 export class CronModule {}

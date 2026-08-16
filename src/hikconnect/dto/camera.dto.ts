@@ -1,4 +1,12 @@
-import { IsString, IsOptional, IsInt, IsBoolean, Min, Max, MinLength } from 'class-validator';
+import {
+  IsString,
+  IsOptional,
+  IsInt,
+  IsBoolean,
+  Min,
+  Max,
+  MinLength,
+} from 'class-validator';
 
 export class CreateCameraDto {
   @IsString()

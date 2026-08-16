@@ -4,8 +4,8 @@ import { PrismaService } from '../prisma/prisma.service';
 export interface AuditLogData {
   userId?: string;
   hospitalId?: string;
-  action: string;   // CREATE | UPDATE | DELETE | FIRE | IMPORT_CSV | GENERATE | APPROVE | EXPORT | LOGIN
-  entity: string;   // Employee | PayrollRecord | Schedule | Department | Position | User
+  action: string; // CREATE | UPDATE | DELETE | FIRE | IMPORT_CSV | GENERATE | APPROVE | EXPORT | LOGIN
+  entity: string; // Employee | PayrollRecord | Schedule | Department | Position | User
   entityId?: string;
   details?: object;
   ip?: string;
@@ -17,9 +17,9 @@ export class AuditLogService {
 
   /** Asinxron log — xato bo'lsa asosiy operatsiyani to'xtatmaydi */
   log(data: AuditLogData): void {
-    this.prisma.auditLog
-      .create({ data })
-      .catch(() => {/* silent */});
+    this.prisma.auditLog.create({ data }).catch(() => {
+      /* silent */
+    });
   }
 
   async findAll(params: {
@@ -32,8 +32,8 @@ export class AuditLogService {
     const { hospitalId, entity, action, page = 1, limit = 50 } = params;
     const where: Record<string, unknown> = {};
     if (hospitalId) where.hospitalId = hospitalId;
-    if (entity)     where.entity     = entity;
-    if (action)     where.action     = action;
+    if (entity) where.entity = entity;
+    if (action) where.action = action;
 
     const [records, total] = await this.prisma.$transaction([
       this.prisma.auditLog.findMany({

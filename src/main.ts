@@ -1,6 +1,6 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
 // Node.js 18 da global.crypto yo'q — @nestjs/schedule v6 uchun polyfill
 if (!global.crypto) {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
   (global as any).crypto = require('crypto').webcrypto;
 }
 
@@ -24,10 +24,12 @@ async function bootstrap() {
   });
 
   // Security headers
-  app.use(helmet({
-    crossOriginResourcePolicy: { policy: 'cross-origin' }, // uploads uchun
-    contentSecurityPolicy: false, // API server uchun kerak emas
-  }));
+  app.use(
+    helmet({
+      crossOriginResourcePolicy: { policy: 'cross-origin' }, // uploads uchun
+      contentSecurityPolicy: false, // API server uchun kerak emas
+    }),
+  );
 
   // WebSocket adapter (same port as HTTP)
   app.useWebSocketAdapter(new WsAdapter(app));
@@ -92,7 +94,9 @@ async function bootstrap() {
     : '';
 
   console.log(`\n🏥 ${workerId}Maternity Ward Attendance API`);
-  console.log(`🚀 ${workerId}Server running on: http://localhost:${port}/api/v1`);
+  console.log(
+    `🚀 ${workerId}Server running on: http://localhost:${port}/api/v1`,
+  );
   console.log(`❤️  Health check: http://localhost:${port}/api/v1/health`);
   console.log(`📦 Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`🧠 Memory limit: ${process.env.NODE_OPTIONS || 'default'}\n`);
@@ -105,7 +109,7 @@ async function bootstrap() {
     process.exit(0);
   };
 
-  process.on('SIGINT',  () => shutdown('SIGINT'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
 }
 

@@ -10,7 +10,7 @@ import { UserRole } from '@prisma/client';
  * ADMIN, DIRECTOR va boshqa rollar kasalxona ichida alohida yaratiladi.
  */
 const ALLOWED_ROLES = [UserRole.MINISTRY, UserRole.ASSISTANT_ADMIN] as const;
-export type AllowedRegisterRole = typeof ALLOWED_ROLES[number];
+export type AllowedRegisterRole = (typeof ALLOWED_ROLES)[number];
 
 export class RegisterDto {
   @IsString()

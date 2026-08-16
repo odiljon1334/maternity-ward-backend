@@ -1,13 +1,18 @@
 import {
-  Controller, Get, Param, Query,
-  UseGuards, ParseIntPipe, DefaultValuePipe,
+  Controller,
+  Get,
+  Param,
+  Query,
+  UseGuards,
+  ParseIntPipe,
+  DefaultValuePipe,
 } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 
 import { MinistryService } from './ministry.service';
-import { JwtAuthGuard }  from '../common/guards/jwt-auth.guard';
-import { RolesGuard }    from '../common/guards/roles.guard';
-import { Roles }         from '../common/decorators/roles.decorator';
+import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { RolesGuard } from '../common/guards/roles.guard';
+import { Roles } from '../common/decorators/roles.decorator';
 
 /** Faqat SUPER_ADMIN va MINISTRY roli kirishi mumkin */
 const MINISTRY_ROLES = [UserRole.SUPER_ADMIN, UserRole.MINISTRY];
@@ -34,10 +39,7 @@ export class MinistryController {
    * ?date=2026-04-11
    */
   @Get('hospitals/:id/detail')
-  getHospitalDetail(
-    @Param('id') id: string,
-    @Query('date') date?: string,
-  ) {
+  getHospitalDetail(@Param('id') id: string, @Query('date') date?: string) {
     return this.service.getHospitalDetail(id, date);
   }
 
@@ -50,7 +52,7 @@ export class MinistryController {
   @Get('attendance/absent')
   getAbsentToday(
     @Query('hospitalId') hospitalId?: string,
-    @Query('date')       date?: string,
+    @Query('date') date?: string,
   ) {
     return this.service.getAbsentToday(hospitalId, date);
   }
@@ -62,8 +64,14 @@ export class MinistryController {
    */
   @Get('payroll/summary')
   getPayrollSummary(
-    @Query('month', new DefaultValuePipe(new Date().getMonth() + 1), ParseIntPipe) month: number,
-    @Query('year',  new DefaultValuePipe(new Date().getFullYear()),   ParseIntPipe) year:  number,
+    @Query(
+      'month',
+      new DefaultValuePipe(new Date().getMonth() + 1),
+      ParseIntPipe,
+    )
+    month: number,
+    @Query('year', new DefaultValuePipe(new Date().getFullYear()), ParseIntPipe)
+    year: number,
   ) {
     return this.service.getPayrollSummary(month, year);
   }

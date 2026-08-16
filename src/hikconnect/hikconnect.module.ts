@@ -5,9 +5,9 @@ import { AudioGateway } from './audio.gateway';
 import { PrismaModule } from '../prisma/prisma.module';
 
 @Module({
-  imports:     [PrismaModule],
+  imports: [PrismaModule],
   controllers: [HikConnectController],
-  providers:   [HikConnectService, AudioGateway],
-  exports:     [HikConnectService],
+  providers: [HikConnectService, AudioGateway],
+  exports: [HikConnectService],
 })
 export class HikConnectModule {}

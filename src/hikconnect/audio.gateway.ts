@@ -14,26 +14,28 @@ import { PrismaService } from '../prisma/prisma.service';
 
 // ─── G.711 μ-law encoder (PCM Int16 → μ-law 8-bit) ─────────────────────────
 const EXP_LUT = [
-  0,0,1,1,2,2,2,2,3,3,3,3,3,3,3,3,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,
-  5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,
-  6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,
-  6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,
-  7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
-  7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
-  7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
-  7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
+  0, 0, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+  4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+  5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
+  6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
+  6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 7, 7,
+  7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+  7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+  7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+  7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+  7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
 ];
 
 function pcm16ToUlaw(sample: number): number {
   const BIAS = 0x84;
   const CLIP = 32635;
-  let sign = (sample >> 8) & 0x80;
+  const sign = (sample >> 8) & 0x80;
   if (sign) sample = -sample;
   if (sample > CLIP) sample = CLIP;
   sample += BIAS;
-  const exp = EXP_LUT[(sample >> 7) & 0xFF];
-  const mantissa = (sample >> (exp + 3)) & 0x0F;
-  return (~(sign | (exp << 4) | mantissa)) & 0xFF;
+  const exp = EXP_LUT[(sample >> 7) & 0xff];
+  const mantissa = (sample >> (exp + 3)) & 0x0f;
+  return ~(sign | (exp << 4) | mantissa) & 0xff;
 }
 
 function pcmBufferToUlaw(pcmInt16: Buffer): Buffer {
@@ -57,10 +59,10 @@ function buildDigestAuth(
   user: string,
   pass: string,
 ): string {
-  const realm    = (wwwAuth.match(/realm="([^"]*)"/)    || [])[1] ?? '';
-  const nonce    = (wwwAuth.match(/nonce="([^"]*)"/)    || [])[1] ?? '';
-  const qop      = (wwwAuth.match(/qop="([^"]*)"/)      || [])[1] ?? '';
-  const opaque   = (wwwAuth.match(/opaque="([^"]*)"/)   || [])[1] ?? '';
+  const realm = (wwwAuth.match(/realm="([^"]*)"/) || [])[1] ?? '';
+  const nonce = (wwwAuth.match(/nonce="([^"]*)"/) || [])[1] ?? '';
+  const qop = (wwwAuth.match(/qop="([^"]*)"/) || [])[1] ?? '';
+  const opaque = (wwwAuth.match(/opaque="([^"]*)"/) || [])[1] ?? '';
 
   const ha1 = md5(`${user}:${realm}:${pass}`);
   const ha2 = md5(`${method}:${path}`);
@@ -69,10 +71,10 @@ function buildDigestAuth(
   let extras = '';
 
   if (qop === 'auth' || qop === 'auth,auth-int') {
-    const nc     = '00000001';
+    const nc = '00000001';
     const cnonce = crypto.randomBytes(8).toString('hex');
     response = md5(`${ha1}:${nonce}:${nc}:${cnonce}:auth:${ha2}`);
-    extras   = `, qop=auth, nc=${nc}, cnonce="${cnonce}"`;
+    extras = `, qop=auth, nc=${nc}, cnonce="${cnonce}"`;
   } else {
     response = md5(`${ha1}:${nonce}:${ha2}`);
   }
@@ -87,7 +89,7 @@ function buildDigestAuth(
 
 // ─── Session record ──────────────────────────────────────────────────────────
 interface AudioSession {
-  req:    http.ClientRequest;
+  req: http.ClientRequest;
   active: boolean;
 }
 
@@ -119,7 +121,9 @@ export class AudioGateway implements OnGatewayConnection, OnGatewayDisconnect {
   handleDisconnect(client: WebSocket) {
     const session = this.sessions.get(client);
     if (session?.active) {
-      try { session.req.end(); } catch {}
+      try {
+        session.req.end();
+      } catch {}
     }
     this.sessions.delete(client);
   }
@@ -134,14 +138,14 @@ export class AudioGateway implements OnGatewayConnection, OnGatewayDisconnect {
     });
 
     if (!camera?.deviceSerial) {
-      this.send(client, 'error', 'RTSP URL sozlanmagan (deviceSerial bo\'sh)');
+      this.send(client, 'error', "RTSP URL sozlanmagan (deviceSerial bo'sh)");
       return;
     }
 
     // rtsp://user:pass@host:port/...
     const m = camera.deviceSerial.match(/^rtsp:\/\/([^:@]+):([^@]+)@([^:/]+)/i);
     if (!m) {
-      this.send(client, 'error', 'RTSP URL formati noto\'g\'ri');
+      this.send(client, 'error', "RTSP URL formati noto'g'ri");
       return;
     }
     const [, user, pass, host] = m;
@@ -162,7 +166,9 @@ export class AudioGateway implements OnGatewayConnection, OnGatewayDisconnect {
   onStopAudio(client: WebSocket) {
     const session = this.sessions.get(client);
     if (session?.active) {
-      try { session.req.end(); } catch {}
+      try {
+        session.req.end();
+      } catch {}
       session.active = false;
     }
     this.sessions.delete(client);
@@ -187,7 +193,7 @@ export class AudioGateway implements OnGatewayConnection, OnGatewayDisconnect {
     user: string,
     pass: string,
   ): Promise<http.ClientRequest> {
-    const path   = '/ISAPI/Streaming/channels/101/httpTwoWayAudio';
+    const path = '/ISAPI/Streaming/channels/101/httpTwoWayAudio';
     const method = 'PUT';
 
     return new Promise((resolve, reject) => {
@@ -198,21 +204,23 @@ export class AudioGateway implements OnGatewayConnection, OnGatewayDisconnect {
           res.resume(); // drain
           if (res.statusCode === 401) {
             const wwwAuth = res.headers['www-authenticate'] || '';
-            const auth    = buildDigestAuth(wwwAuth, method, path, user, pass);
+            const auth = buildDigestAuth(wwwAuth, method, path, user, pass);
 
             // Step 2: real request with auth, keep-alive body stream
             const req = http.request({
               hostname: host,
-              port:     80,
+              port: 80,
               path,
               method,
               headers: {
-                Authorization:     auth,
-                'Content-Type':    'application/octet-stream',
+                Authorization: auth,
+                'Content-Type': 'application/octet-stream',
                 'Transfer-Encoding': 'chunked',
               },
             });
-            req.on('error', (e) => this.logger.warn(`Hikvision audio req err: ${e.message}`));
+            req.on('error', (e) =>
+              this.logger.warn(`Hikvision audio req err: ${e.message}`),
+            );
             req.on('response', (r) => {
               r.resume();
               if (r.statusCode && r.statusCode >= 400) {
@@ -223,7 +231,10 @@ export class AudioGateway implements OnGatewayConnection, OnGatewayDisconnect {
           } else if (res.statusCode === 200 || res.statusCode === 204) {
             // Device accepts without auth (shouldn't happen but handle it)
             const req = http.request({
-              hostname: host, port: 80, path, method,
+              hostname: host,
+              port: 80,
+              path,
+              method,
               headers: {
                 'Content-Type': 'application/octet-stream',
                 'Transfer-Encoding': 'chunked',
@@ -231,12 +242,21 @@ export class AudioGateway implements OnGatewayConnection, OnGatewayDisconnect {
             });
             resolve(req);
           } else {
-            reject(new Error(`Terminal ${res.statusCode} qaytardi. Two-way audio qo'llab-quvvatlanmasligi mumkin.`));
+            reject(
+              new Error(
+                `Terminal ${res.statusCode} qaytardi. Two-way audio qo'llab-quvvatlanmasligi mumkin.`,
+              ),
+            );
           }
         },
       );
-      probe.on('error', (e) => reject(new Error(`Terminal ulanmadi: ${e.message}`)));
-      probe.on('timeout', () => { probe.destroy(); reject(new Error('Terminal timeout (5s)')); });
+      probe.on('error', (e) =>
+        reject(new Error(`Terminal ulanmadi: ${e.message}`)),
+      );
+      probe.on('timeout', () => {
+        probe.destroy();
+        reject(new Error('Terminal timeout (5s)'));
+      });
       probe.end();
     });
   }

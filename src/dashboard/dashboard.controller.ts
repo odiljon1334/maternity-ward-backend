@@ -102,7 +102,10 @@ export class DashboardController {
     @Query('targetHospitalId') targetHospitalId?: string,
   ) {
     const hospitalId = targetHospitalId || jwtHospitalId || undefined;
-    return this.service.getLeaveStats(+(year || new Date().getFullYear()), hospitalId);
+    return this.service.getLeaveStats(
+      +(year || new Date().getFullYear()),
+      hospitalId,
+    );
   }
 
   @Get('analytics/checkin-heatmap')

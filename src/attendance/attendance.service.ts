@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { AttendanceStatus, TerminalEventType } from '@prisma/client';
 import dayjs from 'dayjs';
 import type { Dayjs } from 'dayjs';
@@ -11,10 +16,13 @@ import { PrismaService } from '../prisma/prisma.service';
 import { TelegramService } from '../telegram/telegram.service';
 import { DateUtil } from '../common/utils/date.util';
 import { isHospitalBlocked } from '../common/utils/payment.util';
-import { calcNetWorkMin }          from '../common/utils/shift.util';
+import { calcNetWorkMin } from '../common/utils/shift.util';
 import { haversineMeters, formatDistance } from '../common/utils/geo.util';
 import { processAndSavePhoto } from '../common/utils/image.util';
-import { LATE_GRACE_MINUTES, WEEKLY_LATE_THRESHOLD_MIN } from '../common/constants';
+import {
+  LATE_GRACE_MINUTES,
+  WEEKLY_LATE_THRESHOLD_MIN,
+} from '../common/constants';
 import { SelfCheckInDto } from './dto/self-check-in.dto';
 
 dayjs.extend(utc);
@@ -36,25 +44,25 @@ const LUNCH_WINDOW_MIN = 45;
 
 /** Webhook controller tomonidan to'ldirilgan hodisa */
 export interface HikvisionEvent {
-  employeeNo:        string;
-  deviceId?:         string;
-  deviceName?:       string;
-  eventTime?:        string;
+  employeeNo: string;
+  deviceId?: string;
+  deviceName?: string;
+  eventTime?: string;
   /**
    * Terminal tugmasi bosilganda aniq status.
    * null = terminal status yuborмади → time-based fallback ishlatiladi.
    */
   terminalEventType: TerminalEventType | null;
-  rawPayload?:       any;
+  rawPayload?: any;
 }
 
 /** processHikvisionEvent natijasi */
 export interface ProcessResult {
-  employee:        any;
-  action:          TerminalEventType;
-  attendance:      any;
+  employee: any;
+  action: TerminalEventType;
+  attendance: any;
   /** false bo'lsa — Telegram xabar yuborilmaydi (tushlik/coffee return uchun) */
-  notifyTelegram:  boolean;
+  notifyTelegram: boolean;
 }
 
 // ─── SERVICE ──────────────────────────────────────────────────────────────────
@@ -64,16 +72,25 @@ export class AttendanceService {
   private readonly logger = new Logger(AttendanceService.name);
 
   constructor(
-    private readonly prisma:    PrismaService,
-    private readonly telegram:  TelegramService,
+    private readonly prisma: PrismaService,
+    private readonly telegram: TelegramService,
   ) {}
 
   // ──────────────────────────────────────────────────────────────────────────────
   // PUBLIC: HIKVISION WEBHOOK — asosiy kirish nuqtasi
   // ──────────────────────────────────────────────────────────────────────────────
 
-  async processHikvisionEvent(event: HikvisionEvent): Promise<ProcessResult | null> {
-    const { employeeNo, deviceId, deviceName, eventTime, terminalEventType, rawPayload } = event;
+  async processHikvisionEvent(
+    event: HikvisionEvent,
+  ): Promise<ProcessResult | null> {
+    const {
+      employeeNo,
+      deviceId,
+      deviceName,
+      eventTime,
+      terminalEventType,
+      rawPayload,
+    } = event;
 
     // 1. Xodimni topish
     const employee = await this.prisma.employee.findUnique({
@@ -88,16 +105,22 @@ export class AttendanceService {
 
     // 2. Kasalxona blok tekshiruvi
     if (await isHospitalBlocked(this.prisma, employee.hospitalId)) {
-      this.logger.warn(`Kasalxona ${employee.hospitalId} BLOCKED — ${employee.fullName} uchun davomat yozilmadi`);
+      this.logger.warn(
+        `Kasalxona ${employee.hospitalId} BLOCKED — ${employee.fullName} uchun davomat yozilmadi`,
+      );
       return null;
     }
 
     const eventDate = DateUtil.parseTerminalTime(eventTime);
-    const workDate  = DateUtil.startOfDay(eventDate);
-    const tzDate    = dayjs(eventDate).tz(TZ);
+    const workDate = DateUtil.startOfDay(eventDate);
+    const tzDate = dayjs(eventDate).tz(TZ);
 
     // 3. Bugungi jadval
-    const schedule     = await this.findTodaySchedule(employee.id, workDate, tzDate);
+    const schedule = await this.findTodaySchedule(
+      employee.id,
+      workDate,
+      tzDate,
+    );
     const fallbackShift = !schedule
       ? await this.findFallbackShift(employee.hospitalId, tzDate)
       : null;
@@ -109,23 +132,23 @@ export class AttendanceService {
     });
 
     // 5. Event turini aniqlash: terminal explicit → fallback time-based
-    const resolvedType = terminalEventType
-      ?? this.inferEventType(attendance, eventDate, shift);
+    const resolvedType =
+      terminalEventType ?? this.inferEventType(attendance, eventDate, shift);
 
     this.logger.log(
       `${employee.fullName} | type=${resolvedType} | ` +
-      `explicit=${terminalEventType ?? 'none'} | time=${eventDate.toISOString()}`,
+        `explicit=${terminalEventType ?? 'none'} | time=${eventDate.toISOString()}`,
     );
 
     // 6. AttendanceEvent (audit log) — har doim saqlanadi
     await this.saveAttendanceEvent({
       employeeId: employee.id,
-      eventType:  resolvedType,
+      eventType: resolvedType,
       deviceId,
       deviceName,
-      rawTime:    eventDate,
+      rawTime: eventDate,
       rawPayload,
-      recordId:   attendance?.id ?? null,
+      recordId: attendance?.id ?? null,
     });
 
     // 7. Harakatni bajarish
@@ -158,11 +181,15 @@ export class AttendanceService {
 
       case TerminalEventType.CHECK_OUT:
         if (!attendance) {
-          this.logger.warn(`${employee.fullName}: CHECK_OUT keldi lekin check-in yo'q — ignore`);
+          this.logger.warn(
+            `${employee.fullName}: CHECK_OUT keldi lekin check-in yo'q — ignore`,
+          );
           return null;
         }
         if (attendance.checkOut) {
-          this.logger.log(`${employee.fullName}: allaqachon check-out qilgan — ignore`);
+          this.logger.log(
+            `${employee.fullName}: allaqachon check-out qilgan — ignore`,
+          );
           return null;
         }
         return this.handleCheckOut(ctx);
@@ -172,7 +199,8 @@ export class AttendanceService {
         return this.handleLunchOut(ctx);
 
       case TerminalEventType.LUNCH_IN:
-        if (!attendance || !attendance.lunchOut || attendance.lunchIn) return null;
+        if (!attendance || !attendance.lunchOut || attendance.lunchIn)
+          return null;
         return this.handleLunchIn(ctx);
 
       case TerminalEventType.COFFEE_OUT:
@@ -180,7 +208,8 @@ export class AttendanceService {
         return this.handleCoffeeOut(ctx);
 
       case TerminalEventType.COFFEE_IN:
-        if (!attendance || !attendance.coffeeOut || attendance.coffeeIn) return null;
+        if (!attendance || !attendance.coffeeOut || attendance.coffeeIn)
+          return null;
         return this.handleCoffeeIn(ctx);
 
       case TerminalEventType.OVERTIME_IN:
@@ -200,8 +229,11 @@ export class AttendanceService {
   // ──────────────────────────────────────────────────────────────────────────────
 
   /** Xodim keldi — yangi AttendanceRecord yaratadi */
-  private async handleCheckIn(ctx: EventContext): Promise<ProcessResult | null> {
-    const { employee, eventDate, workDate, schedule, fallbackShift, deviceId } = ctx;
+  private async handleCheckIn(
+    ctx: EventContext,
+  ): Promise<ProcessResult | null> {
+    const { employee, eventDate, workDate, schedule, fallbackShift, deviceId } =
+      ctx;
 
     if (ctx.attendance) {
       // Allaqachon check-in bor — ignore (duplicate scan)
@@ -212,20 +244,35 @@ export class AttendanceService {
       return null;
     }
 
-    const expectedCheckIn = this.buildExpectedCheckIn(workDate, schedule, fallbackShift);
-    const expectedCheckOut = this.buildExpectedCheckOut(workDate, schedule, fallbackShift);
+    const expectedCheckIn = this.buildExpectedCheckIn(
+      workDate,
+      schedule,
+      fallbackShift,
+    );
+    const expectedCheckOut = this.buildExpectedCheckOut(
+      workDate,
+      schedule,
+      fallbackShift,
+    );
 
-    const graceMin  = schedule?.shift?.graceMinutes ?? fallbackShift?.graceMinutes ?? LATE_GRACE_MINUTES;
-    const lateMinutes = this.calcLateMinutes(eventDate, expectedCheckIn, graceMin);
+    const graceMin =
+      schedule?.shift?.graceMinutes ??
+      fallbackShift?.graceMinutes ??
+      LATE_GRACE_MINUTES;
+    const lateMinutes = this.calcLateMinutes(
+      eventDate,
+      expectedCheckIn,
+      graceMin,
+    );
     const status: AttendanceStatus = lateMinutes > 0 ? 'LATE' : 'PRESENT';
 
     const attendance = await this.prisma.attendanceRecord.create({
       data: {
-        employeeId:       employee.id,
-        scheduleId:       schedule?.id,
+        employeeId: employee.id,
+        scheduleId: schedule?.id,
         deviceId,
-        rawCheckInTime:   eventDate,
-        checkIn:          eventDate,
+        rawCheckInTime: eventDate,
+        checkIn: eventDate,
         expectedCheckIn,
         expectedCheckOut,
         workDate,
@@ -234,10 +281,26 @@ export class AttendanceService {
       },
     });
 
-    await this.updateAttendanceEventRecord(employee.id, eventDate, attendance.id);
-    await this.updateWeeklyStats(employee.id, eventDate, lateMinutes, 0, 0, true); // isCheckIn=true
+    await this.updateAttendanceEventRecord(
+      employee.id,
+      eventDate,
+      attendance.id,
+    );
+    await this.updateWeeklyStats(
+      employee.id,
+      eventDate,
+      lateMinutes,
+      0,
+      0,
+      true,
+    ); // isCheckIn=true
 
-    return { employee, action: TerminalEventType.CHECK_IN, attendance, notifyTelegram: true };
+    return {
+      employee,
+      action: TerminalEventType.CHECK_IN,
+      attendance,
+      notifyTelegram: true,
+    };
   }
 
   /** Xodim ketdi — AttendanceRecord ni yakunlaydi */
@@ -246,12 +309,17 @@ export class AttendanceService {
     const rec = attendance!;
 
     // expectedCheckOut null bo'lsa — shift dan qayta hisoblash
-    const expectedEnd: Date = rec.expectedCheckOut
-      ?? this.buildExpectedCheckOut(rec.workDate, schedule, fallbackShift);
+    const expectedEnd: Date =
+      rec.expectedCheckOut ??
+      this.buildExpectedCheckOut(rec.workDate, schedule, fallbackShift);
 
-    const earlyLeaveMin   = this.calcEarlyLeaveMinutes(eventDate, expectedEnd);
+    const earlyLeaveMin = this.calcEarlyLeaveMinutes(eventDate, expectedEnd);
     const overtimeMinutes = this.calcOvertimeMinutes(eventDate, expectedEnd);
-    const newStatus       = this.recalcStatus(rec.status, rec.lateMinutes, earlyLeaveMin);
+    const newStatus = this.recalcStatus(
+      rec.status,
+      rec.lateMinutes,
+      earlyLeaveMin,
+    );
 
     // Sof ish vaqti: brutto − tushlik (haqiqiy yoki rejalashtirilgan)
     const shift = schedule?.shift ?? fallbackShift;
@@ -270,26 +338,41 @@ export class AttendanceService {
       where: { id: rec.id },
       data: {
         rawCheckOutTime: eventDate,
-        checkOut:        eventDate,
+        checkOut: eventDate,
         earlyLeaveMin,
         overtimeMinutes,
         netWorkMin,
-        status:          newStatus,
+        status: newStatus,
       },
     });
 
-    await this.updateWeeklyStats(employee.id, eventDate, 0, earlyLeaveMin, overtimeMinutes);
+    await this.updateWeeklyStats(
+      employee.id,
+      eventDate,
+      0,
+      earlyLeaveMin,
+      overtimeMinutes,
+    );
 
-    return { employee, action: TerminalEventType.CHECK_OUT, attendance: updated, notifyTelegram: true };
+    return {
+      employee,
+      action: TerminalEventType.CHECK_OUT,
+      attendance: updated,
+      notifyTelegram: true,
+    };
   }
 
   /** Tushlikka chiqdi */
-  private async handleLunchOut(ctx: EventContext): Promise<ProcessResult | null> {
+  private async handleLunchOut(
+    ctx: EventContext,
+  ): Promise<ProcessResult | null> {
     const { employee, eventDate, attendance } = ctx;
     const rec = attendance!;
 
     if (rec.lunchOut) {
-      this.logger.log(`${employee.fullName}: lunchOut allaqachon yozilgan — ignore`);
+      this.logger.log(
+        `${employee.fullName}: lunchOut allaqachon yozilgan — ignore`,
+      );
       return null;
     }
 
@@ -304,21 +387,41 @@ export class AttendanceService {
     });
 
     this.logger.log(`Tushlik OUT: ${employee.fullName}`);
-    return { employee, action: TerminalEventType.LUNCH_OUT, attendance: rec, notifyTelegram: false };
+    return {
+      employee,
+      action: TerminalEventType.LUNCH_OUT,
+      attendance: rec,
+      notifyTelegram: false,
+    };
   }
 
   /** Tushlikdan qaytdi */
-  private async handleLunchIn(ctx: EventContext): Promise<ProcessResult | null> {
+  private async handleLunchIn(
+    ctx: EventContext,
+  ): Promise<ProcessResult | null> {
     const { employee, eventDate, attendance, shift } = ctx;
     const rec = attendance!;
 
-    const lunchLateMin = this.calcLunchLateMinutes(eventDate, shift?.lunchEnd, shift?.lunchGraceMin);
-    const newLateMin   = rec.lateMinutes + lunchLateMin;
-    const newStatus    = this.recalcStatus(rec.status, newLateMin, rec.earlyLeaveMin);
+    const lunchLateMin = this.calcLunchLateMinutes(
+      eventDate,
+      shift?.lunchEnd,
+      shift?.lunchGraceMin,
+    );
+    const newLateMin = rec.lateMinutes + lunchLateMin;
+    const newStatus = this.recalcStatus(
+      rec.status,
+      newLateMin,
+      rec.earlyLeaveMin,
+    );
 
     await this.prisma.attendanceRecord.update({
       where: { id: rec.id },
-      data: { lunchIn: eventDate, lunchLateMin, lateMinutes: newLateMin, status: newStatus },
+      data: {
+        lunchIn: eventDate,
+        lunchLateMin,
+        lateMinutes: newLateMin,
+        status: newStatus,
+      },
     });
 
     // BreakRecord ni yangilash (endTime qo'shish)
@@ -335,21 +438,32 @@ export class AttendanceService {
 
     if (lunchLateMin > 0) {
       await this.updateWeeklyStats(employee.id, eventDate, lunchLateMin, 0, 0);
-      this.logger.log(`Tushlik IN (${lunchLateMin}min kech): ${employee.fullName}`);
+      this.logger.log(
+        `Tushlik IN (${lunchLateMin}min kech): ${employee.fullName}`,
+      );
     } else {
       this.logger.log(`Tushlik IN (o'z vaqtida): ${employee.fullName}`);
     }
 
-    return { employee, action: TerminalEventType.LUNCH_IN, attendance: rec, notifyTelegram: false };
+    return {
+      employee,
+      action: TerminalEventType.LUNCH_IN,
+      attendance: rec,
+      notifyTelegram: false,
+    };
   }
 
   /** Coffee/tanaffusga chiqdi */
-  private async handleCoffeeOut(ctx: EventContext): Promise<ProcessResult | null> {
+  private async handleCoffeeOut(
+    ctx: EventContext,
+  ): Promise<ProcessResult | null> {
     const { employee, eventDate, attendance } = ctx;
     const rec = attendance!;
 
     if (rec.coffeeOut) {
-      this.logger.log(`${employee.fullName}: coffeeOut allaqachon yozilgan — ignore`);
+      this.logger.log(
+        `${employee.fullName}: coffeeOut allaqachon yozilgan — ignore`,
+      );
       return null;
     }
 
@@ -363,11 +477,18 @@ export class AttendanceService {
     });
 
     this.logger.log(`Coffee OUT: ${employee.fullName}`);
-    return { employee, action: TerminalEventType.COFFEE_OUT, attendance: rec, notifyTelegram: false };
+    return {
+      employee,
+      action: TerminalEventType.COFFEE_OUT,
+      attendance: rec,
+      notifyTelegram: false,
+    };
   }
 
   /** Coffee/tanaffusdan qaytdi */
-  private async handleCoffeeIn(ctx: EventContext): Promise<ProcessResult | null> {
+  private async handleCoffeeIn(
+    ctx: EventContext,
+  ): Promise<ProcessResult | null> {
     const { employee, eventDate, attendance } = ctx;
     const rec = attendance!;
 
@@ -388,7 +509,12 @@ export class AttendanceService {
     }
 
     this.logger.log(`Coffee IN: ${employee.fullName}`);
-    return { employee, action: TerminalEventType.COFFEE_IN, attendance: rec, notifyTelegram: false };
+    return {
+      employee,
+      action: TerminalEventType.COFFEE_IN,
+      attendance: rec,
+      notifyTelegram: false,
+    };
   }
 
   // ──────────────────────────────────────────────────────────────────────────────
@@ -437,28 +563,30 @@ export class AttendanceService {
 
   private async saveAttendanceEvent(params: {
     employeeId: string;
-    eventType:  TerminalEventType;
-    deviceId?:  string;
+    eventType: TerminalEventType;
+    deviceId?: string;
     deviceName?: string;
-    rawTime:    Date;
+    rawTime: Date;
     rawPayload?: any;
-    recordId:   string | null;
+    recordId: string | null;
   }): Promise<void> {
     try {
       await this.prisma.attendanceEvent.create({
         data: {
           employeeId: params.employeeId,
-          eventType:  params.eventType,
-          deviceId:   params.deviceId,
+          eventType: params.eventType,
+          deviceId: params.deviceId,
           deviceName: params.deviceName,
-          rawTime:    params.rawTime,
+          rawTime: params.rawTime,
           rawPayload: params.rawPayload ?? null,
-          recordId:   params.recordId,
+          recordId: params.recordId,
         },
       });
     } catch (err) {
       // Audit log xatosi asosiy jarayonni to'xtatmasin
-      this.logger.error(`AttendanceEvent saqlanmadi: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.error(
+        `AttendanceEvent saqlanmadi: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 
@@ -469,17 +597,19 @@ export class AttendanceService {
     recordId: string,
   ): Promise<void> {
     const dayStart = DateUtil.startOfDay(date);
-    const dayEnd   = new Date(dayStart.getTime() + 24 * 3600 * 1000);
+    const dayEnd = new Date(dayStart.getTime() + 24 * 3600 * 1000);
     try {
       await this.prisma.attendanceEvent.updateMany({
         where: {
           employeeId,
-          rawTime:  { gte: dayStart, lt: dayEnd },
+          rawTime: { gte: dayStart, lt: dayEnd },
           recordId: null,
         },
         data: { recordId },
       });
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
 
   // ──────────────────────────────────────────────────────────────────────────────
@@ -491,269 +621,288 @@ export class AttendanceService {
       where: { id: userId },
       include: { employee: true },
     });
-    if (!user?.employee) throw new NotFoundException('Bu foydalanuvchi uchun xodim profili topilmadi');
+    if (!user?.employee)
+      throw new NotFoundException(
+        'Bu foydalanuvchi uchun xodim profili topilmadi',
+      );
     return this.getEmployeeAttendance(user.employee.id, month, year);
   }
 
   async getEmployeeAttendance(employeeId: string, month: number, year: number) {
     const start = DateUtil.startOfMonth(year, month);
-    const end   = DateUtil.endOfMonth(year, month);
+    const end = DateUtil.endOfMonth(year, month);
 
     const records = await this.prisma.attendanceRecord.findMany({
-      where:   { employeeId, workDate: { gte: start, lte: end } },
+      where: { employeeId, workDate: { gte: start, lte: end } },
       include: { schedule: { include: { shift: true } }, breaks: true },
       orderBy: { workDate: 'asc' },
     });
 
     const stats = {
-      totalDays:      records.length,
-      present:        records.filter(r => r.status === 'PRESENT').length,
-      late:           records.filter(r => ['LATE', 'LATE_EARLY'].includes(r.status)).length,
-      absent:         records.filter(r => r.status === 'ABSENT').length,
-      earlyLeave:     records.filter(r => ['EARLY_LEAVE', 'LATE_EARLY'].includes(r.status)).length,
-      totalLateMin:   records.reduce((s, r) => s + r.lateMinutes, 0),
+      totalDays: records.length,
+      present: records.filter((r) => r.status === 'PRESENT').length,
+      late: records.filter((r) => ['LATE', 'LATE_EARLY'].includes(r.status))
+        .length,
+      absent: records.filter((r) => r.status === 'ABSENT').length,
+      earlyLeave: records.filter((r) =>
+        ['EARLY_LEAVE', 'LATE_EARLY'].includes(r.status),
+      ).length,
+      totalLateMin: records.reduce((s, r) => s + r.lateMinutes, 0),
       totalOvertimeMin: records.reduce((s, r) => s + r.overtimeMinutes, 0),
     };
 
     return { records, stats };
   }
 
- // ──────────────────────────────────────────────────────────────────────────────
-// PRIVATE: WEEKEND HELPER
-// ──────────────────────────────────────────────────────────────────────────────
+  // ──────────────────────────────────────────────────────────────────────────────
+  // PRIVATE: WEEKEND HELPER
+  // ──────────────────────────────────────────────────────────────────────────────
 
-private isWeekend(date: Date): boolean {
-  const day = dayjs(date).tz(TZ).day(); // 0=Yakshanba, 6=Shanba
-  return day === 0 || day === 6;
-}
-
-// ──────────────────────────────────────────────────────────────────────────────
-// PUBLIC: DAILY ATTENDANCE
-// ──────────────────────────────────────────────────────────────────────────────
-
-async getDailyAttendance(date: string, departmentId?: string, hospitalId?: string) {
-  const workDate  = DateUtil.startOfDay(date);
-  const weekend   = this.isWeekend(workDate);
-
-  const empFilter: any = { firedAt: null };
-  if (hospitalId)   empFilter.hospitalId   = hospitalId;
-  if (departmentId) empFilter.departmentId = departmentId;
-
-  // 1. Haqiqiy davomat yozuvlari (har doim olinadi)
-  const records = await this.prisma.attendanceRecord.findMany({
-    where:   { workDate, employee: empFilter },
-    include: {
-      employee: { include: { department: true, position: true } },
-      schedule: { include: { shift: true } },
-      breaks:   true,
-    },
-    orderBy: { employee: { fullName: 'asc' } },
-  });
-
-  const attendedIds = new Set(records.map(r => r.employeeId));
-
-  // 2. Dam olish kuni bo'lsa — virtual ABSENT yaratmaymiz
-  //    Faqat haqiqiy kelganlarni qaytaramiz
-  if (weekend) {
-    return records.sort((a, b) =>
-      a.employee.fullName.localeCompare(b.employee.fullName),
-    );
+  private isWeekend(date: Date): boolean {
+    const day = dayjs(date).tz(TZ).day(); // 0=Yakshanba, 6=Shanba
+    return day === 0 || day === 6;
   }
 
-  // 3. Ish kuni — grafigi bor lekin kelmagan xodimlar (virtual ABSENT)
-  const scheduledMissing = await this.prisma.schedule.findMany({
-    where: {
-      date:       workDate,
-      status:     'WORKING',
-      employeeId: { notIn: [...attendedIds] },
-      employee:   empFilter,
-    },
-    include: {
-      shift:    true,
-      employee: { include: { department: true, position: true } },
-    },
-  });
+  // ──────────────────────────────────────────────────────────────────────────────
+  // PUBLIC: DAILY ATTENDANCE
+  // ──────────────────────────────────────────────────────────────────────────────
 
-  const absentVirtual = scheduledMissing.map(sch => ({
-    id:               `absent-${sch.employeeId}`,
-    employeeId:       sch.employeeId,
-    scheduleId:       sch.id,
-    deviceId:         null,
-    rawCheckInTime:   null,
-    rawCheckOutTime:  null,
-    checkIn:          null,
-    checkOut:         null,
-    lunchOut:         null,
-    lunchIn:          null,
-    lunchLateMin:     0,
-    coffeeOut:        null,
-    coffeeIn:         null,
-    coffeeLateMin:    0,
-    expectedCheckIn:  sch.shift
-      ? DateUtil.buildDateTime(workDate, sch.shift.startTime)
-      : new Date(workDate.getTime() + 8 * 3600 * 1000),
-    expectedCheckOut: sch.shift
-      ? (sch.shift.isOvernight
-          ? DateUtil.buildDateTime(dayjs(workDate).add(1, 'day').toDate(), sch.shift.endTime)
-          : DateUtil.buildDateTime(workDate, sch.shift.endTime))
-      : new Date(workDate.getTime() + 20 * 3600 * 1000),
-    status:           'ABSENT' as AttendanceStatus,
-    lateMinutes:      0,
-    earlyLeaveMin:    0,
-    overtimeMinutes:  0,
-    workDate,
-    note:             null,
-    breaks:           [],
-    createdAt:        workDate,
-    updatedAt:        workDate,
-    employee:         sch.employee,
-    schedule:         sch,
-  }));
+  async getDailyAttendance(
+    date: string,
+    departmentId?: string,
+    hospitalId?: string,
+  ) {
+    const workDate = DateUtil.startOfDay(date);
+    const weekend = this.isWeekend(workDate);
 
-  const allVirtual = [...records, ...absentVirtual];
+    const empFilter: any = { firedAt: null };
+    if (hospitalId) empFilter.hospitalId = hospitalId;
+    if (departmentId) empFilter.departmentId = departmentId;
 
-  // 4. Hech kim yo'q (na davomat, na jadval) — grafik yo'q xodimlar
-  //    Lekin ularni ABSENT emas, "grafik yo'q" deb ko'rsatamiz
-  if (allVirtual.length === 0) {
-    const allEmployees = await this.prisma.employee.findMany({
-      where:   empFilter,
+    // 1. Haqiqiy davomat yozuvlari (har doim olinadi)
+    const records = await this.prisma.attendanceRecord.findMany({
+      where: { workDate, employee: empFilter },
+      include: {
+        employee: { include: { department: true, position: true } },
+        schedule: { include: { shift: true } },
+        breaks: true,
+      },
+      orderBy: { employee: { fullName: 'asc' } },
+    });
+
+    const attendedIds = new Set(records.map((r) => r.employeeId));
+
+    // 2. Dam olish kuni bo'lsa — virtual ABSENT yaratmaymiz
+    //    Faqat haqiqiy kelganlarni qaytaramiz
+    if (weekend) {
+      return records.sort((a, b) =>
+        a.employee.fullName.localeCompare(b.employee.fullName),
+      );
+    }
+
+    // 3. Ish kuni — grafigi bor lekin kelmagan xodimlar (virtual ABSENT)
+    const scheduledMissing = await this.prisma.schedule.findMany({
+      where: {
+        date: workDate,
+        status: 'WORKING',
+        employeeId: { notIn: [...attendedIds] },
+        employee: empFilter,
+      },
+      include: {
+        shift: true,
+        employee: { include: { department: true, position: true } },
+      },
+    });
+
+    const absentVirtual = scheduledMissing.map((sch) => ({
+      id: `absent-${sch.employeeId}`,
+      employeeId: sch.employeeId,
+      scheduleId: sch.id,
+      deviceId: null,
+      rawCheckInTime: null,
+      rawCheckOutTime: null,
+      checkIn: null,
+      checkOut: null,
+      lunchOut: null,
+      lunchIn: null,
+      lunchLateMin: 0,
+      coffeeOut: null,
+      coffeeIn: null,
+      coffeeLateMin: 0,
+      expectedCheckIn: sch.shift
+        ? DateUtil.buildDateTime(workDate, sch.shift.startTime)
+        : new Date(workDate.getTime() + 8 * 3600 * 1000),
+      expectedCheckOut: sch.shift
+        ? sch.shift.isOvernight
+          ? DateUtil.buildDateTime(
+              dayjs(workDate).add(1, 'day').toDate(),
+              sch.shift.endTime,
+            )
+          : DateUtil.buildDateTime(workDate, sch.shift.endTime)
+        : new Date(workDate.getTime() + 20 * 3600 * 1000),
+      status: 'ABSENT' as AttendanceStatus,
+      lateMinutes: 0,
+      earlyLeaveMin: 0,
+      overtimeMinutes: 0,
+      workDate,
+      note: null,
+      breaks: [],
+      createdAt: workDate,
+      updatedAt: workDate,
+      employee: sch.employee,
+      schedule: sch,
+    }));
+
+    const allVirtual = [...records, ...absentVirtual];
+
+    // 4. Hech kim yo'q (na davomat, na jadval) — grafik yo'q xodimlar
+    //    Lekin ularni ABSENT emas, "grafik yo'q" deb ko'rsatamiz
+    if (allVirtual.length === 0) {
+      const allEmployees = await this.prisma.employee.findMany({
+        where: empFilter,
+        include: { department: true, position: true },
+        orderBy: { fullName: 'asc' },
+      });
+      if (allEmployees.length === 0) return [];
+
+      return allEmployees.map((emp) => ({
+        id: `noschedule-${emp.id}`,
+        employeeId: emp.id,
+        scheduleId: null,
+        deviceId: null,
+        rawCheckInTime: null,
+        rawCheckOutTime: null,
+        checkIn: null,
+        checkOut: null,
+        lunchOut: null,
+        lunchIn: null,
+        lunchLateMin: 0,
+        coffeeOut: null,
+        coffeeIn: null,
+        coffeeLateMin: 0,
+        expectedCheckIn: null,
+        expectedCheckOut: null,
+        // ⚠️ ABSENT EMAS — grafik yo'q xodim "kelmagan" hisoblanmaydi
+        status: 'NO_SCHEDULE' as any,
+        lateMinutes: 0,
+        earlyLeaveMin: 0,
+        overtimeMinutes: 0,
+        workDate,
+        note: "Grafik yo'q",
+        breaks: [],
+        createdAt: workDate,
+        updatedAt: workDate,
+        employee: emp,
+        schedule: null,
+      }));
+    }
+
+    // 5. Aralash holat: ba'zi xodimlarning grafigi bor (records/absentVirtual),
+    //    ba'zilarining yo'q — ularni ham NO_SCHEDULE sifatida qo'shamiz
+    const allIds = new Set(allVirtual.map((r) => r.employeeId));
+
+    const noScheduleEmployees = await this.prisma.employee.findMany({
+      where: {
+        ...empFilter,
+        id: { notIn: [...allIds] },
+      },
       include: { department: true, position: true },
       orderBy: { fullName: 'asc' },
     });
-    if (allEmployees.length === 0) return [];
 
-    return allEmployees.map(emp => ({
-      id:               `noschedule-${emp.id}`,
-      employeeId:       emp.id,
-      scheduleId:       null,
-      deviceId:         null,
-      rawCheckInTime:   null,
-      rawCheckOutTime:  null,
-      checkIn:          null,
-      checkOut:         null,
-      lunchOut:         null,
-      lunchIn:          null,
-      lunchLateMin:     0,
-      coffeeOut:        null,
-      coffeeIn:         null,
-      coffeeLateMin:    0,
-      expectedCheckIn:  null,
+    const noScheduleVirtual = noScheduleEmployees.map((emp) => ({
+      id: `noschedule-${emp.id}`,
+      employeeId: emp.id,
+      scheduleId: null,
+      deviceId: null,
+      rawCheckInTime: null,
+      rawCheckOutTime: null,
+      checkIn: null,
+      checkOut: null,
+      lunchOut: null,
+      lunchIn: null,
+      lunchLateMin: 0,
+      coffeeOut: null,
+      coffeeIn: null,
+      coffeeLateMin: 0,
+      expectedCheckIn: null,
       expectedCheckOut: null,
-      // ⚠️ ABSENT EMAS — grafik yo'q xodim "kelmagan" hisoblanmaydi
-      status:           'NO_SCHEDULE' as any,
-      lateMinutes:      0,
-      earlyLeaveMin:    0,
-      overtimeMinutes:  0,
+      status: 'NO_SCHEDULE' as any,
+      lateMinutes: 0,
+      earlyLeaveMin: 0,
+      overtimeMinutes: 0,
       workDate,
-      note:             "Grafik yo'q",
-      breaks:           [],
-      createdAt:        workDate,
-      updatedAt:        workDate,
-      employee:         emp,
-      schedule:         null,
-    }));
-  }
-
-  // 5. Aralash holat: ba'zi xodimlarning grafigi bor (records/absentVirtual),
-  //    ba'zilarining yo'q — ularni ham NO_SCHEDULE sifatida qo'shamiz
-  const allIds = new Set(allVirtual.map(r => r.employeeId));
-
-  const noScheduleEmployees = await this.prisma.employee.findMany({
-    where: {
-      ...empFilter,
-      id: { notIn: [...allIds] },
-    },
-    include: { department: true, position: true },
-    orderBy: { fullName: 'asc' },
-  });
-
-  const noScheduleVirtual = noScheduleEmployees.map(emp => ({
-    id:               `noschedule-${emp.id}`,
-    employeeId:       emp.id,
-    scheduleId:       null,
-    deviceId:         null,
-    rawCheckInTime:   null,
-    rawCheckOutTime:  null,
-    checkIn:          null,
-    checkOut:         null,
-    lunchOut:         null,
-    lunchIn:          null,
-    lunchLateMin:     0,
-    coffeeOut:        null,
-    coffeeIn:         null,
-    coffeeLateMin:    0,
-    expectedCheckIn:  null,
-    expectedCheckOut: null,
-    status:           'NO_SCHEDULE' as any,
-    lateMinutes:      0,
-    earlyLeaveMin:    0,
-    overtimeMinutes:  0,
-    workDate,
-    note:             "Grafik yo'q",
-    breaks:           [],
-    createdAt:        workDate,
-    updatedAt:        workDate,
-    employee:         emp,
-    schedule:         null,
-  }));
-
-  return [...allVirtual, ...noScheduleVirtual].sort((a, b) =>
-    (a.employee as any).fullName.localeCompare((b.employee as any).fullName),
-  );
-}
-
-// ──────────────────────────────────────────────────────────────────────────────
-// PUBLIC: CRON — Kunning oxirida grafigi bor lekin kelmaganlarni ABSENT qiladi
-// ──────────────────────────────────────────────────────────────────────────────
-
-async markAbsentForToday() {
-  const workDate = DateUtil.startOfDay(new Date());
-
-  // Dam olish kunida ishlatmaymiz
-  if (this.isWeekend(workDate)) {
-    this.logger.log('markAbsentForToday: dam olish kuni — skip');
-    return { marked: 0, skipped: true, reason: 'weekend' };
-  }
-
-  // Faqat grafigi WORKING bo'lgan xodimlar
-  const scheduledToday = await this.prisma.schedule.findMany({
-    where:  { date: workDate, status: 'WORKING' },
-    select: { id: true, employeeId: true, shiftId: true, shift: true },
-  });
-
-  if (scheduledToday.length === 0) {
-    return { marked: 0, skipped: false };
-  }
-
-  // Bugun allaqachon davomat yozuvi bor xodimlar
-  const existingRecords = await this.prisma.attendanceRecord.findMany({
-    where:  { workDate },
-    select: { employeeId: true },
-  });
-  const attendedSet = new Set(existingRecords.map(r => r.employeeId));
-
-  // Grafigi bor, shift mavjud, lekin kelmagan xodimlar
-  const toCreate = scheduledToday
-    .filter(sch => !attendedSet.has(sch.employeeId) && sch.shift)
-    .map(sch => ({
-      employeeId:       sch.employeeId,
-      scheduleId:       sch.id,
-      expectedCheckIn:  DateUtil.buildDateTime(workDate, sch.shift!.startTime),
-      expectedCheckOut: this.buildExpectedCheckOut(workDate, sch as any, null),
-      workDate,
-      status:           'ABSENT' as AttendanceStatus,
+      note: "Grafik yo'q",
+      breaks: [],
+      createdAt: workDate,
+      updatedAt: workDate,
+      employee: emp,
+      schedule: null,
     }));
 
-  if (toCreate.length > 0) {
-    await this.prisma.attendanceRecord.createMany({
-      data:           toCreate,
-      skipDuplicates: true,
+    return [...allVirtual, ...noScheduleVirtual].sort((a, b) =>
+      (a.employee as any).fullName.localeCompare((b.employee as any).fullName),
+    );
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────────
+  // PUBLIC: CRON — Kunning oxirida grafigi bor lekin kelmaganlarni ABSENT qiladi
+  // ──────────────────────────────────────────────────────────────────────────────
+
+  async markAbsentForToday() {
+    const workDate = DateUtil.startOfDay(new Date());
+
+    // Dam olish kunida ishlatmaymiz
+    if (this.isWeekend(workDate)) {
+      this.logger.log('markAbsentForToday: dam olish kuni — skip');
+      return { marked: 0, skipped: true, reason: 'weekend' };
+    }
+
+    // Faqat grafigi WORKING bo'lgan xodimlar
+    const scheduledToday = await this.prisma.schedule.findMany({
+      where: { date: workDate, status: 'WORKING' },
+      select: { id: true, employeeId: true, shiftId: true, shift: true },
     });
-    this.logger.log(`markAbsentForToday: ${toCreate.length} xodim ABSENT belgilandi`);
-  }
 
-  return { marked: toCreate.length, skipped: false };
-}
+    if (scheduledToday.length === 0) {
+      return { marked: 0, skipped: false };
+    }
+
+    // Bugun allaqachon davomat yozuvi bor xodimlar
+    const existingRecords = await this.prisma.attendanceRecord.findMany({
+      where: { workDate },
+      select: { employeeId: true },
+    });
+    const attendedSet = new Set(existingRecords.map((r) => r.employeeId));
+
+    // Grafigi bor, shift mavjud, lekin kelmagan xodimlar
+    const toCreate = scheduledToday
+      .filter((sch) => !attendedSet.has(sch.employeeId) && sch.shift)
+      .map((sch) => ({
+        employeeId: sch.employeeId,
+        scheduleId: sch.id,
+        expectedCheckIn: DateUtil.buildDateTime(workDate, sch.shift!.startTime),
+        expectedCheckOut: this.buildExpectedCheckOut(
+          workDate,
+          sch as any,
+          null,
+        ),
+        workDate,
+        status: 'ABSENT' as AttendanceStatus,
+      }));
+
+    if (toCreate.length > 0) {
+      await this.prisma.attendanceRecord.createMany({
+        data: toCreate,
+        skipDuplicates: true,
+      });
+      this.logger.log(
+        `markAbsentForToday: ${toCreate.length} xodim ABSENT belgilandi`,
+      );
+    }
+
+    return { marked: toCreate.length, skipped: false };
+  }
 
   async getWeeklyStats(employeeId: string, weekStart: string) {
     const start = DateUtil.startOfWeek(weekStart);
@@ -763,12 +912,18 @@ async markAbsentForToday() {
   }
 
   async manualCheckIn(employeeId: string, checkInTime: string, note?: string) {
-    const emp = await this.prisma.employee.findUnique({ where: { id: employeeId } });
+    const emp = await this.prisma.employee.findUnique({
+      where: { id: employeeId },
+    });
     if (!emp) throw new NotFoundException('Hodim topilmadi');
 
-    const eventDate  = new Date(checkInTime);
-    const workDate   = DateUtil.startOfDay(eventDate);
-    const schedule   = await this.findTodaySchedule(employeeId, workDate, dayjs(eventDate).tz(TZ));
+    const eventDate = new Date(checkInTime);
+    const workDate = DateUtil.startOfDay(eventDate);
+    const schedule = await this.findTodaySchedule(
+      employeeId,
+      workDate,
+      dayjs(eventDate).tz(TZ),
+    );
 
     const expectedCheckIn = schedule?.shift
       ? DateUtil.buildDateTime(workDate, schedule.shift.startTime)
@@ -777,7 +932,11 @@ async markAbsentForToday() {
       ? this.buildExpectedCheckOut(workDate, schedule, null)
       : new Date(workDate.getTime() + 12 * 3600 * 1000);
 
-    const lateMinutes = this.calcLateMinutes(eventDate, expectedCheckIn, LATE_GRACE_MINUTES);
+    const lateMinutes = this.calcLateMinutes(
+      eventDate,
+      expectedCheckIn,
+      LATE_GRACE_MINUTES,
+    );
     const status: AttendanceStatus = lateMinutes > 0 ? 'LATE' : 'PRESENT';
 
     const existing = await this.prisma.attendanceRecord.findFirst({
@@ -787,15 +946,15 @@ async markAbsentForToday() {
     if (existing) {
       return this.prisma.attendanceRecord.update({
         where: { id: existing.id },
-        data:  { checkIn: eventDate, lateMinutes, status, note },
+        data: { checkIn: eventDate, lateMinutes, status, note },
       });
     }
 
     return this.prisma.attendanceRecord.create({
       data: {
         employeeId,
-        scheduleId:       schedule?.id,
-        checkIn:          eventDate,
+        scheduleId: schedule?.id,
+        checkIn: eventDate,
         expectedCheckIn,
         expectedCheckOut,
         workDate,
@@ -831,10 +990,12 @@ async markAbsentForToday() {
 
     await this.prisma.hospital.update({
       where: { id: hospital.id },
-      data:  { gpsLat: lat, gpsLng: lng },
+      data: { gpsLat: lat, gpsLng: lng },
     });
 
-    this.logger.log(`Hospital GPS set: ${hospital.name} → (${lat}, ${lng}) by ${user.username}`);
+    this.logger.log(
+      `Hospital GPS set: ${hospital.name} → (${lat}, ${lng}) by ${user.username}`,
+    );
     return { saved: true, alreadySet: false };
   }
 
@@ -849,8 +1010,12 @@ async markAbsentForToday() {
   ): Promise<{ action: 'CHECK_IN' | 'CHECK_OUT'; attendance: any }> {
     // 1. Foydalanuvchi + xodim + tashkilot
     const user = await this.prisma.user.findUnique({
-      where:   { id: userId },
-      include: { employee: { include: { hospital: true, department: true, position: true } } },
+      where: { id: userId },
+      include: {
+        employee: {
+          include: { hospital: true, department: true, position: true },
+        },
+      },
     });
     if (!user?.employee) throw new NotFoundException('Xodim profili topilmadi');
 
@@ -858,7 +1023,9 @@ async markAbsentForToday() {
 
     // 2. Tashkilot blok tekshiruvi
     if (await isHospitalBlocked(this.prisma, employee.hospitalId)) {
-      throw new BadRequestException("Tashkilot to'lovlarini kechiktirdi, davomat yozilmayapti");
+      throw new BadRequestException(
+        "Tashkilot to'lovlarini kechiktirdi, davomat yozilmayapti",
+      );
     }
 
     // 3. Geofencing — kasalxona GPS o'rnatilgan bo'lsa masofa tekshiruvi
@@ -866,26 +1033,37 @@ async markAbsentForToday() {
     if (
       hospital?.gpsLat != null &&
       hospital?.gpsLng != null &&
-      dto.gpsLat       != null &&
-      dto.gpsLng       != null
+      dto.gpsLat != null &&
+      dto.gpsLng != null
     ) {
-      const radius   = hospital.gpsRadius ?? 200; // metr
-      const distance = haversineMeters(dto.gpsLat, dto.gpsLng, hospital.gpsLat, hospital.gpsLng);
+      const radius = hospital.gpsRadius ?? 200; // metr
+      const distance = haversineMeters(
+        dto.gpsLat,
+        dto.gpsLng,
+        hospital.gpsLat,
+        hospital.gpsLng,
+      );
       if (distance > radius) {
         const distStr = formatDistance(Math.round(distance));
         throw new BadRequestException(
           `Siz ish joyidan ${distStr} uzoqdasiz (ruxsat: ${radius}m). Ish joyida bo'lgan holda check-in qiling.`,
         );
       }
-      this.logger.log(`Geofencing OK: ${employee.fullName} — ${Math.round(distance)}m`);
+      this.logger.log(
+        `Geofencing OK: ${employee.fullName} — ${Math.round(distance)}m`,
+      );
     }
 
     const eventDate = new Date();
-    const tzDate    = dayjs(eventDate).tz(TZ);
-    const workDate  = DateUtil.startOfDay(eventDate);
+    const tzDate = dayjs(eventDate).tz(TZ);
+    const workDate = DateUtil.startOfDay(eventDate);
 
     // 4. Bugungi jadval
-    const schedule      = await this.findTodaySchedule(employee.id, workDate, tzDate);
+    const schedule = await this.findTodaySchedule(
+      employee.id,
+      workDate,
+      tzDate,
+    );
     const fallbackShift = !schedule
       ? await this.findFallbackShift(employee.hospitalId, tzDate)
       : null;
@@ -893,10 +1071,17 @@ async markAbsentForToday() {
     // 4. Selfie saqlash (ish joyi isboti sifatida)
     let selfieUrl: string | undefined;
     if (selfieBuffer?.length) {
-      const uploadDir    = path.join(process.env.UPLOAD_DIR || './uploads', 'selfies');
-      const base         = `${dayjs(workDate).format('YYYY-MM-DD')}-${employee.id.slice(-8)}`;
-      const { filename } = await processAndSavePhoto(selfieBuffer, uploadDir, base);
-      selfieUrl          = `/uploads/selfies/${filename}`;
+      const uploadDir = path.join(
+        process.env.UPLOAD_DIR || './uploads',
+        'selfies',
+      );
+      const base = `${dayjs(workDate).format('YYYY-MM-DD')}-${employee.id.slice(-8)}`;
+      const { filename } = await processAndSavePhoto(
+        selfieBuffer,
+        uploadDir,
+        base,
+      );
+      selfieUrl = `/uploads/selfies/${filename}`;
     }
 
     // 5. Mavjud davomat yozuvi
@@ -906,45 +1091,83 @@ async markAbsentForToday() {
 
     // ── CHECK-IN ───────────────────────────────────────────────────────────────
     if (!existing || !existing.checkIn) {
-      const expectedCheckIn  = this.buildExpectedCheckIn(workDate, schedule, fallbackShift);
-      const expectedCheckOut = this.buildExpectedCheckOut(workDate, schedule, fallbackShift);
-      const graceMin         = schedule?.shift?.graceMinutes ?? fallbackShift?.graceMinutes ?? LATE_GRACE_MINUTES;
-      const lateMinutes      = this.calcLateMinutes(eventDate, expectedCheckIn, graceMin);
+      const expectedCheckIn = this.buildExpectedCheckIn(
+        workDate,
+        schedule,
+        fallbackShift,
+      );
+      const expectedCheckOut = this.buildExpectedCheckOut(
+        workDate,
+        schedule,
+        fallbackShift,
+      );
+      const graceMin =
+        schedule?.shift?.graceMinutes ??
+        fallbackShift?.graceMinutes ??
+        LATE_GRACE_MINUTES;
+      const lateMinutes = this.calcLateMinutes(
+        eventDate,
+        expectedCheckIn,
+        graceMin,
+      );
       const status: AttendanceStatus = lateMinutes > 0 ? 'LATE' : 'PRESENT';
 
       // GPS — xodim hozir qayerda ekanini saqlaydi (geofencing yo'q, faqat dalil)
       const gpsData = {
         checkInSource: 'MOBILE',
-        selfieUrl:     selfieUrl ?? existing?.selfieUrl ?? undefined,
-        gpsLat:        dto.gpsLat,
-        gpsLng:        dto.gpsLng,
-        gpsAccuracy:   dto.gpsAccuracy,
+        selfieUrl: selfieUrl ?? existing?.selfieUrl ?? undefined,
+        gpsLat: dto.gpsLat,
+        gpsLng: dto.gpsLng,
+        gpsAccuracy: dto.gpsAccuracy,
       };
 
       let attendance: any;
       if (existing) {
         attendance = await this.prisma.attendanceRecord.update({
           where: { id: existing.id },
-          data:  { checkIn: eventDate, rawCheckInTime: eventDate, expectedCheckIn, expectedCheckOut, status, lateMinutes, ...gpsData },
+          data: {
+            checkIn: eventDate,
+            rawCheckInTime: eventDate,
+            expectedCheckIn,
+            expectedCheckOut,
+            status,
+            lateMinutes,
+            ...gpsData,
+          },
         });
       } else {
         attendance = await this.prisma.attendanceRecord.create({
           data: {
-            employeeId: employee.id, scheduleId: schedule?.id,
-            checkIn: eventDate, rawCheckInTime: eventDate,
-            expectedCheckIn, expectedCheckOut, workDate, status, lateMinutes,
+            employeeId: employee.id,
+            scheduleId: schedule?.id,
+            checkIn: eventDate,
+            rawCheckInTime: eventDate,
+            expectedCheckIn,
+            expectedCheckOut,
+            workDate,
+            status,
+            lateMinutes,
             ...gpsData,
           },
         });
       }
 
-      await this.updateWeeklyStats(employee.id, eventDate, lateMinutes, 0, 0, true);
-      this.logger.log(`MOBILE CHECK_IN: ${employee.fullName ?? employee.id} late=${lateMinutes}min gps=(${dto.gpsLat},${dto.gpsLng})`);
+      await this.updateWeeklyStats(
+        employee.id,
+        eventDate,
+        lateMinutes,
+        0,
+        0,
+        true,
+      );
+      this.logger.log(
+        `MOBILE CHECK_IN: ${employee.fullName ?? employee.id} late=${lateMinutes}min gps=(${dto.gpsLat},${dto.gpsLng})`,
+      );
 
       // Telegram: selfie + Google Maps havolasi → directorga yuboriladi (async, xatolik to'xtatmaydi)
-      this.telegram.notifyMobileCheckin(employee, 'CHECK_IN', attendance, selfieBuffer).catch((e) =>
-        this.logger.warn(`Telegram notify failed: ${e.message}`),
-      );
+      this.telegram
+        .notifyMobileCheckin(employee, 'CHECK_IN', attendance, selfieBuffer)
+        .catch((e) => this.logger.warn(`Telegram notify failed: ${e.message}`));
 
       return { action: 'CHECK_IN' as const, attendance };
     }
@@ -953,7 +1176,8 @@ async markAbsentForToday() {
     if (!existing.checkOut) {
       // Minimum 2 soat o'tganligini tekshirish
       if (existing.checkIn) {
-        const minutesSinceCheckIn = (eventDate.getTime() - existing.checkIn.getTime()) / 60_000;
+        const minutesSinceCheckIn =
+          (eventDate.getTime() - existing.checkIn.getTime()) / 60_000;
         if (minutesSinceCheckIn < 120) {
           const remaining = Math.ceil(120 - minutesSinceCheckIn);
           throw new BadRequestException(
@@ -962,46 +1186,73 @@ async markAbsentForToday() {
         }
       }
 
-      const expectedEnd     = existing.expectedCheckOut
-        ?? this.buildExpectedCheckOut(workDate, schedule, fallbackShift);
-      const earlyLeaveMin   = this.calcEarlyLeaveMinutes(eventDate, expectedEnd);
+      const expectedEnd =
+        existing.expectedCheckOut ??
+        this.buildExpectedCheckOut(workDate, schedule, fallbackShift);
+      const earlyLeaveMin = this.calcEarlyLeaveMinutes(eventDate, expectedEnd);
       const overtimeMinutes = this.calcOvertimeMinutes(eventDate, expectedEnd);
-      const shift           = schedule?.shift ?? fallbackShift;
-      const netWorkMin      = calcNetWorkMin(
-        existing.checkIn!, eventDate,
-        existing.lunchOut, existing.lunchIn,
-        shift?.lunchStart, shift?.lunchEnd,
+      const shift = schedule?.shift ?? fallbackShift;
+      const netWorkMin = calcNetWorkMin(
+        existing.checkIn!,
+        eventDate,
+        existing.lunchOut,
+        existing.lunchIn,
+        shift?.lunchStart,
+        shift?.lunchEnd,
       );
-      const newStatus = this.recalcStatus(existing.status, existing.lateMinutes, earlyLeaveMin);
+      const newStatus = this.recalcStatus(
+        existing.status,
+        existing.lateMinutes,
+        earlyLeaveMin,
+      );
 
       // Check-out selfie saqlash
       let checkOutSelfieUrl: string | undefined;
       if (selfieBuffer?.length) {
-        const uploadDir    = path.join(process.env.UPLOAD_DIR || './uploads', 'selfies');
-        const base         = `checkout-${dayjs(workDate).format('YYYY-MM-DD')}-${employee.id.slice(-8)}`;
-        const { filename } = await processAndSavePhoto(selfieBuffer, uploadDir, base);
-        checkOutSelfieUrl  = `/uploads/selfies/${filename}`;
+        const uploadDir = path.join(
+          process.env.UPLOAD_DIR || './uploads',
+          'selfies',
+        );
+        const base = `checkout-${dayjs(workDate).format('YYYY-MM-DD')}-${employee.id.slice(-8)}`;
+        const { filename } = await processAndSavePhoto(
+          selfieBuffer,
+          uploadDir,
+          base,
+        );
+        checkOutSelfieUrl = `/uploads/selfies/${filename}`;
       }
 
       const attendance = await this.prisma.attendanceRecord.update({
         where: { id: existing.id },
-        data:  {
-          checkOut: eventDate, rawCheckOutTime: eventDate,
-          earlyLeaveMin, overtimeMinutes, netWorkMin, status: newStatus,
+        data: {
+          checkOut: eventDate,
+          rawCheckOutTime: eventDate,
+          earlyLeaveMin,
+          overtimeMinutes,
+          netWorkMin,
+          status: newStatus,
           checkOutSelfieUrl,
-          checkOutGpsLat:      dto.gpsLat,
-          checkOutGpsLng:      dto.gpsLng,
+          checkOutGpsLat: dto.gpsLat,
+          checkOutGpsLng: dto.gpsLng,
           checkOutGpsAccuracy: dto.gpsAccuracy,
         },
       });
 
-      await this.updateWeeklyStats(employee.id, eventDate, 0, earlyLeaveMin, overtimeMinutes);
-      this.logger.log(`MOBILE CHECK_OUT: ${employee.fullName ?? employee.id} gps=(${dto.gpsLat},${dto.gpsLng})`);
+      await this.updateWeeklyStats(
+        employee.id,
+        eventDate,
+        0,
+        earlyLeaveMin,
+        overtimeMinutes,
+      );
+      this.logger.log(
+        `MOBILE CHECK_OUT: ${employee.fullName ?? employee.id} gps=(${dto.gpsLat},${dto.gpsLng})`,
+      );
 
       // Telegram: check-out selfie + GPS bilan xabar
-      this.telegram.notifyMobileCheckin(employee, 'CHECK_OUT', attendance, selfieBuffer).catch((e) =>
-        this.logger.warn(`Telegram notify failed: ${e.message}`),
-      );
+      this.telegram
+        .notifyMobileCheckin(employee, 'CHECK_OUT', attendance, selfieBuffer)
+        .catch((e) => this.logger.warn(`Telegram notify failed: ${e.message}`));
 
       return { action: 'CHECK_OUT' as const, attendance };
     }
@@ -1014,17 +1265,23 @@ async markAbsentForToday() {
   // PRIVATE: SCHEDULE HELPERS
   // ──────────────────────────────────────────────────────────────────────────────
 
-  private async findTodaySchedule(employeeId: string, workDate: Date, eventTz: Dayjs) {
+  private async findTodaySchedule(
+    employeeId: string,
+    workDate: Date,
+    eventTz: Dayjs,
+  ) {
     let schedule = await this.prisma.schedule.findUnique({
-      where:   { employeeId_date: { employeeId, date: workDate } },
+      where: { employeeId_date: { employeeId, date: workDate } },
       include: { shift: true },
     });
 
     // Tungi smena: soat 10 dan oldin bo'lsa — kechagi jadvalga qaraydi
     if (!schedule && eventTz.hour() < 10) {
-      const yesterday = DateUtil.startOfDay(dayjs(workDate).subtract(1, 'day').toDate());
+      const yesterday = DateUtil.startOfDay(
+        dayjs(workDate).subtract(1, 'day').toDate(),
+      );
       const ySch = await this.prisma.schedule.findUnique({
-        where:   { employeeId_date: { employeeId, date: yesterday } },
+        where: { employeeId_date: { employeeId, date: yesterday } },
         include: { shift: true },
       });
       if (ySch?.shift?.isOvernight) schedule = ySch;
@@ -1035,15 +1292,17 @@ async markAbsentForToday() {
 
   private async findFallbackShift(hospitalId: string | null, eventTz: Dayjs) {
     if (!hospitalId) return null;
-    const shifts = await this.prisma.shiftTemplate.findMany({ where: { hospitalId } });
+    const shifts = await this.prisma.shiftTemplate.findMany({
+      where: { hospitalId },
+    });
     if (!shifts.length) return null;
 
     const hour = eventTz.hour();
     if (hour < 10) {
-      const night = shifts.find(s => s.isOvernight);
+      const night = shifts.find((s) => s.isOvernight);
       if (night) return night;
     }
-    return shifts.find(s => !s.isOvernight) ?? shifts[0];
+    return shifts.find((s) => !s.isOvernight) ?? shifts[0];
   }
 
   // ──────────────────────────────────────────────────────────────────────────────
@@ -1054,16 +1313,20 @@ async markAbsentForToday() {
    * Haversine formula — ikki koordinata orasidagi masofa (metr).
    */
   private calcHaversineMeters(
-    lat1: number, lng1: number,
-    lat2: number, lng2: number,
+    lat1: number,
+    lng1: number,
+    lat2: number,
+    lng2: number,
   ): number {
-    const R   = 6_371_000; // Yer radiusi, metr
+    const R = 6_371_000; // Yer radiusi, metr
     const d2r = Math.PI / 180;
-    const φ1  = lat1 * d2r;
-    const φ2  = lat2 * d2r;
-    const Δφ  = (lat2 - lat1) * d2r;
-    const Δλ  = (lng2 - lng1) * d2r;
-    const a   = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
+    const φ1 = lat1 * d2r;
+    const φ2 = lat2 * d2r;
+    const Δφ = (lat2 - lat1) * d2r;
+    const Δλ = (lng2 - lng1) * d2r;
+    const a =
+      Math.sin(Δφ / 2) ** 2 +
+      Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
     return 2 * R * Math.asin(Math.sqrt(a));
   }
 
@@ -1072,7 +1335,8 @@ async markAbsentForToday() {
     schedule: any | null,
     fallbackShift: any | null,
   ): Date {
-    const startTime = schedule?.shift?.startTime ?? fallbackShift?.startTime ?? '08:00';
+    const startTime =
+      schedule?.shift?.startTime ?? fallbackShift?.startTime ?? '08:00';
     return DateUtil.buildDateTime(workDate, startTime);
   }
 
@@ -1084,27 +1348,44 @@ async markAbsentForToday() {
     const shift = schedule?.shift ?? fallbackShift;
     if (!shift) return new Date(workDate.getTime() + 12 * 3600 * 1000);
     if (shift.isOvernight) {
-      return DateUtil.buildDateTime(dayjs(workDate).add(1, 'day').toDate(), shift.endTime);
+      return DateUtil.buildDateTime(
+        dayjs(workDate).add(1, 'day').toDate(),
+        shift.endTime,
+      );
     }
     return DateUtil.buildDateTime(workDate, shift.endTime);
   }
 
-  private calcLateMinutes(checkIn: Date, expected: Date, graceMin: number): number {
+  private calcLateMinutes(
+    checkIn: Date,
+    expected: Date,
+    graceMin: number,
+  ): number {
     const diff = DateUtil.diffMinutes(checkIn, expected);
     return diff <= graceMin ? 0 : diff - graceMin;
   }
 
-  private calcEarlyLeaveMinutes(checkOut: Date, expectedEnd: Date | null): number {
+  private calcEarlyLeaveMinutes(
+    checkOut: Date,
+    expectedEnd: Date | null,
+  ): number {
     if (!expectedEnd) return 0;
     // Sanalar bir xil kunda bo'lishi kerak — boshqa kunda bo'lsa ignore
-    const sameDay = DateUtil.startOfDay(checkOut).getTime() === DateUtil.startOfDay(expectedEnd).getTime();
+    const sameDay =
+      DateUtil.startOfDay(checkOut).getTime() ===
+      DateUtil.startOfDay(expectedEnd).getTime();
     if (!sameDay) return 0;
     return Math.max(0, DateUtil.diffMinutes(expectedEnd, checkOut));
   }
 
-  private calcOvertimeMinutes(checkOut: Date, expectedEnd: Date | null): number {
+  private calcOvertimeMinutes(
+    checkOut: Date,
+    expectedEnd: Date | null,
+  ): number {
     if (!expectedEnd) return 0;
-    const sameDay = DateUtil.startOfDay(checkOut).getTime() === DateUtil.startOfDay(expectedEnd).getTime();
+    const sameDay =
+      DateUtil.startOfDay(checkOut).getTime() ===
+      DateUtil.startOfDay(expectedEnd).getTime();
     if (!sameDay) return 0;
     return Math.max(0, DateUtil.diffMinutes(checkOut, expectedEnd));
   }
@@ -1115,16 +1396,16 @@ async markAbsentForToday() {
     graceMin = 10,
   ): number {
     if (!lunchEnd) return 0;
-    const [h, m]     = lunchEnd.split(':').map(Number);
-    const tzReturn   = dayjs(returnTime).tz(TZ);
+    const [h, m] = lunchEnd.split(':').map(Number);
+    const tzReturn = dayjs(returnTime).tz(TZ);
     const lunchEndDt = tzReturn.startOf('day').add(h * 60 + m, 'minute');
-    const diff       = tzReturn.diff(lunchEndDt, 'minute');
+    const diff = tzReturn.diff(lunchEndDt, 'minute');
     return diff <= graceMin ? 0 : diff - graceMin;
   }
 
   private isNearLunchStart(eventTime: Date, lunchStart: string): boolean {
-    const [h, m]   = lunchStart.split(':').map(Number);
-    const tzEvent  = dayjs(eventTime).tz(TZ);
+    const [h, m] = lunchStart.split(':').map(Number);
+    const tzEvent = dayjs(eventTime).tz(TZ);
     const lunchMin = h * 60 + m;
     const eventMin = tzEvent.hour() * 60 + tzEvent.minute();
     return Math.abs(eventMin - lunchMin) <= LUNCH_WINDOW_MIN;
@@ -1139,8 +1420,8 @@ async markAbsentForToday() {
     earlyMin: number,
   ): AttendanceStatus {
     if (lateMin > 0 && earlyMin > 0) return 'LATE_EARLY';
-    if (earlyMin > 0)                return 'EARLY_LEAVE';
-    if (lateMin > 0)                 return 'LATE';
+    if (earlyMin > 0) return 'EARLY_LEAVE';
+    if (lateMin > 0) return 'LATE';
     return current === 'ABSENT' ? 'PRESENT' : current;
   }
 
@@ -1150,37 +1431,39 @@ async markAbsentForToday() {
     addLateMin: number,
     addEarlyMin: number,
     addOvertime: number,
-    isCheckIn = false,   // faqat check-in da daysWorked oshadi
+    isCheckIn = false, // faqat check-in da daysWorked oshadi
   ) {
     const weekStart = DateUtil.startOfWeek(date);
-    const weekEnd   = DateUtil.endOfWeek(date);
+    const weekEnd = DateUtil.endOfWeek(date);
 
     const existing = await this.prisma.weeklyAttendanceStat.findUnique({
       where: { employeeId_weekStart: { employeeId, weekStart } },
     });
 
-    const prevLate       = existing?.totalLateMin ?? 0;
-    const newLate        = prevLate + addLateMin;
+    const prevLate = existing?.totalLateMin ?? 0;
+    const newLate = prevLate + addLateMin;
     const penaltyLateMin = Math.max(0, newLate - WEEKLY_LATE_THRESHOLD_MIN);
 
     let deductionAmount = 0;
     if (penaltyLateMin > 0) {
       const emp = await this.prisma.employee.findUnique({
-        where:  { id: employeeId },
+        where: { id: employeeId },
         select: { baseSalary: true },
       });
       if (emp) {
         const monthWorkMinutes = 26 * 8 * 60;
-        const minuteRate       = Number(emp.baseSalary) / monthWorkMinutes;
-        const addedPenalty     = penaltyLateMin - (existing?.penaltyLateMin ?? 0);
-        deductionAmount = (existing ? Number(existing.deductionAmount) : 0) + addedPenalty * minuteRate;
+        const minuteRate = Number(emp.baseSalary) / monthWorkMinutes;
+        const addedPenalty = penaltyLateMin - (existing?.penaltyLateMin ?? 0);
+        deductionAmount =
+          (existing ? Number(existing.deductionAmount) : 0) +
+          addedPenalty * minuteRate;
       }
     }
 
     await this.prisma.weeklyAttendanceStat.upsert({
-      where:  { employeeId_weekStart: { employeeId, weekStart } },
+      where: { employeeId_weekStart: { employeeId, weekStart } },
       update: {
-        totalLateMin:  { increment: addLateMin },
+        totalLateMin: { increment: addLateMin },
         totalEarlyMin: { increment: addEarlyMin },
         totalOvertime: { increment: addOvertime },
         ...(isCheckIn && { daysWorked: { increment: 1 } }),
@@ -1191,10 +1474,10 @@ async markAbsentForToday() {
         employeeId,
         weekStart,
         weekEnd,
-        totalLateMin:  addLateMin,
+        totalLateMin: addLateMin,
         totalEarlyMin: addEarlyMin,
         totalOvertime: addOvertime,
-        daysWorked:    isCheckIn ? 1 : 0,   // har doim check-in da 1 dan boshlaydi
+        daysWorked: isCheckIn ? 1 : 0, // har doim check-in da 1 dan boshlaydi
         penaltyLateMin,
         deductionAmount,
       },
@@ -1206,13 +1489,13 @@ async markAbsentForToday() {
 
 /** dispatch() ga uzatiladigan kontekst */
 interface EventContext {
-  employee:      any;
-  eventDate:     Date;
-  workDate:      Date;
-  tzDate:        Dayjs;
-  schedule:      any | null;
+  employee: any;
+  eventDate: Date;
+  workDate: Date;
+  tzDate: Dayjs;
+  schedule: any | null;
   fallbackShift: any | null;
-  shift:         any | null;
-  attendance:    any | null;
-  deviceId?:     string;
+  shift: any | null;
+  attendance: any | null;
+  deviceId?: string;
 }

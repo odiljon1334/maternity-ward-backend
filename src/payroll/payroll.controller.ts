@@ -1,6 +1,14 @@
 import {
-  Body, Controller, Get, Param, Post, Put, Query,
-  UseGuards, Res, StreamableFile,
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Put,
+  Query,
+  UseGuards,
+  Res,
+  StreamableFile,
 } from '@nestjs/common';
 import { PayrollService } from './payroll.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -24,7 +32,11 @@ export class PayrollController {
     @Query('month') month?: string,
     @Query('year') year?: string,
   ) {
-    return this.service.findMyRecords(userId, month ? +month : undefined, year ? +year : undefined);
+    return this.service.findMyRecords(
+      userId,
+      month ? +month : undefined,
+      year ? +year : undefined,
+    );
   }
 
   @Get('my/payslip')
@@ -47,7 +59,12 @@ export class PayrollController {
   }
 
   @Get()
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR, UserRole.ASSISTANT_ADMIN)
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+    UserRole.ASSISTANT_ADMIN,
+  )
   findAll(
     @CurrentUser('hospitalId') jwtHospitalId: string | null,
     @Query('month') month: string,
@@ -57,22 +74,42 @@ export class PayrollController {
   ) {
     const now = new Date();
     const hospitalId = targetHospitalId || jwtHospitalId || undefined;
-    return this.service.findAll(+month || now.getMonth() + 1, +year || now.getFullYear(), hospitalId, departmentId);
+    return this.service.findAll(
+      +month || now.getMonth() + 1,
+      +year || now.getFullYear(),
+      hospitalId,
+      departmentId,
+    );
   }
 
   @Post('generate')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR, UserRole.ASSISTANT_ADMIN)
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+    UserRole.ASSISTANT_ADMIN,
+  )
   generate(
     @CurrentUser('hospitalId') jwtHospitalId: string | null,
     @Body() body: { month: number; year: number; departmentId?: string },
     @Query('targetHospitalId') targetHospitalId?: string,
   ) {
     const hospitalId = targetHospitalId || jwtHospitalId || undefined;
-    return this.service.generateMonthlyPayroll(body.month, body.year, hospitalId, body.departmentId);
+    return this.service.generateMonthlyPayroll(
+      body.month,
+      body.year,
+      hospitalId,
+      body.departmentId,
+    );
   }
 
   @Get('export/excel')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR, UserRole.ASSISTANT_ADMIN)
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+    UserRole.ASSISTANT_ADMIN,
+  )
   async exportExcel(
     @CurrentUser('hospitalId') jwtHospitalId: string | null,
     @Query('month') month: string,
@@ -85,10 +122,16 @@ export class PayrollController {
     const m = +month || now.getMonth() + 1;
     const y = +year || now.getFullYear();
     const hospitalId = targetHospitalId || jwtHospitalId || undefined;
-    const buffer = await this.service.exportExcel(m, y, hospitalId, departmentId);
+    const buffer = await this.service.exportExcel(
+      m,
+      y,
+      hospitalId,
+      departmentId,
+    );
     const filename = `maosh_${m}_${y}.xlsx`;
     res.set({
-      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Type':
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'Content-Disposition': `attachment; filename="${filename}"`,
     });
     return new StreamableFile(buffer);
@@ -98,14 +141,22 @@ export class PayrollController {
   @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN)
   save(
     @Param('employeeId') employeeId: string,
-    @Body() body: {
-      month: number; year: number;
-      manualBonus?: number; manualDeduction?: number; note?: string;
+    @Body()
+    body: {
+      month: number;
+      year: number;
+      manualBonus?: number;
+      manualDeduction?: number;
+      note?: string;
     },
   ) {
     return this.service.createOrUpdate(
-      employeeId, body.month, body.year,
-      body.manualBonus, body.manualDeduction, body.note,
+      employeeId,
+      body.month,
+      body.year,
+      body.manualBonus,
+      body.manualDeduction,
+      body.note,
     );
   }
 
@@ -118,18 +169,33 @@ export class PayrollController {
   // ── DINAMIK PARAMETRLI ROUTELAR (DOIM PASTDA BO'LISHI KERAK) ──
 
   @Get('preview/:employeeId')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR, UserRole.ASSISTANT_ADMIN)
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+    UserRole.ASSISTANT_ADMIN,
+  )
   preview(
     @Param('employeeId') employeeId: string,
     @Query('month') month: string,
     @Query('year') year: string,
   ) {
     const now = new Date();
-    return this.service.calculate(employeeId, +month || now.getMonth() + 1, +year || now.getFullYear());
+    return this.service.calculate(
+      employeeId,
+      +month || now.getMonth() + 1,
+      +year || now.getFullYear(),
+    );
   }
 
   @Get('payslip/:employeeId')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR, UserRole.ASSISTANT_ADMIN, UserRole.EMPLOYEE)
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.EMPLOYEE,
+  )
   async downloadPayslip(
     @Param('employeeId') employeeId: string,
     @Query('month') month: string,
@@ -149,13 +215,22 @@ export class PayrollController {
   }
 
   @Get(':employeeId')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR, UserRole.ASSISTANT_ADMIN)
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+    UserRole.ASSISTANT_ADMIN,
+  )
   findOne(
     @Param('employeeId') employeeId: string,
     @Query('month') month: string,
     @Query('year') year: string,
   ) {
     const now = new Date();
-    return this.service.findOne(employeeId, +month || now.getMonth() + 1, +year || now.getFullYear());
+    return this.service.findOne(
+      employeeId,
+      +month || now.getMonth() + 1,
+      +year || now.getFullYear(),
+    );
   }
 }

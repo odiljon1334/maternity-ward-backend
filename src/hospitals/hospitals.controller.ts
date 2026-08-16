@@ -1,5 +1,13 @@
 import {
-  Controller, Get, Post, Put, Patch, Delete, Param, Body, UseGuards,
+  Controller,
+  Get,
+  Post,
+  Put,
+  Patch,
+  Delete,
+  Param,
+  Body,
+  UseGuards,
 } from '@nestjs/common';
 import { HospitalsService } from './hospitals.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -8,8 +16,8 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { UserRole } from '@prisma/client';
 
 const SUPER = UserRole.SUPER_ADMIN;
-const ASST  = UserRole.ASSISTANT_ADMIN;
-const DIR   = UserRole.DIRECTOR;
+const ASST = UserRole.ASSISTANT_ADMIN;
+const DIR = UserRole.DIRECTOR;
 
 @Controller('hospitals')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -30,7 +38,15 @@ export class HospitalsController {
 
   @Post()
   @Roles(SUPER)
-  create(@Body() body: { name: string; code: string; address?: string; phone?: string }) {
+  create(
+    @Body()
+    body: {
+      name: string;
+      code: string;
+      address?: string;
+      phone?: string;
+    },
+  ) {
     return this.svc.create(body);
   }
 
@@ -38,7 +54,13 @@ export class HospitalsController {
   @Roles(SUPER)
   update(
     @Param('id') id: string,
-    @Body() body: { name?: string; address?: string; phone?: string; isActive?: boolean },
+    @Body()
+    body: {
+      name?: string;
+      address?: string;
+      phone?: string;
+      isActive?: boolean;
+    },
   ) {
     return this.svc.update(id, body);
   }
@@ -65,7 +87,13 @@ export class HospitalsController {
   @Roles(SUPER)
   createDirector(
     @Param('id') id: string,
-    @Body() body: { username: string; password: string; fullName: string; phone?: string },
+    @Body()
+    body: {
+      username: string;
+      password: string;
+      fullName: string;
+      phone?: string;
+    },
   ) {
     return this.svc.createDirector(id, body);
   }
@@ -82,10 +110,7 @@ export class HospitalsController {
   /** DIRECTOR/SUPER: GPS radius ni o'zgartirish (50–2000 metr) */
   @Patch(':id/gps-radius')
   @Roles(SUPER, ASST, DIR)
-  updateGpsRadius(
-    @Param('id') id: string,
-    @Body('radius') radius: number,
-  ) {
+  updateGpsRadius(@Param('id') id: string, @Body('radius') radius: number) {
     return this.svc.updateGpsRadius(id, Number(radius));
   }
 

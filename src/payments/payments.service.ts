@@ -5,7 +5,6 @@ import { UpdatePaymentDto } from './dto/update-payment.dto';
 
 const PRICE_PER_EMPLOYEE = 20_000;
 
-
 function currentPeriod(): string {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
@@ -88,7 +87,11 @@ export class PaymentsService {
   }
 
   // ─── List payments ───────────────────────────────────────────────────────────
-  async findAll(params?: { hospitalId?: string; period?: string; limit?: number }) {
+  async findAll(params?: {
+    hospitalId?: string;
+    period?: string;
+    limit?: number;
+  }) {
     const where: any = {};
     if (params?.hospitalId) where.hospitalId = params.hospitalId;
     if (params?.period) where.period = params.period;
@@ -127,7 +130,7 @@ export class PaymentsService {
   // ─── Update payment amount (SUPER_ADMIN only) ────────────────────────────────
   async update(id: string, dto: UpdatePaymentDto) {
     const payment = await this.prisma.payment.findUnique({ where: { id } });
-    if (!payment) throw new NotFoundException('To\'lov topilmadi');
+    if (!payment) throw new NotFoundException("To'lov topilmadi");
 
     return this.prisma.payment.update({
       where: { id },

@@ -1,6 +1,13 @@
 import {
-  Controller, Get, Post, Put, Delete,
-  Param, Body, Query, UseGuards,
+  Controller,
+  Get,
+  Post,
+  Put,
+  Delete,
+  Param,
+  Body,
+  Query,
+  UseGuards,
 } from '@nestjs/common';
 import { HikConnectService } from './hikconnect.service';
 import { CreateCameraDto, UpdateCameraDto } from './dto/camera.dto';
@@ -26,8 +33,11 @@ export class HikConnectController {
   // ─── Camera CRUD ───────────────────────────────────────────────────────────
 
   @Roles(
-    UserRole.SUPER_ADMIN, UserRole.ASSISTANT_ADMIN, UserRole.MINISTRY,
-    UserRole.ADMIN, UserRole.DIRECTOR,
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.MINISTRY,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
   )
   @Get('cameras')
   getCameras(@Query('hospitalId') hospitalId?: string) {
@@ -59,8 +69,11 @@ export class HikConnectController {
    * MediaMTX yoki HikConnect — avtomatik tanlaydi.
    */
   @Roles(
-    UserRole.SUPER_ADMIN, UserRole.ASSISTANT_ADMIN, UserRole.MINISTRY,
-    UserRole.ADMIN, UserRole.DIRECTOR,
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.MINISTRY,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
   )
   @Get('cameras/:id/live')
   getLiveUrl(@Param('id') id: string) {
@@ -76,7 +89,7 @@ export class HikConnectController {
     @Query('pageSize') pageSize?: string,
   ) {
     return this.svc.fetchCamerasFromHikConnect({
-      pageNo:   pageNo   ? Number(pageNo)   : 1,
+      pageNo: pageNo ? Number(pageNo) : 1,
       pageSize: pageSize ? Number(pageSize) : 50,
     });
   }

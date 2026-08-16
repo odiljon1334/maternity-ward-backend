@@ -37,7 +37,7 @@ export class HikvisionWebhookController {
 
     this.logger.log(
       `Parsed: no=${parsed.employeeNo} time=${parsed.eventTime} ` +
-      `status=${parsed.terminalEventType ?? 'auto'} device=${parsed.deviceId}`,
+        `status=${parsed.terminalEventType ?? 'auto'} device=${parsed.deviceId}`,
     );
 
     if (!parsed.employeeNo) {
@@ -48,12 +48,12 @@ export class HikvisionWebhookController {
     }
 
     const event: HikvisionEvent = {
-      employeeNo:        parsed.employeeNo,
-      deviceId:          parsed.deviceId,
-      deviceName:        parsed.deviceName,
-      eventTime:         parsed.eventTime,
+      employeeNo: parsed.employeeNo,
+      deviceId: parsed.deviceId,
+      deviceName: parsed.deviceName,
+      eventTime: parsed.eventTime,
       terminalEventType: parsed.terminalEventType,
-      rawPayload:        parsed.eventRaw,
+      rawPayload: parsed.eventRaw,
     };
 
     try {
@@ -80,9 +80,10 @@ export class HikvisionWebhookController {
   private parsePayload(ct: string, body?: Buffer): ParsedEvent {
     if (!body || body.length === 0) return emptyEvent();
 
-    if (ct.includes('application/json'))  return this.parseJson(body);
-    if (ct.includes('xml') || ct.includes('text/plain')) return this.parseXml(body);
-    if (ct.includes('multipart'))         return this.parseMultipart(ct, body);
+    if (ct.includes('application/json')) return this.parseJson(body);
+    if (ct.includes('xml') || ct.includes('text/plain'))
+      return this.parseXml(body);
+    if (ct.includes('multipart')) return this.parseMultipart(ct, body);
 
     // Noma'lum content-type — JSON sifatida urinib ko'r
     try {
@@ -98,13 +99,13 @@ export class HikvisionWebhookController {
     try {
       const obj = JSON.parse(body.toString('utf8'));
       return {
-        kind:              'json',
-        employeeNo:        this.extractEmployeeNo(obj),
-        deviceId:          this.extractDeviceId(obj),
-        deviceName:        this.extractDeviceName(obj),
-        eventTime:         this.extractEventTime(obj),
+        kind: 'json',
+        employeeNo: this.extractEmployeeNo(obj),
+        deviceId: this.extractDeviceId(obj),
+        deviceName: this.extractDeviceName(obj),
+        eventTime: this.extractEventTime(obj),
         terminalEventType: this.extractTerminalEventType(obj),
-        eventRaw:          obj,
+        eventRaw: obj,
       };
     } catch {
       return emptyEvent();
@@ -116,13 +117,13 @@ export class HikvisionWebhookController {
   private parseXml(body: Buffer): ParsedEvent {
     const xml = body.toString('utf8');
     return {
-      kind:              'xml',
-      employeeNo:        this.extractEmployeeNoXml(xml),
-      deviceId:          this.extractDeviceIdXml(xml),
-      deviceName:        this.extractDeviceNameXml(xml),
-      eventTime:         this.extractEventTimeXml(xml),
+      kind: 'xml',
+      employeeNo: this.extractEmployeeNoXml(xml),
+      deviceId: this.extractDeviceIdXml(xml),
+      deviceName: this.extractDeviceNameXml(xml),
+      eventTime: this.extractEventTimeXml(xml),
       terminalEventType: this.extractTerminalEventTypeXml(xml),
-      eventRaw:          xml,
+      eventRaw: xml,
     };
   }
 
@@ -133,7 +134,7 @@ export class HikvisionWebhookController {
     const boundary = boundaryMatch?.[1]?.trim().replace(/^"|"$/g, '');
     if (!boundary) return emptyEvent();
 
-    const parts   = this.splitMultipart(body, boundary);
+    const parts = this.splitMultipart(body, boundary);
     let jsonObj: any;
     let xmlText: string | undefined;
     let snap: Buffer | undefined;
@@ -142,7 +143,11 @@ export class HikvisionWebhookController {
       const h = p.headers.toLowerCase();
 
       if (!jsonObj && h.includes('application/json')) {
-        try { jsonObj = JSON.parse(p.body.toString('utf8')); } catch { /* skip */ }
+        try {
+          jsonObj = JSON.parse(p.body.toString('utf8'));
+        } catch {
+          /* skip */
+        }
       }
 
       if (!xmlText && (h.includes('xml') || h.includes('text/plain'))) {
@@ -151,9 +156,16 @@ export class HikvisionWebhookController {
       }
 
       if (!snap) {
-        const isImg     = h.includes('image/jpeg') || h.includes('image/jpg') || h.includes('image/png');
-        const hasName   = /filename=["']?[^"'\s]*\.(jpg|jpeg|png)/i.test(h);
-        const jpegMagic = p.body.length > 3 && p.body[0] === 0xff && p.body[1] === 0xd8 && p.body[2] === 0xff;
+        const isImg =
+          h.includes('image/jpeg') ||
+          h.includes('image/jpg') ||
+          h.includes('image/png');
+        const hasName = /filename=["']?[^"'\s]*\.(jpg|jpeg|png)/i.test(h);
+        const jpegMagic =
+          p.body.length > 3 &&
+          p.body[0] === 0xff &&
+          p.body[1] === 0xd8 &&
+          p.body[2] === 0xff;
         if (isImg || hasName || jpegMagic) snap = p.body;
       }
     }
@@ -163,14 +175,19 @@ export class HikvisionWebhookController {
       for (const p of parts) {
         try {
           const t = p.body.toString('utf8').trim();
-          if (t.startsWith('{') && t.endsWith('}')) { jsonObj = JSON.parse(t); break; }
-        } catch { /* skip */ }
+          if (t.startsWith('{') && t.endsWith('}')) {
+            jsonObj = JSON.parse(t);
+            break;
+          }
+        } catch {
+          /* skip */
+        }
       }
     }
 
     // XML topilmadiymu — '<' belgisi bo'lgan partni sinab ko'r
     if (!xmlText) {
-      const maybe = parts.find(p => p.body.toString('utf8').includes('<'));
+      const maybe = parts.find((p) => p.body.toString('utf8').includes('<'));
       if (maybe) xmlText = maybe.body.toString('utf8');
     }
 
@@ -178,16 +195,24 @@ export class HikvisionWebhookController {
     const isJson = !!jsonObj;
 
     return {
-      kind:              'multipart',
-      employeeNo:        isJson ? this.extractEmployeeNo(src) : this.extractEmployeeNoXml(src as string),
-      deviceId:          isJson ? this.extractDeviceId(src) : this.extractDeviceIdXml(src as string),
-      deviceName:        isJson ? this.extractDeviceName(src) : this.extractDeviceNameXml(src as string),
-      eventTime:         isJson ? this.extractEventTime(src) : this.extractEventTimeXml(src as string),
+      kind: 'multipart',
+      employeeNo: isJson
+        ? this.extractEmployeeNo(src)
+        : this.extractEmployeeNoXml(src as string),
+      deviceId: isJson
+        ? this.extractDeviceId(src)
+        : this.extractDeviceIdXml(src as string),
+      deviceName: isJson
+        ? this.extractDeviceName(src)
+        : this.extractDeviceNameXml(src as string),
+      eventTime: isJson
+        ? this.extractEventTime(src)
+        : this.extractEventTimeXml(src as string),
       terminalEventType: isJson
         ? this.extractTerminalEventType(src)
-        : this.extractTerminalEventTypeXml(src as string ?? ''),
-      eventRaw:          src ?? '(multipart-no-data)',
-      snapshotBytes:     snap,
+        : this.extractTerminalEventTypeXml((src as string) ?? ''),
+      eventRaw: src ?? '(multipart-no-data)',
+      snapshotBytes: snap,
     };
   }
 
@@ -195,36 +220,36 @@ export class HikvisionWebhookController {
 
   private extractEmployeeNo(obj: any): string | undefined {
     const v =
-      obj?.employeeNo                              ||
-      obj?.EmployeeNo                              ||
-      obj?.employeeNoString                        ||
-      obj?.EmployeeNoString                        ||
-      obj?.cardNo                                  ||
-      obj?.personId                                ||
-      obj?.UserInfo?.employeeNo                    ||
-      obj?.AccessControllerEvent?.employeeNo       ||
+      obj?.employeeNo ||
+      obj?.EmployeeNo ||
+      obj?.employeeNoString ||
+      obj?.EmployeeNoString ||
+      obj?.cardNo ||
+      obj?.personId ||
+      obj?.UserInfo?.employeeNo ||
+      obj?.AccessControllerEvent?.employeeNo ||
       obj?.AccessControllerEvent?.employeeNoString ||
-      obj?.AccessControllerEvent?.cardNo           ||
-      obj?.Events?.[0]?.employeeNo                 ||
+      obj?.AccessControllerEvent?.cardNo ||
+      obj?.Events?.[0]?.employeeNo ||
       obj?.Events?.[0]?.employeeNoString;
     return v ? String(v).trim() : undefined;
   }
 
   private extractDeviceId(obj: any): string | undefined {
     const v =
-      obj?.deviceId                          ||
-      obj?.deviceID                          ||
-      obj?.DeviceID                          ||
-      obj?.ipAddress                         ||
-      obj?.AccessControllerEvent?.deviceId   ||
+      obj?.deviceId ||
+      obj?.deviceID ||
+      obj?.DeviceID ||
+      obj?.ipAddress ||
+      obj?.AccessControllerEvent?.deviceId ||
       obj?.Events?.[0]?.deviceId;
     return v ? String(v).trim() : undefined;
   }
 
   private extractDeviceName(obj: any): string | undefined {
     const v =
-      obj?.deviceName                        ||
-      obj?.DeviceName                        ||
+      obj?.deviceName ||
+      obj?.DeviceName ||
       obj?.AccessControllerEvent?.deviceName ||
       obj?.Events?.[0]?.deviceName;
     return v ? String(v).trim() : undefined;
@@ -232,14 +257,14 @@ export class HikvisionWebhookController {
 
   private extractEventTime(obj: any): string | undefined {
     const v =
-      obj?.dateTime                              ||
-      obj?.DateTime                              ||
-      obj?.eventTime                             ||
-      obj?.triggerTime                           ||
-      obj?.TriggerTime                           ||
-      obj?.AccessControllerEvent?.dateTime       ||
-      obj?.AccessControllerEvent?.DateTime       ||
-      obj?.Events?.[0]?.dateTime                 ||
+      obj?.dateTime ||
+      obj?.DateTime ||
+      obj?.eventTime ||
+      obj?.triggerTime ||
+      obj?.TriggerTime ||
+      obj?.AccessControllerEvent?.dateTime ||
+      obj?.AccessControllerEvent?.DateTime ||
+      obj?.Events?.[0]?.dateTime ||
       obj?.Events?.[0]?.time;
     return v ? String(v).trim() : undefined;
   }
@@ -252,14 +277,14 @@ export class HikvisionWebhookController {
    */
   private extractTerminalEventType(obj: any): TerminalEventType | null {
     const raw =
-      obj?.attendanceStatus                              ||
-      obj?.AttendanceStatus                              ||
-      obj?.workCode                                      ||
-      obj?.WorkCode                                      ||
-      obj?.AccessControllerEvent?.attendanceStatus       ||
-      obj?.AccessControllerEvent?.AttendanceStatus       ||
-      obj?.AccessControllerEvent?.workCode               ||
-      obj?.Events?.[0]?.attendanceStatus                 ||
+      obj?.attendanceStatus ||
+      obj?.AttendanceStatus ||
+      obj?.workCode ||
+      obj?.WorkCode ||
+      obj?.AccessControllerEvent?.attendanceStatus ||
+      obj?.AccessControllerEvent?.AttendanceStatus ||
+      obj?.AccessControllerEvent?.workCode ||
+      obj?.Events?.[0]?.attendanceStatus ||
       obj?.Events?.[0]?.workCode;
 
     return mapHikvisionStatus(raw);
@@ -270,16 +295,13 @@ export class HikvisionWebhookController {
   private extractEmployeeNoXml(xml: string): string | undefined {
     return (
       this.xmlTag(xml, 'employeeNo') ??
-      this.xmlTag(xml, 'FPID')      ??
+      this.xmlTag(xml, 'FPID') ??
       this.xmlAttr(xml, 'employeeNo')
     );
   }
 
   private extractDeviceIdXml(xml: string): string | undefined {
-    return (
-      this.xmlTag(xml, 'deviceID')     ??
-      this.xmlTag(xml, 'serialNumber')
-    );
+    return this.xmlTag(xml, 'deviceID') ?? this.xmlTag(xml, 'serialNumber');
   }
 
   private extractDeviceNameXml(xml: string): string | undefined {
@@ -287,10 +309,7 @@ export class HikvisionWebhookController {
   }
 
   private extractEventTimeXml(xml: string): string | undefined {
-    return (
-      this.xmlTag(xml, 'dateTime')    ??
-      this.xmlTag(xml, 'triggerTime')
-    );
+    return this.xmlTag(xml, 'dateTime') ?? this.xmlTag(xml, 'triggerTime');
   }
 
   private extractTerminalEventTypeXml(xml: string): TerminalEventType | null {
@@ -304,7 +323,9 @@ export class HikvisionWebhookController {
   // ─── XML HELPERS ─────────────────────────────────────────────────────────────
 
   private xmlTag(xml: string, tag: string): string | undefined {
-    const m = xml.match(new RegExp(`<${tag}[^>]*>\\s*([^<]+)\\s*<\\/${tag}>`, 'i'));
+    const m = xml.match(
+      new RegExp(`<${tag}[^>]*>\\s*([^<]+)\\s*<\\/${tag}>`, 'i'),
+    );
     return m?.[1]?.trim() || undefined;
   }
 
@@ -315,8 +336,11 @@ export class HikvisionWebhookController {
 
   // ─── MULTIPART SPLITTER ──────────────────────────────────────────────────────
 
-  private splitMultipart(buf: Buffer, boundary: string): Array<{ headers: string; body: Buffer }> {
-    const sep    = Buffer.from(`--${boundary}`);
+  private splitMultipart(
+    buf: Buffer,
+    boundary: string,
+  ): Array<{ headers: string; body: Buffer }> {
+    const sep = Buffer.from(`--${boundary}`);
     const ending = Buffer.from(`--${boundary}--`);
     const parts: Array<{ headers: string; body: Buffer }> = [];
 
@@ -335,7 +359,7 @@ export class HikvisionWebhookController {
       if (hSep !== -1) {
         parts.push({
           headers: part.slice(0, hSep).toString('utf8'),
-          body:    this.trimCrlf(part.slice(hSep + 4)),
+          body: this.trimCrlf(part.slice(hSep + 4)),
         });
       }
       pos = next;
@@ -353,14 +377,14 @@ export class HikvisionWebhookController {
 // ─── TYPES ───────────────────────────────────────────────────────────────────
 
 interface ParsedEvent {
-  kind:              'json' | 'xml' | 'multipart' | 'unknown';
-  employeeNo?:       string;
-  deviceId?:         string;
-  deviceName?:       string;
-  eventTime?:        string;
+  kind: 'json' | 'xml' | 'multipart' | 'unknown';
+  employeeNo?: string;
+  deviceId?: string;
+  deviceName?: string;
+  eventTime?: string;
   terminalEventType: TerminalEventType | null;
-  eventRaw?:         any;
-  snapshotBytes?:    Buffer;
+  eventRaw?: any;
+  snapshotBytes?: Buffer;
 }
 
 function emptyEvent(): ParsedEvent {

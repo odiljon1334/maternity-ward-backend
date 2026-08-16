@@ -5,7 +5,9 @@ import { AuthGuard } from '@nestjs/passport';
 export class JwtAuthGuard extends AuthGuard('jwt') {
   handleRequest(err: any, user: any) {
     if (err || !user) {
-      throw err || new UnauthorizedException('Token yaroqsiz yoki muddati tugagan');
+      throw (
+        err || new UnauthorizedException('Token yaroqsiz yoki muddati tugagan')
+      );
     }
     return user;
   }

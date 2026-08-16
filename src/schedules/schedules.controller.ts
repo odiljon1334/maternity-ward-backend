@@ -1,4 +1,16 @@
-import { Body, Controller, Get, Param, Post, Put, Query, UseGuards, UploadedFile, UseInterceptors, BadRequestException } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Put,
+  Query,
+  UseGuards,
+  UploadedFile,
+  UseInterceptors,
+  BadRequestException,
+} from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { SchedulesService } from './schedules.service';
@@ -13,7 +25,10 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { UserRole, ScheduleStatus } from '@prisma/client';
 
-function resolveHospitalId(jwtHospId: string | null, targetHospId?: string): string | null {
+function resolveHospitalId(
+  jwtHospId: string | null,
+  targetHospId?: string,
+): string | null {
   return jwtHospId || targetHospId || null;
 }
 
@@ -29,7 +44,7 @@ export class SchedulesController {
     @Query('year') year: string,
   ) {
     const m = +month || new Date().getMonth() + 1;
-    const y = +year  || new Date().getFullYear();
+    const y = +year || new Date().getFullYear();
     return this.service.getMySchedule(userId, m, y);
   }
 
@@ -63,7 +78,7 @@ export class SchedulesController {
   ) {
     return this.service.getMonthlySchedules(
       +month || new Date().getMonth() + 1,
-      +year  || new Date().getFullYear(),
+      +year || new Date().getFullYear(),
       resolveHospitalId(hospitalId, targetHospitalId),
     );
   }
@@ -78,7 +93,7 @@ export class SchedulesController {
   ) {
     return this.service.getScheduleStatistics(
       +month || new Date().getMonth() + 1,
-      +year  || new Date().getFullYear(),
+      +year || new Date().getFullYear(),
       resolveHospitalId(hospitalId, targetHospitalId),
     );
   }
@@ -95,8 +110,8 @@ export class SchedulesController {
   ) {
     return this.service.getMonthlySchedulesPaginated(
       +month || new Date().getMonth() + 1,
-      +year  || new Date().getFullYear(),
-      +page  || 1,
+      +year || new Date().getFullYear(),
+      +page || 1,
       +limit || 20,
       resolveHospitalId(hospitalId, targetHospitalId),
     );
@@ -117,7 +132,10 @@ export class SchedulesController {
   ) {
     // Bo'lim bo'yicha filter — hospitalId bilan birgalikda
     const resolvedHospId = resolveHospitalId(hospitalId, targetHospitalId);
-    return this.service.bulkGenerate({ ...dto, hospitalId: resolvedHospId } as any);
+    return this.service.bulkGenerate({
+      ...dto,
+      hospitalId: resolvedHospId,
+    } as any);
   }
 
   @Post('manual')
@@ -129,13 +147,21 @@ export class SchedulesController {
   @Post('rollover')
   @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
   rollover(
-    @Body() body: { fromMonth: number; fromYear: number; toMonth: number; toYear: number },
+    @Body()
+    body: {
+      fromMonth: number;
+      fromYear: number;
+      toMonth: number;
+      toYear: number;
+    },
     @CurrentUser('hospitalId') hospitalId: string | null,
     @Query('targetHospitalId') targetHospitalId?: string,
   ) {
     return this.service.rolloverMonth(
-      body.fromMonth, body.fromYear,
-      body.toMonth,   body.toYear,
+      body.fromMonth,
+      body.fromYear,
+      body.toMonth,
+      body.toYear,
       resolveHospitalId(hospitalId, targetHospitalId),
     );
   }
@@ -151,7 +177,7 @@ export class SchedulesController {
   ) {
     if (!file) throw new BadRequestException('Fayl yuklanmadi');
     const month = parseInt(body.month, 10);
-    const year  = parseInt(body.year,  10);
+    const year = parseInt(body.year, 10);
     if (!month || !year) throw new BadRequestException('month va year kerak');
     return this.service.importXlsx(
       file.buffer,

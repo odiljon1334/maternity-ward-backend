@@ -1,6 +1,13 @@
 import {
-  Body, Controller, Get, Param, Post, Put, Query,
-  UploadedFile, UseGuards, UseInterceptors,
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Query,
+  UploadedFile,
+  UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
@@ -51,11 +58,15 @@ export class AttendanceController {
     @Query('month') month: string,
     @Query('year') year: string,
   ) {
-    return this.service.getEmployeeAttendance(id, +month || new Date().getMonth() + 1, +year || new Date().getFullYear());
+    return this.service.getEmployeeAttendance(
+      id,
+      +month || new Date().getMonth() + 1,
+      +year || new Date().getFullYear(),
+    );
   }
 
   @Get('weekly-stats/:employeeId')
-    getWeeklyStats(
+  getWeeklyStats(
     @Param('employeeId') employeeId: string,
     @Query('weekStart') weekStart: string,
   ) {
@@ -77,8 +88,8 @@ export class AttendanceController {
     @UploadedFile() file?: Express.Multer.File,
   ) {
     const dto = new SelfCheckInDto();
-    if (gpsLat)      dto.gpsLat      = parseFloat(gpsLat);
-    if (gpsLng)      dto.gpsLng      = parseFloat(gpsLng);
+    if (gpsLat) dto.gpsLat = parseFloat(gpsLat);
+    if (gpsLng) dto.gpsLng = parseFloat(gpsLng);
     if (gpsAccuracy) dto.gpsAccuracy = parseFloat(gpsAccuracy);
     return this.service.selfCheckIn(userId, dto, file?.buffer);
   }
@@ -94,7 +105,11 @@ export class AttendanceController {
     @Body('lat') lat: string,
     @Body('lng') lng: string,
   ) {
-    return this.service.setHospitalGps(userId, parseFloat(lat), parseFloat(lng));
+    return this.service.setHospitalGps(
+      userId,
+      parseFloat(lat),
+      parseFloat(lng),
+    );
   }
 
   @Post('manual-checkin')
@@ -102,7 +117,11 @@ export class AttendanceController {
   manualCheckIn(
     @Body() body: { employeeId: string; checkInTime: string; note?: string },
   ) {
-    return this.service.manualCheckIn(body.employeeId, body.checkInTime, body.note);
+    return this.service.manualCheckIn(
+      body.employeeId,
+      body.checkInTime,
+      body.note,
+    );
   }
 
   @Post('mark-absent')

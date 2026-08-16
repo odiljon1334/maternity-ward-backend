@@ -122,3 +122,5 @@ docker compose -f docker-compose.production.yml ps
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 success "Deploy muvaffaqiyatli yakunlandi! 🚀"
+
+echo "🪐Log ko'rish: docker logs maternity-ward-backend-backend-1 -f --tail=200"

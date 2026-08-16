@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ConflictException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -30,14 +34,15 @@ export class HospitalsService {
       orderBy: { name: 'asc' },
     });
 
-    return hospitals.map(h => {
+    return hospitals.map((h) => {
       const dirUser = h.users?.[0] ?? null;
-      const directorName  = dirUser?.employee?.fullName ?? dirUser?.username ?? null;
+      const directorName =
+        dirUser?.employee?.fullName ?? dirUser?.username ?? null;
       const directorPhone = dirUser?.employee?.phone ?? null;
 
       return {
         ...h,
-        directorId:       dirUser?.id ?? null,
+        directorId: dirUser?.id ?? null,
         directorUsername: dirUser?.username ?? null,
         directorName,
         directorPhone,
@@ -56,7 +61,7 @@ export class HospitalsService {
         _count: { select: { employees: true, users: true } },
       },
     });
-    if (!h) throw new NotFoundException('Tug\'ruq xona topilmadi');
+    if (!h) throw new NotFoundException("Tug'ruq xona topilmadi");
     return h;
   }
 
@@ -66,17 +71,25 @@ export class HospitalsService {
     address?: string;
     phone?: string;
   }) {
-    const exists = await this.prisma.hospital.findUnique({ where: { code: data.code } });
-    if (exists) throw new ConflictException('Bu kod bilan tug\'ruq xona allaqachon mavjud');
+    const exists = await this.prisma.hospital.findUnique({
+      where: { code: data.code },
+    });
+    if (exists)
+      throw new ConflictException(
+        "Bu kod bilan tug'ruq xona allaqachon mavjud",
+      );
     return this.prisma.hospital.create({ data });
   }
 
-  async update(id: string, data: {
-    name?: string;
-    address?: string;
-    phone?: string;
-    isActive?: boolean;
-  }) {
+  async update(
+    id: string,
+    data: {
+      name?: string;
+      address?: string;
+      phone?: string;
+      isActive?: boolean;
+    },
+  ) {
     await this.findOne(id);
     return this.prisma.hospital.update({ where: { id }, data });
   }
@@ -96,15 +109,20 @@ export class HospitalsService {
   }
 
   // Create a director user for a hospital
-  async createDirector(hospitalId: string, dto: {
-    username: string;
-    password: string;
-    fullName: string;
-    phone?: string;
-  }) {
+  async createDirector(
+    hospitalId: string,
+    dto: {
+      username: string;
+      password: string;
+      fullName: string;
+      phone?: string;
+    },
+  ) {
     const hospital = await this.findOne(hospitalId);
 
-    const existing = await this.prisma.user.findUnique({ where: { username: dto.username } });
+    const existing = await this.prisma.user.findUnique({
+      where: { username: dto.username },
+    });
     if (existing) throw new ConflictException('Bu username allaqachon mavjud');
 
     const bcrypt = await import('bcrypt');
@@ -176,16 +194,23 @@ export class HospitalsService {
         },
       });
 
-      return { user: { id: user.id, username: user.username, role: user.role }, employee, hospital };
+      return {
+        user: { id: user.id, username: user.username, role: user.role },
+        employee,
+        hospital,
+      };
     });
   }
 
   // Update director for a hospital
-  async updateDirector(hospitalId: string, dto: {
-    fullName?: string;
-    phone?: string;
-    password?: string;
-  }) {
+  async updateDirector(
+    hospitalId: string,
+    dto: {
+      fullName?: string;
+      phone?: string;
+      password?: string;
+    },
+  ) {
     const hospital = await this.findOne(hospitalId);
 
     const dirUser = await this.prisma.user.findFirst({
@@ -198,7 +223,10 @@ export class HospitalsService {
       if (dto.password) {
         const bcrypt = await import('bcrypt');
         const hash = await bcrypt.hash(dto.password, 12);
-        await tx.user.update({ where: { id: dirUser.id }, data: { passwordHash: hash } });
+        await tx.user.update({
+          where: { id: dirUser.id },
+          data: { passwordHash: hash },
+        });
       }
 
       if (dto.fullName !== undefined || dto.phone !== undefined) {
@@ -221,11 +249,13 @@ export class HospitalsService {
   async updateGpsRadius(hospitalId: string, radius: number) {
     if (radius < 50 || radius > 2000) {
       const { BadRequestException } = await import('@nestjs/common');
-      throw new BadRequestException('Radius 50 – 2000 metr oralig\'ida bo\'lishi kerak');
+      throw new BadRequestException(
+        "Radius 50 – 2000 metr oralig'ida bo'lishi kerak",
+      );
     }
     return this.prisma.hospital.update({
       where: { id: hospitalId },
-      data:  { gpsRadius: radius },
+      data: { gpsRadius: radius },
       select: { id: true, gpsRadius: true },
     });
   }
@@ -234,7 +264,7 @@ export class HospitalsService {
   async resetGps(hospitalId: string) {
     return this.prisma.hospital.update({
       where: { id: hospitalId },
-      data:  { gpsLat: null, gpsLng: null },
+      data: { gpsLat: null, gpsLng: null },
       select: { id: true, gpsLat: true, gpsLng: true },
     });
   }
@@ -249,9 +279,10 @@ export class HospitalsService {
     return {
       success: true,
       deactivated: count,
-      message: count > 0
-        ? `${count} ta Telegram obuna o'chirildi. Yangi direktor /start orqali qayta ulana oladi.`
-        : 'Faol Telegram obuna topilmadi.',
+      message:
+        count > 0
+          ? `${count} ta Telegram obuna o'chirildi. Yangi direktor /start orqali qayta ulana oladi.`
+          : 'Faol Telegram obuna topilmadi.',
     };
   }
 }

@@ -1,5 +1,12 @@
 import {
-  Controller, Get, Post, Patch, Param, Body, Query, UseGuards,
+  Controller,
+  Get,
+  Post,
+  Patch,
+  Param,
+  Body,
+  Query,
+  UseGuards,
 } from '@nestjs/common';
 import { PaymentsService } from './payments.service';
 import { CreatePaymentDto } from './dto/create-payment.dto';
@@ -29,7 +36,11 @@ export class PaymentsController {
     @Query('period') period?: string,
     @Query('limit') limit?: string,
   ) {
-    return this.service.findAll({ hospitalId, period, limit: limit ? Number(limit) : 100 });
+    return this.service.findAll({
+      hospitalId,
+      period,
+      limit: limit ? Number(limit) : 100,
+    });
   }
 
   @Post()

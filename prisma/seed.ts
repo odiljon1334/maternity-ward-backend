@@ -22,9 +22,24 @@ async function main() {
 
   // ─── 2. Hospitals ─────────────────────────────────────────
   const hospitalData = [
-    { name: "1-son Tug'ruq xona", code: 'TUG-01', address: 'Toshkent sh., Chilonzor tumani', phone: '+998711234501' },
-    { name: "2-son Tug'ruq xona", code: 'TUG-02', address: 'Toshkent sh., Yunusobod tumani', phone: '+998711234502' },
-    { name: "3-son Tug'ruq xona", code: 'TUG-03', address: 'Toshkent sh., Mirzo Ulugbek tumani', phone: '+998711234503' },
+    {
+      name: "1-son Tug'ruq xona",
+      code: 'TUG-01',
+      address: 'Toshkent sh., Chilonzor tumani',
+      phone: '+998711234501',
+    },
+    {
+      name: "2-son Tug'ruq xona",
+      code: 'TUG-02',
+      address: 'Toshkent sh., Yunusobod tumani',
+      phone: '+998711234502',
+    },
+    {
+      name: "3-son Tug'ruq xona",
+      code: 'TUG-03',
+      address: 'Toshkent sh., Mirzo Ulugbek tumani',
+      phone: '+998711234503',
+    },
   ];
 
   const hospitals: Record<string, string> = {};
@@ -42,11 +57,27 @@ async function main() {
 
   // ─── 3. Departments for demo hospital (TUG-01) ────────────
   const departments = [
-    { name: "Tug'ruq xona", code: 'MATERNITY', description: "Asosiy tug'ruq bo'limi" },
-    { name: 'Reanimatsiya',  code: 'ICU',       description: 'Intensiv davolash bo\'limi' },
-    { name: "Akusherlik bo'limi", code: 'OBSTETRICS', description: 'Akusherlik va ginekologiya' },
-    { name: "Yangi tug'ilganlar", code: 'NEONATAL',   description: "Chaqaloqlar bo'limi" },
-    { name: "Ma'muriyat",   code: 'ADMIN',      description: "Ma'muriy xodimlar" },
+    {
+      name: "Tug'ruq xona",
+      code: 'MATERNITY',
+      description: "Asosiy tug'ruq bo'limi",
+    },
+    {
+      name: 'Reanimatsiya',
+      code: 'ICU',
+      description: "Intensiv davolash bo'limi",
+    },
+    {
+      name: "Akusherlik bo'limi",
+      code: 'OBSTETRICS',
+      description: 'Akusherlik va ginekologiya',
+    },
+    {
+      name: "Yangi tug'ilganlar",
+      code: 'NEONATAL',
+      description: "Chaqaloqlar bo'limi",
+    },
+    { name: "Ma'muriyat", code: 'ADMIN', description: "Ma'muriy xodimlar" },
   ];
 
   const deptIds: Record<string, string> = {};
@@ -62,9 +93,18 @@ async function main() {
 
   // ─── 4. Positions for demo hospital (TUG-01) ──────────────
   const positionNames = [
-    'Direktor', 'Bosh vrach', 'Vrach-akusher', 'Vrach-ginekolog',
-    'Vrach-neonatolog', 'Bosh hamshira', 'Hamshira', 'Akusherka',
-    'Laborant', 'Registrator', "Xo'jalik bo'limi", 'Qorovul',
+    'Direktor',
+    'Bosh vrach',
+    'Vrach-akusher',
+    'Vrach-ginekolog',
+    'Vrach-neonatolog',
+    'Bosh hamshira',
+    'Hamshira',
+    'Akusherka',
+    'Laborant',
+    'Registrator',
+    "Xo'jalik bo'limi",
+    'Qorovul',
   ];
 
   const posIds: Record<string, string> = {};
@@ -106,14 +146,16 @@ async function main() {
       update: shift,
       create: { ...shift, hospitalId: demoId },
     });
-    console.log(`✅ Shift: ${shift.name} (${shift.startTime}–${shift.endTime})`);
+    console.log(
+      `✅ Shift: ${shift.name} (${shift.startTime}–${shift.endTime})`,
+    );
   }
 
   // ─── 6. System Settings (global) ──────────────────────────
   const settings = [
-    { key: 'late_grace_minutes',       value: '15' },
+    { key: 'late_grace_minutes', value: '15' },
     { key: 'weekly_late_threshold_min', value: '120' },
-    { key: 'overtime_rate',            value: '1.5' },
+    { key: 'overtime_rate', value: '1.5' },
   ];
 
   for (const s of settings) {
@@ -121,9 +163,14 @@ async function main() {
       where: { key: s.key, hospitalId: null },
     });
     if (existing) {
-      await prisma.systemSettings.update({ where: { id: existing.id }, data: { value: s.value } });
+      await prisma.systemSettings.update({
+        where: { id: existing.id },
+        data: { value: s.value },
+      });
     } else {
-      await prisma.systemSettings.create({ data: { key: s.key, value: s.value, hospitalId: null } });
+      await prisma.systemSettings.create({
+        data: { key: s.key, value: s.value, hospitalId: null },
+      });
     }
   }
   console.log('✅ System settings configured');
@@ -161,9 +208,12 @@ async function main() {
   console.log('\n✅ Seeding completed!\n');
   console.log('🔑 Login credentials:');
   console.log('   superadmin / Admin@12345  (SUPER_ADMIN — no hospital)');
-  console.log('   director1  / Director@123 (DIRECTOR — 1-son Tug\'ruq xona)\n');
+  console.log("   director1  / Director@123 (DIRECTOR — 1-son Tug'ruq xona)\n");
 }
 
 main()
-  .catch((e) => { console.error(e); process.exit(1); })
+  .catch((e) => {
+    console.error(e);
+    process.exit(1);
+  })
   .finally(() => prisma.$disconnect());

@@ -1,13 +1,20 @@
 import {
-  Controller, Get, Put, Delete, Post,
-  Param, Query, Body, UseGuards,
+  Controller,
+  Get,
+  Put,
+  Delete,
+  Post,
+  Param,
+  Query,
+  Body,
+  UseGuards,
 } from '@nestjs/common';
 import { NotificationsService } from './notifications.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { UserRole } from '@prisma/client';
-import { IsArray, IsOptional, IsString } from 'class-validator';
+import { IsOptional, IsString } from 'class-validator';
 
 class SendTelegramDto {
   @IsOptional()
@@ -24,7 +31,10 @@ export class NotificationsController {
   constructor(private readonly service: NotificationsService) {}
 
   @Get()
-  findAll(@Query('unreadOnly') unreadOnly?: string, @Query('limit') limit?: string) {
+  findAll(
+    @Query('unreadOnly') unreadOnly?: string,
+    @Query('limit') limit?: string,
+  ) {
     return this.service.findAll({
       unreadOnly: unreadOnly === 'true',
       limit: limit ? Number(limit) : 50,
@@ -32,7 +42,7 @@ export class NotificationsController {
   }
 
   @Get('unread-count')
-    unreadCount() {
+  unreadCount() {
     return this.service.unreadCount();
   }
 

@@ -1,10 +1,15 @@
-import { Injectable, Logger, NotFoundException, ConflictException } from '@nestjs/common';
+/* eslint-disable @typescript-eslint/no-unused-vars */
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  ConflictException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { DateUtil } from '../common/utils/date.util';
 import { isHospitalBlocked } from '../common/utils/payment.util';
 import { OVERTIME_RATE } from '../common/constants';
 import * as ExcelJS from 'exceljs';
-import { PayrollStatus } from '@prisma/client';
 import PDFDocument from 'pdfkit';
 import { PushService } from '../push/push.service';
 
@@ -13,14 +18,16 @@ export class PayrollService {
   private readonly logger = new Logger(PayrollService.name);
   constructor(
     private readonly prisma: PrismaService,
-    private readonly push:   PushService,
+    private readonly push: PushService,
   ) {}
 
   // ──────────────────────────────────────────
   // CALCULATE payroll for employee/month
   // ──────────────────────────────────────────
   async calculate(employeeId: string, month: number, year: number) {
-    const emp = await this.prisma.employee.findUnique({ where: { id: employeeId } });
+    const emp = await this.prisma.employee.findUnique({
+      where: { id: employeeId },
+    });
     if (!emp) throw new NotFoundException('Hodim topilmadi');
 
     const start = DateUtil.startOfMonth(year, month);
@@ -40,13 +47,16 @@ export class PayrollService {
     });
 
     const baseSalary = Number(emp.baseSalary);
-    const workDays = records.filter(r => r.status !== 'ABSENT').length;
-    const absences = records.filter(r => r.status === 'ABSENT').length;
+    const workDays = records.filter((r) => r.status !== 'ABSENT').length;
+    const absences = records.filter((r) => r.status === 'ABSENT').length;
     const totalLateMin = records.reduce((s, r) => s + r.lateMinutes, 0);
     const totalEarlyMin = records.reduce((s, r) => s + r.earlyLeaveMin, 0);
     const totalOvertimeMin = records.reduce((s, r) => s + r.overtimeMinutes, 0);
     // Sof ish vaqti: checkIn/checkOut bo'lgan kunlardagi netWorkMin yig'indisi
-    const totalNetWorkMin = records.reduce((s, r) => s + (r.netWorkMin ?? 0), 0);
+    const totalNetWorkMin = records.reduce(
+      (s, r) => s + (r.netWorkMin ?? 0),
+      0,
+    );
 
     // Scheduled work days in this month
     const scheduledDays = await this.prisma.schedule.count({
@@ -58,7 +68,8 @@ export class PayrollService {
     });
 
     const dailyRate = scheduledDays > 0 ? baseSalary / scheduledDays : 0;
-    const minuteRate = scheduledDays > 0 ? baseSalary / (scheduledDays * 12 * 60) : 0;
+    const minuteRate =
+      scheduledDays > 0 ? baseSalary / (scheduledDays * 12 * 60) : 0;
 
     // Deductions
     const absenceDeduction = absences * dailyRate;
@@ -77,7 +88,11 @@ export class PayrollService {
 
     const netSalary = Math.max(
       0,
-      baseSalary - absenceDeduction - lateDeduction - earlyLeaveDeduction + overtimeBonus,
+      baseSalary -
+        absenceDeduction -
+        lateDeduction -
+        earlyLeaveDeduction +
+        overtimeBonus,
     );
 
     return {
@@ -136,13 +151,19 @@ export class PayrollService {
       select: { status: true, manualBonus: true, manualDeduction: true },
     });
 
-    const keepStatus = existing?.status === 'APPROVED' || existing?.status === 'PAID';
+    const keepStatus =
+      existing?.status === 'APPROVED' || existing?.status === 'PAID';
     const finalStatus = keepStatus ? existing!.status : 'DRAFT';
 
     // APPROVED/PAID bo'lsa manual bonuslarni ham saqlaymiz
     const finalBonus = keepStatus ? Number(existing!.manualBonus) : manualBonus;
-    const finalDeduction = keepStatus ? Number(existing!.manualDeduction) : manualDeduction;
-    const finalNet = Math.max(0, preview.netSalary + finalBonus - finalDeduction);
+    const finalDeduction = keepStatus
+      ? Number(existing!.manualDeduction)
+      : manualDeduction;
+    const finalNet = Math.max(
+      0,
+      preview.netSalary + finalBonus - finalDeduction,
+    );
 
     return this.prisma.payrollRecord.upsert({
       where: { employeeId_month_year: { employeeId, month, year } },
@@ -171,10 +192,17 @@ export class PayrollService {
   // ──────────────────────────────────────────
   // BULK GENERATE for all employees
   // ──────────────────────────────────────────
-  async generateMonthlyPayroll(month: number, year: number, hospitalId?: string, departmentId?: string) {
+  async generateMonthlyPayroll(
+    month: number,
+    year: number,
+    hospitalId?: string,
+    departmentId?: string,
+  ) {
     // Kasalxona to'lovi OVERDUE bo'lsa — maosh hisoblanmaydi
-    if (hospitalId && await isHospitalBlocked(this.prisma, hospitalId)) {
-      this.logger.warn(`Hospital ${hospitalId} is BLOCKED — payroll generation skipped`);
+    if (hospitalId && (await isHospitalBlocked(this.prisma, hospitalId))) {
+      this.logger.warn(
+        `Hospital ${hospitalId} is BLOCKED — payroll generation skipped`,
+      );
       return { month, year, total: 0, blocked: true, results: [] };
     }
 
@@ -198,14 +226,24 @@ export class PayrollService {
     for (const emp of employees) {
       try {
         const record = await this.createOrUpdate(emp.id, month, year);
-        results.push({ employeeId: emp.id, status: 'ok', netSalary: Number(record.netSalary) });
+        results.push({
+          employeeId: emp.id,
+          status: 'ok',
+          netSalary: Number(record.netSalary),
+        });
         // Push xabarnoma — xodimga maosh hisoblandi
         const uid = userIdMap[emp.id];
         if (uid) {
-          this.push.notifyPayrollGenerated(uid, month, year, Number(record.netSalary)).catch(() => null);
+          this.push
+            .notifyPayrollGenerated(uid, month, year, Number(record.netSalary))
+            .catch(() => null);
         }
       } catch (e) {
-        results.push({ employeeId: emp.id, status: 'error', error: e instanceof Error ? e.message : String(e) });
+        results.push({
+          employeeId: emp.id,
+          status: 'error',
+          error: e instanceof Error ? e.message : String(e),
+        });
       }
     }
 
@@ -216,9 +254,14 @@ export class PayrollService {
   // APPROVE payroll
   // ──────────────────────────────────────────
   async approve(id: string) {
-    const record = await this.prisma.payrollRecord.findUnique({ where: { id } });
+    const record = await this.prisma.payrollRecord.findUnique({
+      where: { id },
+    });
     if (!record) throw new NotFoundException('Maosh yozuvi topilmadi');
-    if (record.status !== 'DRAFT') throw new ConflictException('Faqat DRAFT holatdagilarni tasdiqlash mumkin');
+    if (record.status !== 'DRAFT')
+      throw new ConflictException(
+        'Faqat DRAFT holatdagilarni tasdiqlash mumkin',
+      );
 
     return this.prisma.payrollRecord.update({
       where: { id },
@@ -229,7 +272,12 @@ export class PayrollService {
   // ──────────────────────────────────────────
   // GET payroll list
   // ──────────────────────────────────────────
-  async findAll(month: number, year: number, hospitalId?: string, departmentId?: string) {
+  async findAll(
+    month: number,
+    year: number,
+    hospitalId?: string,
+    departmentId?: string,
+  ) {
     const where: any = { month, year };
     if (hospitalId || departmentId) {
       where.employee = {};
@@ -255,32 +303,68 @@ export class PayrollService {
   // ──────────────────────────────────────────
   // EXCEL EXPORT
   // ──────────────────────────────────────────
-  async exportExcel(month: number, year: number, hospitalId?: string, departmentId?: string): Promise<Buffer> {
+  async exportExcel(
+    month: number,
+    year: number,
+    hospitalId?: string,
+    departmentId?: string,
+  ): Promise<Buffer> {
     const records = await this.findAll(month, year, hospitalId, departmentId);
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet(`Maosh ${month}-${year}`);
 
-    const monthNames = ['', 'Yanvar', 'Fevral', 'Mart', 'Aprel', 'May', 'Iyun',
-      'Iyul', 'Avgust', 'Sentyabr', 'Oktyabr', 'Noyabr', 'Dekabr'];
+    const monthNames = [
+      '',
+      'Yanvar',
+      'Fevral',
+      'Mart',
+      'Aprel',
+      'May',
+      'Iyun',
+      'Iyul',
+      'Avgust',
+      'Sentyabr',
+      'Oktyabr',
+      'Noyabr',
+      'Dekabr',
+    ];
 
     sheet.mergeCells('A1:N1');
-    sheet.getCell('A1').value = `Tug'ruq xona — ${monthNames[month]} ${year} — Oylik maosh jadvali`;
+    sheet.getCell('A1').value =
+      `Tug'ruq xona — ${monthNames[month]} ${year} — Oylik maosh jadvali`;
     sheet.getCell('A1').font = { bold: true, size: 14 };
     sheet.getCell('A1').alignment = { horizontal: 'center' };
 
     sheet.addRow([]);
     sheet.addRow([
-      '№', 'F.I.O', 'Bo\'lim', 'Lavozim',
-      'Asosiy maosh', 'Ish kunlari', 'Yo\'qligi',
-      'Kechikish (min)', 'Erta ketish (min)', 'Overtime (min)',
-      'Sof ish vaqti (min)', 'Sof ish vaqti (soat)',
-      'Kechikish kesim', 'Yo\'qlik kesim', 'Overtime bonus',
-      'Qo\'l bonus', 'Qo\'l kesim', 'Net maosh', 'Status',
+      '№',
+      'F.I.O',
+      "Bo'lim",
+      'Lavozim',
+      'Asosiy maosh',
+      'Ish kunlari',
+      "Yo'qligi",
+      'Kechikish (min)',
+      'Erta ketish (min)',
+      'Overtime (min)',
+      'Sof ish vaqti (min)',
+      'Sof ish vaqti (soat)',
+      'Kechikish kesim',
+      "Yo'qlik kesim",
+      'Overtime bonus',
+      "Qo'l bonus",
+      "Qo'l kesim",
+      'Net maosh',
+      'Status',
     ]);
 
     const headerRow = sheet.getRow(3);
     headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-    headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1565C0' } };
+    headerRow.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF1565C0' },
+    };
     headerRow.height = 25;
 
     records.forEach((r, i) => {
@@ -309,11 +393,25 @@ export class PayrollService {
     });
 
     sheet.columns = [
-      { width: 4 },  { width: 30 }, { width: 20 }, { width: 20 },
-      { width: 15 }, { width: 12 }, { width: 10 }, { width: 15 },
-      { width: 15 }, { width: 14 }, { width: 18 }, { width: 18 },
-      { width: 15 }, { width: 14 }, { width: 15 }, { width: 12 },
-      { width: 12 }, { width: 15 }, { width: 12 },
+      { width: 4 },
+      { width: 30 },
+      { width: 20 },
+      { width: 20 },
+      { width: 15 },
+      { width: 12 },
+      { width: 10 },
+      { width: 15 },
+      { width: 15 },
+      { width: 14 },
+      { width: 18 },
+      { width: 18 },
+      { width: 15 },
+      { width: 14 },
+      { width: 15 },
+      { width: 12 },
+      { width: 12 },
+      { width: 15 },
+      { width: 12 },
     ];
 
     return (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
@@ -328,7 +426,7 @@ export class PayrollService {
 
     const where: any = { employeeId: emp.id };
     if (month) where.month = month;
-    if (year)  where.year  = year;
+    if (year) where.year = year;
 
     return this.prisma.payrollRecord.findMany({
       where,
@@ -341,7 +439,11 @@ export class PayrollService {
   // ──────────────────────────────────────────
   // EMPLOYEE: o'z varaqasini yuklab olish
   // ──────────────────────────────────────────
-  async generateMyPayslipPdf(userId: string, month: number, year: number): Promise<Buffer> {
+  async generateMyPayslipPdf(
+    userId: string,
+    month: number,
+    year: number,
+  ): Promise<Buffer> {
     const emp = await this.prisma.employee.findFirst({ where: { userId } });
     if (!emp) throw new NotFoundException('Xodim topilmadi');
     return this.generatePayslipPdf(emp.id, month, year);
@@ -350,11 +452,19 @@ export class PayrollService {
   // ──────────────────────────────────────────
   // PDF PAYSLIP
   // ──────────────────────────────────────────
-  async generatePayslipPdf(employeeId: string, month: number, year: number): Promise<Buffer> {
+  async generatePayslipPdf(
+    employeeId: string,
+    month: number,
+    year: number,
+  ): Promise<Buffer> {
     // Fetch saved record first; if not found, calculate on the fly
-    let record = await this.prisma.payrollRecord.findUnique({
+    const record = await this.prisma.payrollRecord.findUnique({
       where: { employeeId_month_year: { employeeId, month, year } },
-      include: { employee: { include: { department: true, position: true, hospital: true } } },
+      include: {
+        employee: {
+          include: { department: true, position: true, hospital: true },
+        },
+      },
     });
 
     // If no saved record, calculate preview
@@ -374,13 +484,24 @@ export class PayrollService {
     }
 
     const MONTH_NAMES = [
-      '', 'Yanvar', 'Fevral', 'Mart', 'Aprel', 'May', 'Iyun',
-      'Iyul', 'Avgust', 'Sentyabr', 'Oktyabr', 'Noyabr', 'Dekabr',
+      '',
+      'Yanvar',
+      'Fevral',
+      'Mart',
+      'Aprel',
+      'May',
+      'Iyun',
+      'Iyul',
+      'Avgust',
+      'Sentyabr',
+      'Oktyabr',
+      'Noyabr',
+      'Dekabr',
     ];
 
     const fmtMoney = (v: number | string) => {
       const n = Math.round(Number(v));
-      return n.toLocaleString('ru-RU') + ' so\'m';
+      return n.toLocaleString('ru-RU') + " so'm";
     };
     const fmtMin = (m: number) => {
       if (!m) return '0 daq';
@@ -390,25 +511,48 @@ export class PayrollService {
     };
 
     // Resolve values from record or preview
-    const baseSalary       = record ? Number(record.baseSalary)        : previewData.baseSalary;
-    const totalWorkDays    = record ? record.totalWorkDays              : previewData.totalWorkDays;
-    const totalAbsences    = record ? record.totalAbsences             : previewData.totalAbsences;
-    const totalLateMin     = record ? record.totalLateMin              : previewData.totalLateMin;
-    const totalEarlyMin    = record ? record.totalEarlyMin             : previewData.totalEarlyMin;
-    const totalOvertimeMin = record ? record.totalOvertimeMin          : previewData.totalOvertimeMin;
-    const totalNetWorkMin  = record ? (record.totalNetWorkMin ?? 0)    : previewData.totalNetWorkMin;
-    const absenceDeduction = record ? Number(record.absenceDeduction)  : previewData.absenceDeduction;
-    const lateDeduction    = record ? Number(record.lateDeduction)     : previewData.lateDeduction;
-    const earlyLeaveDeduction = record ? Number(record.earlyLeaveDeduction) : previewData.earlyLeaveDeduction;
-    const overtimeBonus    = record ? Number(record.overtimeBonus)     : previewData.overtimeBonus;
-    const manualBonus      = record ? Number(record.manualBonus)       : 0;
-    const manualDeduction  = record ? Number(record.manualDeduction)   : 0;
-    const netSalary        = record ? Number(record.netSalary)         : previewData.netSalary;
-    const status           = record?.status ?? 'PREVIEW';
-    const hospitalName     = (emp.hospital as any)?.name ?? 'Tug\'ruqxona';
+    const baseSalary = record
+      ? Number(record.baseSalary)
+      : previewData.baseSalary;
+    const totalWorkDays = record
+      ? record.totalWorkDays
+      : previewData.totalWorkDays;
+    const totalAbsences = record
+      ? record.totalAbsences
+      : previewData.totalAbsences;
+    const totalLateMin = record
+      ? record.totalLateMin
+      : previewData.totalLateMin;
+    const totalEarlyMin = record
+      ? record.totalEarlyMin
+      : previewData.totalEarlyMin;
+    const totalOvertimeMin = record
+      ? record.totalOvertimeMin
+      : previewData.totalOvertimeMin;
+    const totalNetWorkMin = record
+      ? (record.totalNetWorkMin ?? 0)
+      : previewData.totalNetWorkMin;
+    const absenceDeduction = record
+      ? Number(record.absenceDeduction)
+      : previewData.absenceDeduction;
+    const lateDeduction = record
+      ? Number(record.lateDeduction)
+      : previewData.lateDeduction;
+    const earlyLeaveDeduction = record
+      ? Number(record.earlyLeaveDeduction)
+      : previewData.earlyLeaveDeduction;
+    const overtimeBonus = record
+      ? Number(record.overtimeBonus)
+      : previewData.overtimeBonus;
+    const manualBonus = record ? Number(record.manualBonus) : 0;
+    const manualDeduction = record ? Number(record.manualDeduction) : 0;
+    const netSalary = record ? Number(record.netSalary) : previewData.netSalary;
+    const status = record?.status ?? 'PREVIEW';
+    const hospitalName = (emp.hospital as any)?.name ?? "Tug'ruqxona";
 
-    const totalDeductions = absenceDeduction + lateDeduction + earlyLeaveDeduction + manualDeduction;
-    const totalBonuses    = overtimeBonus + manualBonus;
+    const totalDeductions =
+      absenceDeduction + lateDeduction + earlyLeaveDeduction + manualDeduction;
+    const totalBonuses = overtimeBonus + manualBonus;
 
     // ── Build PDF ──────────────────────────────────────────────────────────
     return new Promise((resolve, reject) => {
@@ -428,54 +572,78 @@ export class PayrollService {
 
       const W = 595 - 100; // usable width (A4 - margins)
       const COLORS = {
-        primary:   '#4f46e5', // indigo
-        success:   '#16a34a',
-        danger:    '#dc2626',
-        muted:     '#6b7280',
-        border:    '#e5e7eb',
-        dark:      '#111827',
-        lightBg:   '#f9fafb',
-        headerBg:  '#4f46e5',
+        primary: '#4f46e5', // indigo
+        success: '#16a34a',
+        danger: '#dc2626',
+        muted: '#6b7280',
+        border: '#e5e7eb',
+        dark: '#111827',
+        lightBg: '#f9fafb',
+        headerBg: '#4f46e5',
       };
 
       // ── HEADER BANNER ─────────────────────────────────────────────
       doc.rect(50, 40, W, 70).fill(COLORS.headerBg);
 
-      doc.fillColor('#ffffff')
-        .font('Helvetica-Bold').fontSize(16)
+      doc
+        .fillColor('#ffffff')
+        .font('Helvetica-Bold')
+        .fontSize(16)
         .text('MAOSH VARAQASI', 50, 55, { width: W, align: 'center' });
 
-      doc.font('Helvetica').fontSize(10)
+      doc
+        .font('Helvetica')
+        .fontSize(10)
         .text(`${hospitalName}`, 50, 77, { width: W, align: 'center' });
 
-      doc.font('Helvetica').fontSize(11)
-        .text(`${MONTH_NAMES[month]} ${year}`, 50, 92, { width: W, align: 'center' });
+      doc
+        .font('Helvetica')
+        .fontSize(11)
+        .text(`${MONTH_NAMES[month]} ${year}`, 50, 92, {
+          width: W,
+          align: 'center',
+        });
 
       // Status badge (top right)
-      const statusLabel = status === 'APPROVED' ? 'TASDIQLANGAN'
-                        : status === 'PAID'      ? "TO'LANGAN"
-                        : status === 'PREVIEW'   ? 'KO\'RINISH'
-                        : 'QORALAMA';
-      const statusColor = status === 'APPROVED' ? '#16a34a'
-                        : status === 'PAID'      ? '#0284c7'
-                        : status === 'PREVIEW'   ? '#9333ea'
-                        : '#d97706';
+      const statusLabel =
+        status === 'APPROVED'
+          ? 'TASDIQLANGAN'
+          : status === 'PAID'
+            ? "TO'LANGAN"
+            : status === 'PREVIEW'
+              ? "KO'RINISH"
+              : 'QORALAMA';
+      const statusColor =
+        status === 'APPROVED'
+          ? '#16a34a'
+          : status === 'PAID'
+            ? '#0284c7'
+            : status === 'PREVIEW'
+              ? '#9333ea'
+              : '#d97706';
 
       doc.roundedRect(W - 10, 50, 90, 20, 4).fill(statusColor);
-      doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(8)
+      doc
+        .fillColor('#ffffff')
+        .font('Helvetica-Bold')
+        .fontSize(8)
         .text(statusLabel, W - 10, 57, { width: 90, align: 'center' });
 
       let y = 130;
 
       // ── EMPLOYEE INFO BOX ────────────────────────────────────────
       doc.rect(50, y, W, 56).fill(COLORS.lightBg).stroke(COLORS.border);
-      doc.fillColor(COLORS.dark).font('Helvetica-Bold').fontSize(10)
-        .text('XODIM MA\'LUMOTLARI', 62, y + 8);
+      doc
+        .fillColor(COLORS.dark)
+        .font('Helvetica-Bold')
+        .fontSize(10)
+        .text("XODIM MA'LUMOTLARI", 62, y + 8);
 
       doc.font('Helvetica').fontSize(9).fillColor(COLORS.muted);
-      const col1x = 62, col2x = 62 + W / 2;
+      const col1x = 62,
+        col2x = 62 + W / 2;
       doc.text('F.I.O:', col1x, y + 24);
-      doc.text('Bo\'lim:', col1x, y + 37);
+      doc.text("Bo'lim:", col1x, y + 37);
       doc.text('Lavozim:', col2x, y + 24);
       doc.text('Xodim ID:', col2x, y + 37);
 
@@ -488,19 +656,31 @@ export class PayrollService {
       y += 72;
 
       // ── HELPER: draw section ────────────────────────────────────
-      const drawSection = (title: string, rows: { label: string; value: string; color?: string }[]) => {
+      const drawSection = (
+        title: string,
+        rows: { label: string; value: string; color?: string }[],
+      ) => {
         // Section title
         doc.rect(50, y, W, 20).fill('#e0e7ff');
-        doc.fillColor(COLORS.primary).font('Helvetica-Bold').fontSize(9)
+        doc
+          .fillColor(COLORS.primary)
+          .font('Helvetica-Bold')
+          .fontSize(9)
           .text(title, 62, y + 6);
         y += 20;
 
         rows.forEach((row, i) => {
           const rowBg = i % 2 === 0 ? '#ffffff' : COLORS.lightBg;
           doc.rect(50, y, W, 18).fill(rowBg);
-          doc.fillColor(COLORS.muted).font('Helvetica').fontSize(9)
+          doc
+            .fillColor(COLORS.muted)
+            .font('Helvetica')
+            .fontSize(9)
             .text(row.label, 62, y + 5);
-          doc.fillColor(row.color ?? COLORS.dark).font('Helvetica-Bold').fontSize(9)
+          doc
+            .fillColor(row.color ?? COLORS.dark)
+            .font('Helvetica-Bold')
+            .fontSize(9)
             .text(row.value, 50, y + 5, { width: W - 10, align: 'right' });
           y += 18;
         });
@@ -512,36 +692,81 @@ export class PayrollService {
       drawSection('ISH VAQTI VA DAVOMAT', [
         { label: 'Asosiy maosh', value: fmtMoney(baseSalary) },
         { label: 'Ish kunlari', value: `${totalWorkDays} kun` },
-        { label: 'Yo\'qlik', value: `${totalAbsences} kun` },
+        { label: "Yo'qlik", value: `${totalAbsences} kun` },
         { label: 'Sof ish vaqti', value: fmtMin(totalNetWorkMin) },
       ]);
 
       // ── SECTION 2: KESIMLAR ───────────────────────────────────
       drawSection('KESIMLAR (CHEGIRMALAR)', [
-        { label: 'Yo\'qlik uchun kesim',     value: totalDeductions > 0 ? `− ${fmtMoney(absenceDeduction)}`    : '—', color: absenceDeduction    > 0 ? COLORS.danger : undefined },
-        { label: 'Kechikish uchun kesim',    value: lateDeduction    > 0 ? `− ${fmtMoney(lateDeduction)}`    : '—', color: lateDeduction    > 0 ? COLORS.danger : undefined },
-        { label: 'Erta ketish uchun kesim',  value: earlyLeaveDeduction > 0 ? `− ${fmtMoney(earlyLeaveDeduction)}` : '—', color: earlyLeaveDeduction > 0 ? COLORS.danger : undefined },
-        { label: "Qo'lda kesim",             value: manualDeduction   > 0 ? `− ${fmtMoney(manualDeduction)}`  : '—', color: manualDeduction   > 0 ? COLORS.danger : undefined },
-        { label: 'Jami kesimlar',            value: totalDeductions   > 0 ? `− ${fmtMoney(totalDeductions)}`  : '0 so\'m', color: totalDeductions > 0 ? COLORS.danger : undefined },
+        {
+          label: "Yo'qlik uchun kesim",
+          value: totalDeductions > 0 ? `− ${fmtMoney(absenceDeduction)}` : '—',
+          color: absenceDeduction > 0 ? COLORS.danger : undefined,
+        },
+        {
+          label: 'Kechikish uchun kesim',
+          value: lateDeduction > 0 ? `− ${fmtMoney(lateDeduction)}` : '—',
+          color: lateDeduction > 0 ? COLORS.danger : undefined,
+        },
+        {
+          label: 'Erta ketish uchun kesim',
+          value:
+            earlyLeaveDeduction > 0
+              ? `− ${fmtMoney(earlyLeaveDeduction)}`
+              : '—',
+          color: earlyLeaveDeduction > 0 ? COLORS.danger : undefined,
+        },
+        {
+          label: "Qo'lda kesim",
+          value: manualDeduction > 0 ? `− ${fmtMoney(manualDeduction)}` : '—',
+          color: manualDeduction > 0 ? COLORS.danger : undefined,
+        },
+        {
+          label: 'Jami kesimlar',
+          value:
+            totalDeductions > 0 ? `− ${fmtMoney(totalDeductions)}` : "0 so'm",
+          color: totalDeductions > 0 ? COLORS.danger : undefined,
+        },
       ]);
 
       // ── SECTION 3: BONUSLAR ───────────────────────────────────
       drawSection('BONUSLAR', [
-        { label: 'Overtime bonus', value: overtimeBonus > 0 ? `+ ${fmtMoney(overtimeBonus)}` : '—', color: overtimeBonus > 0 ? COLORS.success : undefined },
-        { label: 'Kechikish (soat)',  value: fmtMin(totalLateMin) },
-        { label: 'Erta ketish',      value: fmtMin(totalEarlyMin) },
-        { label: 'Overtime',         value: fmtMin(totalOvertimeMin) },
-        { label: "Qo'lda bonus",     value: manualBonus > 0 ? `+ ${fmtMoney(manualBonus)}` : '—', color: manualBonus > 0 ? COLORS.success : undefined },
-        { label: 'Jami bonuslar',    value: totalBonuses > 0 ? `+ ${fmtMoney(totalBonuses)}` : '0 so\'m', color: totalBonuses > 0 ? COLORS.success : undefined },
+        {
+          label: 'Overtime bonus',
+          value: overtimeBonus > 0 ? `+ ${fmtMoney(overtimeBonus)}` : '—',
+          color: overtimeBonus > 0 ? COLORS.success : undefined,
+        },
+        { label: 'Kechikish (soat)', value: fmtMin(totalLateMin) },
+        { label: 'Erta ketish', value: fmtMin(totalEarlyMin) },
+        { label: 'Overtime', value: fmtMin(totalOvertimeMin) },
+        {
+          label: "Qo'lda bonus",
+          value: manualBonus > 0 ? `+ ${fmtMoney(manualBonus)}` : '—',
+          color: manualBonus > 0 ? COLORS.success : undefined,
+        },
+        {
+          label: 'Jami bonuslar',
+          value: totalBonuses > 0 ? `+ ${fmtMoney(totalBonuses)}` : "0 so'm",
+          color: totalBonuses > 0 ? COLORS.success : undefined,
+        },
       ]);
 
       // ── NET SALARY (large box) ─────────────────────────────────
       y += 4;
       doc.rect(50, y, W, 50).fill('#f0fdf4').stroke('#86efac');
-      doc.fillColor(COLORS.success).font('Helvetica-Bold').fontSize(11)
+      doc
+        .fillColor(COLORS.success)
+        .font('Helvetica-Bold')
+        .fontSize(11)
         .text('SOF MAOSH', 62, y + 10);
-      doc.fillColor(COLORS.dark).font('Helvetica-Bold').fontSize(18)
-        .text(fmtMoney(netSalary), 50, y + 24, { width: W - 10, align: 'right' });
+      doc
+        .fillColor(COLORS.dark)
+        .font('Helvetica-Bold')
+        .fontSize(18)
+        .text(fmtMoney(netSalary), 50, y + 24, {
+          width: W - 10,
+          align: 'right',
+        });
 
       y += 64;
 
@@ -549,7 +774,9 @@ export class PayrollService {
       doc.font('Helvetica').fontSize(8).fillColor(COLORS.muted);
       doc.text(
         `Hisoblash formulasi: Asosiy maosh − Yo'qlik kesimi − Kechikish kesimi − Erta ketish kesimi + Overtime bonus`,
-        50, y, { width: W }
+        50,
+        y,
+        { width: W },
       );
       y += 14;
 
@@ -559,25 +786,48 @@ export class PayrollService {
 
       const sigW = (W - 20) / 2;
       // Left: Director
-      doc.fillColor(COLORS.muted).font('Helvetica').fontSize(8)
-        .text("Direktor imzosi:", 62, y + 10);
-      doc.moveTo(62, y + 38).lineTo(62 + sigW - 20, y + 38).stroke(COLORS.border);
-      doc.fillColor(COLORS.dark).font('Helvetica').fontSize(8)
+      doc
+        .fillColor(COLORS.muted)
+        .font('Helvetica')
+        .fontSize(8)
+        .text('Direktor imzosi:', 62, y + 10);
+      doc
+        .moveTo(62, y + 38)
+        .lineTo(62 + sigW - 20, y + 38)
+        .stroke(COLORS.border);
+      doc
+        .fillColor(COLORS.dark)
+        .font('Helvetica')
+        .fontSize(8)
         .text('Sana: _____ / _____ / _______', 62, y + 44);
 
       // Right: Employee
-      doc.fillColor(COLORS.muted).font('Helvetica').fontSize(8)
-        .text("Xodim imzosi:", 62 + sigW + 10, y + 10);
-      doc.moveTo(62 + sigW + 10, y + 38).lineTo(62 + W - 10, y + 38).stroke(COLORS.border);
-      doc.fillColor(COLORS.dark).font('Helvetica').fontSize(8)
+      doc
+        .fillColor(COLORS.muted)
+        .font('Helvetica')
+        .fontSize(8)
+        .text('Xodim imzosi:', 62 + sigW + 10, y + 10);
+      doc
+        .moveTo(62 + sigW + 10, y + 38)
+        .lineTo(62 + W - 10, y + 38)
+        .stroke(COLORS.border);
+      doc
+        .fillColor(COLORS.dark)
+        .font('Helvetica')
+        .fontSize(8)
         .text('Sana: _____ / _____ / _______', 62 + sigW + 10, y + 44);
 
       // ── FOOTER ────────────────────────────────────────────────
       y += 74;
-      doc.fillColor(COLORS.muted).font('Helvetica').fontSize(7)
+      doc
+        .fillColor(COLORS.muted)
+        .font('Helvetica')
+        .fontSize(7)
         .text(
           `Ushbu hujjat ${hospitalName} tomonidan avtomatik ravishda yaratilgan. Sana: ${new Date().toLocaleDateString('uz-UZ')}.`,
-          50, y, { width: W, align: 'center' }
+          50,
+          y,
+          { width: W, align: 'center' },
         );
 
       doc.end();

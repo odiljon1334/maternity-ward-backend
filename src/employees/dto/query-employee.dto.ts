@@ -1,6 +1,5 @@
 import { IsOptional, IsString, IsInt, Min } from 'class-validator';
 import { Type } from 'class-transformer';
-import { EmployeeStatus } from '@prisma/client';
 
 export class QueryEmployeeDto {
   @IsOptional()

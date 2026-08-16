@@ -5,14 +5,19 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { EmployeeStatus, LeaveStatus, LeaveType, ScheduleStatus } from '@prisma/client';
+import {
+  EmployeeStatus,
+  LeaveStatus,
+  LeaveType,
+  ScheduleStatus,
+} from '@prisma/client';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
 
-import { PrismaService }  from '../prisma/prisma.service';
+import { PrismaService } from '../prisma/prisma.service';
 import { TelegramService } from '../telegram/telegram.service';
-import { PushService }     from '../push/push.service';
+import { PushService } from '../push/push.service';
 import { CreateLeaveDto, ReviewLeaveDto } from './dto/leave.dto';
 
 dayjs.extend(utc);
@@ -21,19 +26,19 @@ dayjs.extend(timezone);
 const TZ = process.env.TIMEZONE || 'Asia/Tashkent';
 
 const LEAVE_TO_SCHEDULE: Record<LeaveType, ScheduleStatus> = {
-  VACATION:  ScheduleStatus.VACATION,
-  SICK:      ScheduleStatus.SICK,
-  PERSONAL:  ScheduleStatus.VACATION,
+  VACATION: ScheduleStatus.VACATION,
+  SICK: ScheduleStatus.SICK,
+  PERSONAL: ScheduleStatus.VACATION,
   MATERNITY: ScheduleStatus.VACATION,
-  UNPAID:    ScheduleStatus.VACATION,
+  UNPAID: ScheduleStatus.VACATION,
 };
 
 export const LEAVE_TYPE_LABELS: Record<LeaveType, string> = {
-  VACATION:  'Yillik ta\'til',
-  SICK:      'Kasallik',
-  PERSONAL:  'Shaxsiy sabab',
-  MATERNITY: 'Tug\'ruq ta\'tili',
-  UNPAID:    'Haqsiz ta\'til',
+  VACATION: "Yillik ta'til",
+  SICK: 'Kasallik',
+  PERSONAL: 'Shaxsiy sabab',
+  MATERNITY: "Tug'ruq ta'tili",
+  UNPAID: "Haqsiz ta'til",
 };
 
 @Injectable()
@@ -41,9 +46,9 @@ export class LeaveService {
   private readonly logger = new Logger(LeaveService.name);
 
   constructor(
-    private readonly prisma:   PrismaService,
+    private readonly prisma: PrismaService,
     private readonly telegram: TelegramService,
-    private readonly push:     PushService,
+    private readonly push: PushService,
   ) {}
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -54,29 +59,31 @@ export class LeaveService {
     const employee = await this.getEmployeeByUserId(userId);
 
     const start = dayjs.tz(dto.startDate, TZ).startOf('day').toDate();
-    const end   = dayjs.tz(dto.endDate,   TZ).startOf('day').toDate();
+    const end = dayjs.tz(dto.endDate, TZ).startOf('day').toDate();
 
     if (dayjs(end).isBefore(dayjs(start))) {
-      throw new BadRequestException('Tugash sanasi boshlanish sanasidan oldin bo\'lishi mumkin emas');
+      throw new BadRequestException(
+        "Tugash sanasi boshlanish sanasidan oldin bo'lishi mumkin emas",
+      );
     }
 
     const daysCount = dayjs(end).diff(dayjs(start), 'day') + 1;
 
     if (daysCount > 365) {
-      throw new BadRequestException('Ta\'til 365 kundan oshmasligi kerak');
+      throw new BadRequestException("Ta'til 365 kundan oshmasligi kerak");
     }
 
     const overlap = await this.prisma.leaveRequest.findFirst({
       where: {
         employeeId: employee.id,
-        status:     { in: ['PENDING', 'APPROVED'] },
-        startDate:  { lte: end },
-        endDate:    { gte: start },
+        status: { in: ['PENDING', 'APPROVED'] },
+        startDate: { lte: end },
+        endDate: { gte: start },
       },
     });
     if (overlap) {
       throw new BadRequestException(
-        `Bu muddat uchun allaqachon ${overlap.status === 'PENDING' ? 'ko\'rib chiqilayotgan' : 'tasdiqlangan'} so'rov mavjud`,
+        `Bu muddat uchun allaqachon ${overlap.status === 'PENDING' ? "ko'rib chiqilayotgan" : 'tasdiqlangan'} so'rov mavjud`,
       );
     }
 
@@ -84,12 +91,12 @@ export class LeaveService {
       data: {
         employeeId: employee.id,
         hospitalId: employee.hospitalId,
-        type:       dto.type,
-        startDate:  start,
-        endDate:    end,
+        type: dto.type,
+        startDate: start,
+        endDate: end,
         daysCount,
-        reason:     dto.reason,
-        status:     LeaveStatus.PENDING,
+        reason: dto.reason,
+        status: LeaveStatus.PENDING,
       },
       include: {
         employee: {
@@ -98,13 +105,19 @@ export class LeaveService {
       },
     });
 
-    this.telegram.notifyLeaveRequest(leave, 'CREATED').catch((e) =>
-      this.logger.warn(`Telegram leave notify failed: ${e.message}`),
+    this.telegram
+      .notifyLeaveRequest(leave, 'CREATED')
+      .catch((e) =>
+        this.logger.warn(`Telegram leave notify failed: ${e.message}`),
+      );
+
+    this.push
+      .notifyLeaveCreated(employee.hospitalId, employee.fullName, dto.type)
+      .catch(() => null);
+
+    this.logger.log(
+      `Leave created: ${employee.fullName} → ${LEAVE_TYPE_LABELS[dto.type]} ${dto.startDate}–${dto.endDate}`,
     );
-
-    this.push.notifyLeaveCreated(employee.hospitalId, employee.fullName, dto.type).catch(() => null);
-
-    this.logger.log(`Leave created: ${employee.fullName} → ${LEAVE_TYPE_LABELS[dto.type]} ${dto.startDate}–${dto.endDate}`);
     return leave;
   }
 
@@ -112,11 +125,14 @@ export class LeaveService {
   // EMPLOYEE: o'z so'rovlarini ko'rish
   // ─────────────────────────────────────────────────────────────────────────────
 
-  async getMyLeaves(userId: string, params?: { status?: string; page?: number; limit?: number }) {
+  async getMyLeaves(
+    userId: string,
+    params?: { status?: string; page?: number; limit?: number },
+  ) {
     const employee = await this.getEmployeeByUserId(userId);
-    const page  = params?.page  ?? 1;
+    const page = params?.page ?? 1;
     const limit = params?.limit ?? 20;
-    const skip  = (page - 1) * limit;
+    const skip = (page - 1) * limit;
 
     const where: any = { employeeId: employee.id };
     if (params?.status && params.status !== 'ALL') {
@@ -144,9 +160,9 @@ export class LeaveService {
     hospitalId: string,
     params?: { status?: string; page?: number; limit?: number },
   ) {
-    const page  = params?.page  ?? 1;
+    const page = params?.page ?? 1;
     const limit = params?.limit ?? 30;
-    const skip  = (page - 1) * limit;
+    const skip = (page - 1) * limit;
 
     const where: any = { hospitalId };
     if (params?.status && params.status !== 'ALL') {
@@ -160,10 +176,7 @@ export class LeaveService {
         include: {
           employee: { include: { department: true, position: true } },
         },
-        orderBy: [
-          { status: 'asc' },
-          { createdAt: 'desc' },
-        ],
+        orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
         skip,
         take: limit,
       }),
@@ -181,35 +194,43 @@ export class LeaveService {
   // ─────────────────────────────────────────────────────────────────────────────
 
   async review(
-    leaveId:    string,
+    leaveId: string,
     reviewerId: string,
-    dto:        ReviewLeaveDto,
+    dto: ReviewLeaveDto,
     hospitalId: string,
   ) {
     const leave = await this.prisma.leaveRequest.findUnique({
       where: { id: leaveId },
       include: {
-        employee: { include: { department: true, position: true, hospital: true } },
+        employee: {
+          include: { department: true, position: true, hospital: true },
+        },
       },
     });
-    if (!leave) throw new NotFoundException('Ta\'til so\'rovi topilmadi');
-    if (hospitalId && leave.hospitalId !== hospitalId) throw new ForbiddenException('Ruxsat yo\'q');
+    if (!leave) throw new NotFoundException("Ta'til so'rovi topilmadi");
+    if (hospitalId && leave.hospitalId !== hospitalId)
+      throw new ForbiddenException("Ruxsat yo'q");
     if (leave.status !== LeaveStatus.PENDING) {
-      throw new BadRequestException(`So'rov allaqachon ${leave.status} holatida`);
+      throw new BadRequestException(
+        `So'rov allaqachon ${leave.status} holatida`,
+      );
     }
 
-    const newStatus = dto.decision === 'APPROVED' ? LeaveStatus.APPROVED : LeaveStatus.REJECTED;
+    const newStatus =
+      dto.decision === 'APPROVED' ? LeaveStatus.APPROVED : LeaveStatus.REJECTED;
 
     const updated = await this.prisma.leaveRequest.update({
       where: { id: leaveId },
-      data:  {
-        status:     newStatus,
+      data: {
+        status: newStatus,
         reviewedBy: reviewerId,
         reviewNote: dto.reviewNote,
         reviewedAt: new Date(),
       },
       include: {
-        employee: { include: { department: true, position: true, hospital: true } },
+        employee: {
+          include: { department: true, position: true, hospital: true },
+        },
       },
     });
 
@@ -220,24 +241,32 @@ export class LeaveService {
       // Xodim statusini ON_LEAVE ga o'tkazish
       await this.prisma.employee.update({
         where: { id: leave.employeeId },
-        data:  { status: EmployeeStatus.ON_LEAVE },
+        data: { status: EmployeeStatus.ON_LEAVE },
       });
 
       this.logger.log(`Employee → ON_LEAVE: ${leave.employee.fullName}`);
     }
 
-    this.telegram.notifyLeaveRequest(updated, dto.decision).catch((e) =>
-      this.logger.warn(`Telegram leave decision notify failed: ${e.message}`),
-    );
+    this.telegram
+      .notifyLeaveRequest(updated, dto.decision)
+      .catch((e) =>
+        this.logger.warn(`Telegram leave decision notify failed: ${e.message}`),
+      );
 
     if (updated.employee.userId) {
-      this.push.notifyLeaveReviewed(updated.employee.userId, dto.decision, updated.type).catch(() => null);
+      this.push
+        .notifyLeaveReviewed(
+          updated.employee.userId,
+          dto.decision,
+          updated.type,
+        )
+        .catch(() => null);
     }
 
     this.logger.log(
       `Leave ${newStatus}: ${leave.employee.fullName} ` +
-      `(${LEAVE_TYPE_LABELS[leave.type]} ${dayjs(leave.startDate).format('DD.MM')}–${dayjs(leave.endDate).format('DD.MM')}) ` +
-      `by userId=${reviewerId}`,
+        `(${LEAVE_TYPE_LABELS[leave.type]} ${dayjs(leave.startDate).format('DD.MM')}–${dayjs(leave.endDate).format('DD.MM')}) ` +
+        `by userId=${reviewerId}`,
     );
 
     return updated;
@@ -250,19 +279,24 @@ export class LeaveService {
   async cancel(leaveId: string, userId: string) {
     const employee = await this.getEmployeeByUserId(userId);
 
-    const leave = await this.prisma.leaveRequest.findUnique({ where: { id: leaveId } });
-    if (!leave) throw new NotFoundException('Ta\'til so\'rovi topilmadi');
-    if (leave.employeeId !== employee.id) throw new ForbiddenException('Ruxsat yo\'q');
+    const leave = await this.prisma.leaveRequest.findUnique({
+      where: { id: leaveId },
+    });
+    if (!leave) throw new NotFoundException("Ta'til so'rovi topilmadi");
+    if (leave.employeeId !== employee.id)
+      throw new ForbiddenException("Ruxsat yo'q");
     if (leave.status === LeaveStatus.APPROVED) {
-      throw new BadRequestException('Tasdiqlangan ta\'tilni bekor qilish uchun direktorbga murojaat qiling');
+      throw new BadRequestException(
+        "Tasdiqlangan ta'tilni bekor qilish uchun direktorbga murojaat qiling",
+      );
     }
     if (leave.status === LeaveStatus.CANCELLED) {
-      throw new BadRequestException('So\'rov allaqachon bekor qilingan');
+      throw new BadRequestException("So'rov allaqachon bekor qilingan");
     }
 
     return this.prisma.leaveRequest.update({
       where: { id: leaveId },
-      data:  { status: LeaveStatus.CANCELLED },
+      data: { status: LeaveStatus.CANCELLED },
     });
   }
 
@@ -272,13 +306,14 @@ export class LeaveService {
 
   async revokeApproval(leaveId: string, hospitalId: string) {
     const leave = await this.prisma.leaveRequest.findUnique({
-      where:   { id: leaveId },
+      where: { id: leaveId },
       include: { employee: true },
     });
-    if (!leave) throw new NotFoundException('Ta\'til so\'rovi topilmadi');
-    if (hospitalId && leave.hospitalId !== hospitalId) throw new ForbiddenException('Ruxsat yo\'q');
+    if (!leave) throw new NotFoundException("Ta'til so'rovi topilmadi");
+    if (hospitalId && leave.hospitalId !== hospitalId)
+      throw new ForbiddenException("Ruxsat yo'q");
     if (leave.status !== LeaveStatus.APPROVED) {
-      throw new BadRequestException('Faqat APPROVED so\'rovni qaytarish mumkin');
+      throw new BadRequestException("Faqat APPROVED so'rovni qaytarish mumkin");
     }
 
     // Jadval kunlarini WORKING ga qaytarish
@@ -287,14 +322,17 @@ export class LeaveService {
     // Xodim statusini ACTIVE ga qaytarish
     await this.prisma.employee.update({
       where: { id: leave.employeeId },
-      data:  { status: EmployeeStatus.ACTIVE },
+      data: { status: EmployeeStatus.ACTIVE },
     });
 
     this.logger.log(`Employee → ACTIVE (revoked): ${leave.employee.fullName}`);
 
     return this.prisma.leaveRequest.update({
       where: { id: leaveId },
-      data:  { status: LeaveStatus.CANCELLED, reviewNote: 'Direktor tomonidan qaytarildi' },
+      data: {
+        status: LeaveStatus.CANCELLED,
+        reviewNote: 'Direktor tomonidan qaytarildi',
+      },
     });
   }
 
@@ -307,7 +345,7 @@ export class LeaveService {
 
     const expired = await this.prisma.leaveRequest.findMany({
       where: {
-        status:  LeaveStatus.APPROVED,
+        status: LeaveStatus.APPROVED,
         endDate: { lt: todayStart },
       },
       include: { employee: true },
@@ -319,20 +357,22 @@ export class LeaveService {
       // LeaveRequest → COMPLETED
       await this.prisma.leaveRequest.update({
         where: { id: leave.id },
-        data:  { status: LeaveStatus.COMPLETED },
+        data: { status: LeaveStatus.COMPLETED },
       });
 
       // Xodim → ACTIVE (faqat ON_LEAVE bo'lsa)
       if (leave.employee.status === EmployeeStatus.ON_LEAVE) {
         await this.prisma.employee.update({
           where: { id: leave.employeeId },
-          data:  { status: EmployeeStatus.ACTIVE },
+          data: { status: EmployeeStatus.ACTIVE },
         });
         this.logger.log(`Ta'til tugadi → ACTIVE: ${leave.employee.fullName}`);
       }
     }
 
-    this.logger.log(`completeExpiredLeaves: ${expired.length} ta ta'til yakunlandi`);
+    this.logger.log(
+      `completeExpiredLeaves: ${expired.length} ta ta'til yakunlandi`,
+    );
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -342,10 +382,10 @@ export class LeaveService {
   private async applyLeaveToSchedule(leave: any) {
     const scheduleStatus = LEAVE_TO_SCHEDULE[leave.type as LeaveType];
     const start = dayjs(leave.startDate).tz(TZ).startOf('day');
-    const end   = dayjs(leave.endDate).tz(TZ).startOf('day');
+    const end = dayjs(leave.endDate).tz(TZ).startOf('day');
 
     let cursor = start;
-    let count  = 0;
+    let count = 0;
 
     while (cursor.isSame(end) || cursor.isBefore(end)) {
       const dateUTC = cursor.toDate();
@@ -354,12 +394,15 @@ export class LeaveService {
         where: {
           employeeId_date: { employeeId: leave.employeeId, date: dateUTC },
         },
-        update: { status: scheduleStatus, note: `Ta'til: ${LEAVE_TYPE_LABELS[leave.type as LeaveType]}` },
+        update: {
+          status: scheduleStatus,
+          note: `Ta'til: ${LEAVE_TYPE_LABELS[leave.type as LeaveType]}`,
+        },
         create: {
           employeeId: leave.employeeId,
-          date:       dateUTC,
-          status:     scheduleStatus,
-          note:       `Ta'til: ${LEAVE_TYPE_LABELS[leave.type as LeaveType]}`,
+          date: dateUTC,
+          status: scheduleStatus,
+          note: `Ta'til: ${LEAVE_TYPE_LABELS[leave.type as LeaveType]}`,
         },
       });
 
@@ -367,7 +410,9 @@ export class LeaveService {
       count++;
     }
 
-    this.logger.log(`Schedule updated: ${leave.employee?.fullName} — ${count} kun`);
+    this.logger.log(
+      `Schedule updated: ${leave.employee?.fullName} — ${count} kun`,
+    );
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -376,20 +421,22 @@ export class LeaveService {
 
   private async revertScheduleFromLeave(leave: any) {
     const start = dayjs(leave.startDate).tz(TZ).startOf('day');
-    const end   = dayjs(leave.endDate).tz(TZ).startOf('day');
+    const end = dayjs(leave.endDate).tz(TZ).startOf('day');
 
     let cursor = start;
     while (cursor.isSame(end) || cursor.isBefore(end)) {
       const dateUTC = cursor.toDate();
 
       const sch = await this.prisma.schedule.findUnique({
-        where: { employeeId_date: { employeeId: leave.employeeId, date: dateUTC } },
+        where: {
+          employeeId_date: { employeeId: leave.employeeId, date: dateUTC },
+        },
       });
 
       if (sch && ['VACATION', 'SICK'].includes(sch.status)) {
         await this.prisma.schedule.update({
           where: { id: sch.id },
-          data:  { status: ScheduleStatus.WORKING, note: null },
+          data: { status: ScheduleStatus.WORKING, note: null },
         });
       }
 
@@ -403,11 +450,13 @@ export class LeaveService {
 
   private async getEmployeeByUserId(userId: string) {
     const user = await this.prisma.user.findUnique({
-      where:   { id: userId },
+      where: { id: userId },
       include: { employee: { include: { hospital: true } } },
     });
     if (!user?.employee) {
-      throw new NotFoundException('Bu foydalanuvchi uchun xodim profili topilmadi');
+      throw new NotFoundException(
+        'Bu foydalanuvchi uchun xodim profili topilmadi',
+      );
     }
     return user.employee;
   }

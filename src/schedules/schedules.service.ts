@@ -1,4 +1,9 @@
-import { Injectable, BadRequestException, NotFoundException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  NotFoundException,
+  Logger,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   GenerateScheduleDto,
@@ -35,7 +40,9 @@ export class SchedulesService {
       include: { employee: true },
     });
     if (!user?.employee) {
-      throw new NotFoundException('Bu foydalanuvchi uchun xodim profili topilmadi');
+      throw new NotFoundException(
+        'Bu foydalanuvchi uchun xodim profili topilmadi',
+      );
     }
     return this.getEmployeeSchedule(user.employee.id, month, year);
   }
@@ -83,7 +90,11 @@ export class SchedulesService {
   // ──────────────────────────────────────────
   // GET monthly schedules (all employees)
   // ──────────────────────────────────────────
-  async getMonthlySchedules(month: number, year: number, hospitalId?: string | null) {
+  async getMonthlySchedules(
+    month: number,
+    year: number,
+    hospitalId?: string | null,
+  ) {
     const start = DateUtil.startOfMonth(year, month);
     const end = DateUtil.endOfMonth(year, month);
 
@@ -103,7 +114,11 @@ export class SchedulesService {
   // ──────────────────────────────────────────
   // STATISTICS for Cards (Jami, Grafikli, Grafiksiz, Kunduzgi/Tungi)
   // ──────────────────────────────────────────
-  async getScheduleStatistics(month: number, year: number, hospitalId?: string | null) {
+  async getScheduleStatistics(
+    month: number,
+    year: number,
+    hospitalId?: string | null,
+  ) {
     const start = DateUtil.startOfMonth(year, month);
     const end = DateUtil.endOfMonth(year, month);
 
@@ -115,7 +130,7 @@ export class SchedulesService {
       where: empWhere,
       select: { id: true },
     });
-    const activeEmpIds = new Set(activeEmployees.map(e => e.id));
+    const activeEmpIds = new Set(activeEmployees.map((e) => e.id));
     const totalEmployees = activeEmpIds.size;
 
     // 2. Shu oydagi barcha WORKING yozuvlar va ularning shift turlari
@@ -125,9 +140,9 @@ export class SchedulesService {
         status: 'WORKING',
         employeeId: { in: [...activeEmpIds] }, // Faqat shu kasalxona xodimlari
       },
-      select: { 
-        employeeId: true, 
-        shift: { select: { type: true } } 
+      select: {
+        employeeId: true,
+        shift: { select: { type: true } },
       },
     });
 
@@ -138,13 +153,16 @@ export class SchedulesService {
 
     for (const s of schedulesInMonth) {
       uniqueEmployeesWithSchedule.add(s.employeeId);
-      
+
       if (s.shift?.type === 'DAYTIME') daytimeCount++;
       if (s.shift?.type === 'NIGHTTIME') nighttimeCount++;
     }
 
     const withScheduleCount = uniqueEmployeesWithSchedule.size;
-    const withoutScheduleCount = Math.max(0, totalEmployees - withScheduleCount);
+    const withoutScheduleCount = Math.max(
+      0,
+      totalEmployees - withScheduleCount,
+    );
 
     return {
       totalEmployees,
@@ -181,7 +199,7 @@ export class SchedulesService {
       take: limit,
     });
 
-    const employeeIds = employees.map(e => e.id);
+    const employeeIds = employees.map((e) => e.id);
 
     // Shu xodimlarning shu oydagi grafiklarini tortamiz
     const schedules = await this.prisma.schedule.findMany({
@@ -196,9 +214,9 @@ export class SchedulesService {
     });
 
     // Xodimlarga grafiklarini moslab biriktiramiz
-    const data = employees.map(emp => ({
+    const data = employees.map((emp) => ({
       ...emp,
-      schedules: schedules.filter(s => s.employeeId === emp.id),
+      schedules: schedules.filter((s) => s.employeeId === emp.id),
     }));
 
     // Jami sahifalar sonini aniqlash uchun
@@ -226,46 +244,88 @@ export class SchedulesService {
     const workDaysSet = new Set(dto.workDays ?? [1, 2, 3, 4, 5]);
 
     // Verify employee exists
-    const emp = await this.prisma.employee.findUnique({ where: { id: employeeId } });
+    const emp = await this.prisma.employee.findUnique({
+      where: { id: employeeId },
+    });
     if (!emp) throw new NotFoundException('Hodim topilmadi');
 
     // Get shift templates (with auto-seed fallback)
     let [dayShift, nightShift] = await Promise.all([
-      this.prisma.shiftTemplate.findFirst({ where: { hospitalId: emp.hospitalId, type: 'DAYTIME' } })
-        .then(s => s || this.prisma.shiftTemplate.findFirst({ where: { type: 'DAYTIME' } })),
-      this.prisma.shiftTemplate.findFirst({ where: { hospitalId: emp.hospitalId, type: 'NIGHTTIME' } })
-        .then(s => s || this.prisma.shiftTemplate.findFirst({ where: { type: 'NIGHTTIME' } })),
+      this.prisma.shiftTemplate
+        .findFirst({ where: { hospitalId: emp.hospitalId, type: 'DAYTIME' } })
+        .then(
+          (s) =>
+            s ||
+            this.prisma.shiftTemplate.findFirst({ where: { type: 'DAYTIME' } }),
+        ),
+      this.prisma.shiftTemplate
+        .findFirst({ where: { hospitalId: emp.hospitalId, type: 'NIGHTTIME' } })
+        .then(
+          (s) =>
+            s ||
+            this.prisma.shiftTemplate.findFirst({
+              where: { type: 'NIGHTTIME' },
+            }),
+        ),
     ]);
 
     if (!dayShift || !nightShift) {
       if (!emp.hospitalId) {
-        throw new BadRequestException("Xodimga kasalxona biriktirilmagan. Avval xodim ma'lumotlarini to'ldiring.");
+        throw new BadRequestException(
+          "Xodimga kasalxona biriktirilmagan. Avval xodim ma'lumotlarini to'ldiring.",
+        );
       }
       // Auto-seed default shifts for this hospital so user doesn't need to go to Settings first
       const seedDefaults = [
-        { name: 'Kunduzgi smen', type: 'DAYTIME'   as ShiftType, startTime: '08:00', endTime: '20:00', isOvernight: false, durationH: 12, graceMinutes: 15 },
-        { name: 'Kechki smen',   type: 'NIGHTTIME' as ShiftType, startTime: '20:00', endTime: '08:00', isOvernight: true,  durationH: 12, graceMinutes: 15 },
+        {
+          name: 'Kunduzgi smen',
+          type: 'DAYTIME' as ShiftType,
+          startTime: '08:00',
+          endTime: '20:00',
+          isOvernight: false,
+          durationH: 12,
+          graceMinutes: 15,
+        },
+        {
+          name: 'Kechki smen',
+          type: 'NIGHTTIME' as ShiftType,
+          startTime: '20:00',
+          endTime: '08:00',
+          isOvernight: true,
+          durationH: 12,
+          graceMinutes: 15,
+        },
       ];
       for (const s of seedDefaults) {
         await this.prisma.shiftTemplate.upsert({
-          where: { hospitalId_name: { hospitalId: emp.hospitalId, name: s.name } },
+          where: {
+            hospitalId_name: { hospitalId: emp.hospitalId, name: s.name },
+          },
           update: s,
           create: { ...s, hospitalId: emp.hospitalId },
         });
       }
       // Re-fetch after auto-seed
       [dayShift, nightShift] = await Promise.all([
-        this.prisma.shiftTemplate.findFirst({ where: { hospitalId: emp.hospitalId, type: 'DAYTIME' } }),
-        this.prisma.shiftTemplate.findFirst({ where: { hospitalId: emp.hospitalId, type: 'NIGHTTIME' } }),
+        this.prisma.shiftTemplate.findFirst({
+          where: { hospitalId: emp.hospitalId, type: 'DAYTIME' },
+        }),
+        this.prisma.shiftTemplate.findFirst({
+          where: { hospitalId: emp.hospitalId, type: 'NIGHTTIME' },
+        }),
       ]);
       if (!dayShift || !nightShift) {
-        throw new BadRequestException("Smenlar yaratib bo'lmadi. Sozlamalar > Smenlar bo'limiga o'ting.");
+        throw new BadRequestException(
+          "Smenlar yaratib bo'lmadi. Sozlamalar > Smenlar bo'limiga o'ting.",
+        );
       }
     }
 
     // Bitta xodim uchun aniq shift berilgan bo'lsa — uni ishlatamiz
     if (shiftId) {
-      const specific = await this.prisma.shiftTemplate.findUnique({ where: { id: shiftId } });
+      const specific = await this.prisma.shiftTemplate.findUnique({
+        where: { id: shiftId },
+      });
       if (specific) {
         if (specific.type === 'DAYTIME') dayShift = specific;
         else nightShift = specific;
@@ -273,18 +333,25 @@ export class SchedulesService {
     }
     // Bulk generate'dan kelgan aniq shift IDlar (custom vaqt)
     if ((dto as any).dayShiftId) {
-      const s = await this.prisma.shiftTemplate.findUnique({ where: { id: (dto as any).dayShiftId } });
+      const s = await this.prisma.shiftTemplate.findUnique({
+        where: { id: (dto as any).dayShiftId },
+      });
       if (s) dayShift = s;
     }
     if ((dto as any).nightShiftId) {
-      const s = await this.prisma.shiftTemplate.findUnique({ where: { id: (dto as any).nightShiftId } });
+      const s = await this.prisma.shiftTemplate.findUnique({
+        where: { id: (dto as any).nightShiftId },
+      });
       if (s) nightShift = s;
     }
 
     // Generate dates for the month
-    const start = dayjs.tz(`${year}-${String(month).padStart(2, '0')}-01`, TZ).startOf('month');
+    const start = dayjs
+      .tz(`${year}-${String(month).padStart(2, '0')}-01`, TZ)
+      .startOf('month');
     const end = start.endOf('month');
-    const entries: { date: Date; shiftId: string; status: ScheduleStatus }[] = [];
+    const entries: { date: Date; shiftId: string; status: ScheduleStatus }[] =
+      [];
 
     let current = start;
     while (current.isBefore(end) || current.isSame(end, 'day')) {
@@ -299,7 +366,12 @@ export class SchedulesService {
         });
       } else {
         const weekOfMonth = this.getWeekOfMonth(current, start);
-        const shiftType = this.resolveShiftForWeek(weekOfMonth, pattern, startsWith, customWeeks);
+        const shiftType = this.resolveShiftForWeek(
+          weekOfMonth,
+          pattern,
+          startsWith,
+          customWeeks,
+        );
         const shift = shiftType === 'DAYTIME' ? dayShift : nightShift;
         entries.push({
           date: current.toDate(),
@@ -328,7 +400,12 @@ export class SchedulesService {
         updated++;
       } else {
         await this.prisma.schedule.create({
-          data: { employeeId, date: dateStart, shiftId: entry.shiftId, status: entry.status },
+          data: {
+            employeeId,
+            date: dateStart,
+            shiftId: entry.shiftId,
+            status: entry.status,
+          },
         });
         created++;
       }
@@ -345,18 +422,25 @@ export class SchedulesService {
   // ──────────────────────────────────────────
   // BULK GENERATE for multiple employees
   // ──────────────────────────────────────────
-  async bulkGenerate(dto: BulkGenerateScheduleDto & { hospitalId?: string | null }) {
+  async bulkGenerate(
+    dto: BulkGenerateScheduleDto & { hospitalId?: string | null },
+  ) {
     // Bo'lim yoki kasalxona bo'yicha hodimlarni topish
     let employeeIds = dto.employeeIds ?? [];
     if (!employeeIds.length) {
       const empWhere: any = { firedAt: null };
-      if (dto.departmentId)  empWhere.departmentId = dto.departmentId;
-      if (dto.hospitalId)    empWhere.hospitalId   = dto.hospitalId;
+      if (dto.departmentId) empWhere.departmentId = dto.departmentId;
+      if (dto.hospitalId) empWhere.hospitalId = dto.hospitalId;
       if (!dto.departmentId && !dto.hospitalId) {
-        throw new BadRequestException('employeeIds, departmentId yoki hospitalId kerak');
+        throw new BadRequestException(
+          'employeeIds, departmentId yoki hospitalId kerak',
+        );
       }
-      const emps = await this.prisma.employee.findMany({ where: empWhere, select: { id: true } });
-      employeeIds = emps.map(e => e.id);
+      const emps = await this.prisma.employee.findMany({
+        where: empWhere,
+        select: { id: true },
+      });
+      employeeIds = emps.map((e) => e.id);
     }
 
     const results = [];
@@ -374,7 +458,10 @@ export class SchedulesService {
         } as any);
         results.push({ employeeId: empId, ...result });
       } catch (e) {
-        results.push({ employeeId: empId, error: e instanceof Error ? e.message : String(e) });
+        results.push({
+          employeeId: empId,
+          error: e instanceof Error ? e.message : String(e),
+        });
       }
     }
     return results;
@@ -386,7 +473,9 @@ export class SchedulesService {
   async bulkManual(dto: BulkManualScheduleDto) {
     const { employeeId, entries } = dto;
 
-    const emp = await this.prisma.employee.findUnique({ where: { id: employeeId } });
+    const emp = await this.prisma.employee.findUnique({
+      where: { id: employeeId },
+    });
     if (!emp) throw new NotFoundException('Hodim topilmadi');
 
     let created = 0;
@@ -421,7 +510,10 @@ export class SchedulesService {
   // ──────────────────────────────────────────
   // UPDATE single schedule entry
   // ──────────────────────────────────────────
-  async updateEntry(id: string, data: { shiftId?: string; status?: ScheduleStatus; note?: string }) {
+  async updateEntry(
+    id: string,
+    data: { shiftId?: string; status?: ScheduleStatus; note?: string },
+  ) {
     const entry = await this.prisma.schedule.findUnique({ where: { id } });
     if (!entry) throw new NotFoundException('Grafik yozuvi topilmadi');
     return this.prisma.schedule.update({ where: { id }, data });
@@ -438,14 +530,16 @@ export class SchedulesService {
    * (2-2, 1-1, FIXED, va boshqa patternlar to'g'ri saqlanadi)
    */
   async rolloverMonth(
-    fromMonth: number, fromYear: number,
-    toMonth:   number, toYear:   number,
+    fromMonth: number,
+    fromYear: number,
+    toMonth: number,
+    toYear: number,
     hospitalId?: string | null,
   ) {
     const fromStart = DateUtil.startOfMonth(fromYear, fromMonth);
-    const fromEnd   = DateUtil.endOfMonth(fromYear, fromMonth);
-    const toStart   = DateUtil.startOfMonth(toYear, toMonth);
-    const toEnd     = DateUtil.endOfMonth(toYear, toMonth);
+    const fromEnd = DateUtil.endOfMonth(fromYear, fromMonth);
+    const toStart = DateUtil.startOfMonth(toYear, toMonth);
+    const toEnd = DateUtil.endOfMonth(toYear, toMonth);
 
     // fromMonth da grafigi bor xodimlar
     const withSchedule = await this.prisma.schedule.findMany({
@@ -456,7 +550,7 @@ export class SchedulesService {
       select: { employeeId: true },
       distinct: ['employeeId'],
     });
-    const employeeIds = withSchedule.map(s => s.employeeId);
+    const employeeIds = withSchedule.map((s) => s.employeeId);
     if (!employeeIds.length) return { rolled: 0, skipped: 0, total: 0 };
 
     // toMonth da allaqachon grafigi borlarni exclude qilish
@@ -468,12 +562,16 @@ export class SchedulesService {
       select: { employeeId: true },
       distinct: ['employeeId'],
     });
-    const alreadyHasIds = new Set(alreadyHas.map(s => s.employeeId));
-    const toProcessIds  = employeeIds.filter(id => !alreadyHasIds.has(id));
+    const alreadyHasIds = new Set(alreadyHas.map((s) => s.employeeId));
+    const toProcessIds = employeeIds.filter((id) => !alreadyHasIds.has(id));
 
     if (!toProcessIds.length) {
-      return { rolled: 0, skipped: alreadyHasIds.size, total: employeeIds.length,
-               message: 'Barcha xodimlar uchun grafik allaqachon mavjud' };
+      return {
+        rolled: 0,
+        skipped: alreadyHasIds.size,
+        total: employeeIds.length,
+        message: 'Barcha xodimlar uchun grafik allaqachon mavjud',
+      };
     }
 
     // fromMonth barcha grafiklarini olish
@@ -485,14 +583,19 @@ export class SchedulesService {
     });
 
     // employeeId → Map<"hafta_weekday" → { shiftId, status }>
-    const empMap = new Map<string, Map<string, { shiftId: string; status: ScheduleStatus }>>();
+    const empMap = new Map<
+      string,
+      Map<string, { shiftId: string; status: ScheduleStatus }>
+    >();
     for (const s of fromSchedules) {
       const d = dayjs.tz(s.date, TZ);
       const week = Math.floor((d.date() - 1) / 7); // 0-4
-      const dow  = d.day();                          // 0=Yak..6=Sha
-      const key  = `${week}_${dow}`;
+      const dow = d.day(); // 0=Yak..6=Sha
+      const key = `${week}_${dow}`;
       if (!empMap.has(s.employeeId)) empMap.set(s.employeeId, new Map());
-      empMap.get(s.employeeId)!.set(key, { shiftId: s.shiftId, status: s.status });
+      empMap
+        .get(s.employeeId)!
+        .set(key, { shiftId: s.shiftId, status: s.status });
     }
 
     let rolled = 0;
@@ -500,14 +603,14 @@ export class SchedulesService {
       const dayMap = empMap.get(empId);
       if (!dayMap) continue;
 
-      let cur = dayjs.tz(
-        `${toYear}-${String(toMonth).padStart(2, '0')}-01`, TZ,
-      ).startOf('month');
+      let cur = dayjs
+        .tz(`${toYear}-${String(toMonth).padStart(2, '0')}-01`, TZ)
+        .startOf('month');
       const end = cur.endOf('month');
 
       while (cur.isBefore(end) || cur.isSame(end, 'day')) {
         const week = Math.floor((cur.date() - 1) / 7);
-        const dow  = cur.day();
+        const dow = cur.day();
 
         // Shu hafta + weekday bor-yo'qligini tekshirish;
         // yo'q bo'lsa oldingi haftalardan izlash (toMonth fromMonth dan uzunroq bo'lishi mumkin)
@@ -522,9 +625,14 @@ export class SchedulesService {
         if (entry) {
           const dateStart = DateUtil.startOfDay(cur.toDate());
           await this.prisma.schedule.upsert({
-            where:  { employeeId_date: { employeeId: empId, date: dateStart } },
+            where: { employeeId_date: { employeeId: empId, date: dateStart } },
             update: { shiftId: entry.shiftId, status: entry.status },
-            create: { employeeId: empId, date: dateStart, shiftId: entry.shiftId, status: entry.status },
+            create: {
+              employeeId: empId,
+              date: dateStart,
+              shiftId: entry.shiftId,
+              status: entry.status,
+            },
           });
         }
         cur = cur.add(1, 'day');
@@ -535,7 +643,7 @@ export class SchedulesService {
     return {
       rolled,
       skipped: alreadyHasIds.size,
-      total:   employeeIds.length,
+      total: employeeIds.length,
       message: `${rolled} ta xodim grafigi ${toMonth}/${toYear} oyiga ko'chirildi`,
     };
   }
@@ -574,8 +682,9 @@ export class SchedulesService {
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(fileBuffer as any);
 
-    const ws = wb.worksheets.find(s => s.rowCount > 0);
-    if (!ws) throw new BadRequestException('Fayl bo\'sh yoki noto\'g\'ri formatda');
+    const ws = wb.worksheets.find((s) => s.rowCount > 0);
+    if (!ws)
+      throw new BadRequestException("Fayl bo'sh yoki noto'g'ri formatda");
 
     // ── 1. Barcha hodimlarni yuklash ──────────────────────────────────────────
     const empWhere: any = { firedAt: null };
@@ -586,24 +695,42 @@ export class SchedulesService {
     });
 
     const normalizeEmpName = (n: string) =>
-      n.toLowerCase()
-       .replace(/\s+/g, ' ').trim()
-       .replace(/[ёъь]/g, '')
-       .replace(/ғ/g, 'g').replace(/қ/g, 'q').replace(/ҳ/g, 'h')
-       .replace(/ў/g, 'u').replace(/ш/g, 'sh').replace(/ч/g, 'ch');
+      n
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+        .trim()
+        .replace(/[ёъь]/g, '')
+        .replace(/ғ/g, 'g')
+        .replace(/қ/g, 'q')
+        .replace(/ҳ/g, 'h')
+        .replace(/ў/g, 'u')
+        .replace(/ш/g, 'sh')
+        .replace(/ч/g, 'ch');
 
     const empIndex = new Map<string, string>(); // normalizedName → id
-    for (const e of allEmployees) empIndex.set(normalizeEmpName(e.fullName), e.id);
+    for (const e of allEmployees)
+      empIndex.set(normalizeEmpName(e.fullName), e.id);
 
-    const empById = new Map(allEmployees.map(e => [e.id, e]));
+    const empById = new Map(allEmployees.map((e) => [e.id, e]));
 
     // ── 2. Yordamchi funksiyalar ───────────────────────────────────────────────
-    const parseTime = (raw: string | null): { start: string; end: string } | null => {
+    const parseTime = (
+      raw: string | null,
+    ): { start: string; end: string } | null => {
       if (!raw) return null;
-      const cleaned = raw.toString().trim().replace(/[–—]/g, '-').replace(/-/g, ' ').replace(/\s+/g, ' ');
+      const cleaned = raw
+        .toString()
+        .trim()
+        .replace(/[–—]/g, '-')
+        .replace(/-/g, ' ')
+        .replace(/\s+/g, ' ');
       const m = cleaned.match(/(\d{1,2}:\d{2})\s+(\d{1,2}:\d{2})/);
       if (!m) return null;
-      const pad = (t: string) => t.split(':').map(p => p.padStart(2, '0')).join(':');
+      const pad = (t: string) =>
+        t
+          .split(':')
+          .map((p) => p.padStart(2, '0'))
+          .join(':');
       return { start: pad(m[1]), end: pad(m[2]) };
     };
 
@@ -612,9 +739,15 @@ export class SchedulesService {
 
     // ── 3. Satrlani parse qilish ───────────────────────────────────────────────
     const rows: any[][] = [];
-    ws.eachRow((row) => { rows.push((row.values as any[]).slice(1)); });
+    ws.eachRow((row) => {
+      rows.push((row.values as any[]).slice(1));
+    });
 
-    interface ParsedRow { empId: string; timeCols: (string | null)[]; dowMap: number[] }
+    interface ParsedRow {
+      empId: string;
+      timeCols: (string | null)[];
+      dowMap: number[];
+    }
     const parsedRows: ParsedRow[] = [];
     const unmatched: string[] = [];
 
@@ -629,12 +762,19 @@ export class SchedulesService {
       if (!resolvedEmpId) {
         // Qisman moslik — first word
         const fw = normName.split(' ')[0];
-        const match = [...empIndex.entries()].find(([k]) => k.split(' ')[0] === fw);
+        const match = [...empIndex.entries()].find(
+          ([k]) => k.split(' ')[0] === fw,
+        );
         if (match) resolvedEmpId = match[1];
-        else { unmatched.push(nameStr); continue; }
+        else {
+          unmatched.push(nameStr);
+          continue;
+        }
       }
 
-      const timeCols = cols.slice(5).map((v: any) => (v != null ? v.toString() : null));
+      const timeCols = cols
+        .slice(5)
+        .map((v: any) => (v != null ? v.toString() : null));
       const nonNull = timeCols.filter((v: string | null) => v !== null);
       const dowMap = nonNull.length >= 7 ? dayOfWeekMap7 : dayOfWeekMap5;
       parsedRows.push({ empId: resolvedEmpId, timeCols, dowMap });
@@ -654,18 +794,38 @@ export class SchedulesService {
       const [startTime, endTime] = key.split('|');
       const [sh] = startTime.split(':').map(Number);
       const [eh, em] = endTime.split(':').map(Number);
-      const isOvernight = (eh * 60 + em) < (Number(startTime.split(':')[0]) * 60 + Number(startTime.split(':')[1]));
-      let mins = (eh * 60 + em) - (sh * 60 + Number(startTime.split(':')[1]));
+      const isOvernight =
+        eh * 60 + em <
+        Number(startTime.split(':')[0]) * 60 + Number(startTime.split(':')[1]);
+      let mins = eh * 60 + em - (sh * 60 + Number(startTime.split(':')[1]));
       if (mins <= 0) mins += 24 * 60;
       const type: ShiftType = isOvernight || sh >= 18 ? 'NIGHTTIME' : 'DAYTIME';
       const existing = await this.prisma.shiftTemplate.findFirst({
         where: { startTime, endTime, ...(hospitalId && { hospitalId }) },
       });
-      if (existing) { shiftCache.set(key, existing.id); continue; }
+      if (existing) {
+        shiftCache.set(key, existing.id);
+        continue;
+      }
       const name = `${type === 'DAYTIME' ? 'Kunduzgi' : 'Kechki'} ${startTime}–${endTime}`;
-      const { lunchStart, lunchEnd } = calcAutoLunch(startTime, endTime, isOvernight);
+      const { lunchStart, lunchEnd } = calcAutoLunch(
+        startTime,
+        endTime,
+        isOvernight,
+      );
       const created = await this.prisma.shiftTemplate.create({
-        data: { name, type, startTime, endTime, isOvernight, durationH: Math.round(mins / 60), graceMinutes: 15, hospitalId, lunchStart, lunchEnd },
+        data: {
+          name,
+          type,
+          startTime,
+          endTime,
+          isOvernight,
+          durationH: Math.round(mins / 60),
+          graceMinutes: 15,
+          hospitalId,
+          lunchStart,
+          lunchEnd,
+        },
       });
       shiftCache.set(key, created.id);
     }
@@ -681,50 +841,78 @@ export class SchedulesService {
     const dateDowMap: Array<{ dateStr: string; dow: number; date: Date }> = [];
     for (let d = 1; d <= daysInMonth; d++) {
       const dt = monthStart.date(d);
-      dateDowMap.push({ dateStr: dt.format('YYYY-MM-DD'), dow: dt.day(), date: dt.toDate() });
+      dateDowMap.push({
+        dateStr: dt.format('YYYY-MM-DD'),
+        dow: dt.day(),
+        date: dt.toDate(),
+      });
     }
 
     // ── 6. Mavjud schedulelarni BITTA so'rovda olish ──────────────────────────
     const mStart = DateUtil.startOfMonth(year, month);
-    const mEnd   = DateUtil.endOfMonth(year, month);
-    const empIds = [...new Set(parsedRows.map(r => r.empId))];
+    const mEnd = DateUtil.endOfMonth(year, month);
+    const empIds = [...new Set(parsedRows.map((r) => r.empId))];
     const existing = await this.prisma.schedule.findMany({
       where: { date: { gte: mStart, lte: mEnd }, employeeId: { in: empIds } },
       select: { id: true, employeeId: true, date: true },
     });
     const existingMap = new Map<string, string>();
     for (const s of existing) {
-      existingMap.set(`${s.employeeId}:${dayjs(s.date).format('YYYY-MM-DD')}`, s.id);
+      existingMap.set(
+        `${s.employeeId}:${dayjs(s.date).format('YYYY-MM-DD')}`,
+        s.id,
+      );
     }
 
     // ── 7. Create / Update ro'yxatlarini tuzish ───────────────────────────────
-    const toCreate: Array<{ employeeId: string; date: Date; shiftId: string; status: ScheduleStatus }> = [];
-    const toUpdate: Array<{ id: string; shiftId?: string; status: ScheduleStatus }> = [];
+    const toCreate: Array<{
+      employeeId: string;
+      date: Date;
+      shiftId: string;
+      status: ScheduleStatus;
+    }> = [];
+    const toUpdate: Array<{
+      id: string;
+      shiftId?: string;
+      status: ScheduleStatus;
+    }> = [];
     let skipped = 0;
 
     for (const row of parsedRows) {
       for (const { dateStr, dow, date } of dateDowMap) {
         const colIdx = row.dowMap.indexOf(dow);
         const rawTime = colIdx >= 0 ? row.timeCols[colIdx] : null;
-        const parsed  = parseTime(rawTime);
+        const parsed = parseTime(rawTime);
 
         let shiftId: string | undefined;
         let status: ScheduleStatus = 'DAY_OFF';
 
         if (parsed) {
           shiftId = shiftCache.get(`${parsed.start}|${parsed.end}`);
-          status  = 'WORKING';
+          status = 'WORKING';
         }
 
-        const dateStart  = DateUtil.startOfDay(date);
+        const dateStart = DateUtil.startOfDay(date);
         const existingId = existingMap.get(`${row.empId}:${dateStr}`);
 
         if (existingId) {
-          toUpdate.push({ id: existingId, ...(shiftId && { shiftId }), status });
+          toUpdate.push({
+            id: existingId,
+            ...(shiftId && { shiftId }),
+            status,
+          });
         } else {
           const sid = shiftId ?? defaultShift?.id;
-          if (!sid) { skipped++; continue; }
-          toCreate.push({ employeeId: row.empId, date: dateStart, shiftId: sid, status });
+          if (!sid) {
+            skipped++;
+            continue;
+          }
+          toCreate.push({
+            employeeId: row.empId,
+            date: dateStart,
+            shiftId: sid,
+            status,
+          });
         }
       }
     }
@@ -732,7 +920,10 @@ export class SchedulesService {
     // ── 8. Bulk DB operatsiyalari ─────────────────────────────────────────────
     let created = 0;
     if (toCreate.length) {
-      const res = await this.prisma.schedule.createMany({ data: toCreate, skipDuplicates: true });
+      const res = await this.prisma.schedule.createMany({
+        data: toCreate,
+        skipDuplicates: true,
+      });
       created = res.count;
     }
 
@@ -740,12 +931,19 @@ export class SchedulesService {
     for (let i = 0; i < toUpdate.length; i += CHUNK) {
       const chunk = toUpdate.slice(i, i + CHUNK);
       await this.prisma.$transaction(
-        chunk.map(u => this.prisma.schedule.update({ where: { id: u.id }, data: { shiftId: u.shiftId, status: u.status } }))
+        chunk.map((u) =>
+          this.prisma.schedule.update({
+            where: { id: u.id },
+            data: { shiftId: u.shiftId, status: u.status },
+          }),
+        ),
       );
     }
 
     const updated = toUpdate.length;
-    this.logger.log(`importXlsx: ${created} yangi, ${updated} yangilandi, ${skipped} o'tkazib yuborildi, ${unmatched.length} topilmadi`);
+    this.logger.log(
+      `importXlsx: ${created} yangi, ${updated} yangilandi, ${skipped} o'tkazib yuborildi, ${unmatched.length} topilmadi`,
+    );
 
     const employeesCount = parsedRows.length;
     return {
@@ -759,13 +957,13 @@ export class SchedulesService {
   }
 
   private resolveShiftForWeek(
-    week: number,             // 0-indexed week of month
+    week: number, // 0-indexed week of month
     pattern: SchedulePattern,
     startsWith: ShiftType,
     customWeeks?: ShiftType[],
   ): ShiftType {
     // O'zgarmas smenlar
-    if (pattern === SchedulePattern.FIXED_DAY)   return 'DAYTIME';
+    if (pattern === SchedulePattern.FIXED_DAY) return 'DAYTIME';
     if (pattern === SchedulePattern.FIXED_NIGHT) return 'NIGHTTIME';
 
     const other: ShiftType = startsWith === 'DAYTIME' ? 'NIGHTTIME' : 'DAYTIME';
@@ -775,10 +973,15 @@ export class SchedulesService {
     }
 
     const patterns: Record<string, ShiftType[]> = {
-      [SchedulePattern.TWO_TWO]:   [startsWith, startsWith, other, other],
-      [SchedulePattern.ONE_ONE]:   [startsWith, other, startsWith, other],
+      [SchedulePattern.TWO_TWO]: [startsWith, startsWith, other, other],
+      [SchedulePattern.ONE_ONE]: [startsWith, other, startsWith, other],
       [SchedulePattern.THREE_ONE]: [startsWith, startsWith, startsWith, other],
-      [SchedulePattern.CUSTOM]:    [startsWith, startsWith, startsWith, startsWith],
+      [SchedulePattern.CUSTOM]: [
+        startsWith,
+        startsWith,
+        startsWith,
+        startsWith,
+      ],
     };
 
     const seq = patterns[pattern] ?? [startsWith];

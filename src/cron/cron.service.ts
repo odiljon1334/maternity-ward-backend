@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
+import { Cron } from '@nestjs/schedule';
 import { AttendanceService } from '../attendance/attendance.service';
 import { TelegramService } from '../telegram/telegram.service';
 import { SchedulesService } from '../schedules/schedules.service';
@@ -22,7 +22,7 @@ export class CronService {
     private readonly telegramService: TelegramService,
     private readonly schedulesService: SchedulesService,
     private readonly prisma: PrismaService,
-    private readonly leaveService:      LeaveService,
+    private readonly leaveService: LeaveService,
   ) {}
 
   /**
@@ -54,13 +54,17 @@ export class CronService {
       const subs = await this.prisma.telegramSubscription.findMany({
         where: { isActive: true, hospitalId: { not: null } },
       });
-      const hospitalIds = [...new Set(subs.map(s => s.hospitalId).filter(Boolean))] as string[];
+      const hospitalIds = [
+        ...new Set(subs.map((s) => s.hospitalId).filter(Boolean)),
+      ] as string[];
 
       for (const hospitalId of hospitalIds) {
-        const hospital = await this.prisma.hospital.findUnique({ where: { id: hospitalId } });
+        const hospital = await this.prisma.hospital.findUnique({
+          where: { id: hospitalId },
+        });
         if (!hospital || hospital.isBlocked) continue;
 
-        const hospitalSubs = subs.filter(s => s.hospitalId === hospitalId);
+        const hospitalSubs = subs.filter((s) => s.hospitalId === hospitalId);
         if (!hospitalSubs.length) continue;
 
         // Bugun kunduzgi smenda ishlashi kerak bo'lgan hodimlar + ularning davomati
@@ -80,9 +84,15 @@ export class CronService {
 
         if (!schedules.length) continue;
 
-        const late    = schedules.filter(s => s.attendance?.status === 'LATE' || s.attendance?.status === 'LATE_EARLY');
-        const absent  = schedules.filter(s => !s.attendance || s.attendance.status === 'ABSENT');
-        const onTime  = schedules.length - late.length - absent.length;
+        const late = schedules.filter(
+          (s) =>
+            s.attendance?.status === 'LATE' ||
+            s.attendance?.status === 'LATE_EARLY',
+        );
+        const absent = schedules.filter(
+          (s) => !s.attendance || s.attendance.status === 'ABSENT',
+        );
+        const onTime = schedules.length - late.length - absent.length;
 
         // Hamma keldi — qisqa xabar
         if (late.length === 0 && absent.length === 0) {
@@ -90,7 +100,11 @@ export class CronService {
             `✅ <b>${todayStr} — 10:00 holati</b>\n\n` +
             `Kunduzgi smendagi barcha <b>${schedules.length}</b> nafar hodim o'z vaqtida keldi! 🎉`;
           for (const sub of hospitalSubs) {
-            try { await this.telegramService.sendToChat(sub.chatId, msg); } catch { /* skip */ }
+            try {
+              await this.telegramService.sendToChat(sub.chatId, msg);
+            } catch {
+              /* skip */
+            }
           }
           continue;
         }
@@ -99,19 +113,29 @@ export class CronService {
 
         if (late.length > 0) {
           msg += `🟡 <b>Kech kelganlar (${late.length} nafar):</b>\n`;
-          msg += late.slice(0, 10)
-            .map(s => `  • ${s.employee.fullName} — ${s.attendance!.lateMinutes} daq kech`)
+          msg += late
+            .slice(0, 10)
+            .map(
+              (s) =>
+                `  • ${s.employee.fullName} — ${s.attendance!.lateMinutes} daq kech`,
+            )
             .join('\n');
-          if (late.length > 10) msg += `\n  ... va yana ${late.length - 10} nafar`;
+          if (late.length > 10)
+            msg += `\n  ... va yana ${late.length - 10} nafar`;
           msg += '\n\n';
         }
 
         if (absent.length > 0) {
           msg += `🔴 <b>Hali kelmadi (${absent.length} nafar):</b>\n`;
-          msg += absent.slice(0, 10)
-            .map(s => `  • ${s.employee.fullName} (${s.employee.department?.name ?? ''})`)
+          msg += absent
+            .slice(0, 10)
+            .map(
+              (s) =>
+                `  • ${s.employee.fullName} (${s.employee.department?.name ?? ''})`,
+            )
             .join('\n');
-          if (absent.length > 10) msg += `\n  ... va yana ${absent.length - 10} nafar`;
+          if (absent.length > 10)
+            msg += `\n  ... va yana ${absent.length - 10} nafar`;
           msg += '\n\n';
         }
 
@@ -120,7 +144,11 @@ export class CronService {
           `✅ O'z vaqtida: ${onTime} | 🟡 Kech: ${late.length} | 🔴 Kelmadi: ${absent.length}`;
 
         for (const sub of hospitalSubs) {
-          try { await this.telegramService.sendToChat(sub.chatId, msg); } catch { /* skip */ }
+          try {
+            await this.telegramService.sendToChat(sub.chatId, msg);
+          } catch {
+            /* skip */
+          }
         }
       }
     } catch (err) {
@@ -142,52 +170,80 @@ export class CronService {
       const subs = await this.prisma.telegramSubscription.findMany({
         where: { isActive: true, hospitalId: { not: null } },
       });
-      const hospitalIds = [...new Set(subs.map(s => s.hospitalId).filter(Boolean))] as string[];
+      const hospitalIds = [
+        ...new Set(subs.map((s) => s.hospitalId).filter(Boolean)),
+      ] as string[];
 
       for (const hospitalId of hospitalIds) {
-        const hospital = await this.prisma.hospital.findUnique({ where: { id: hospitalId } });
+        const hospital = await this.prisma.hospital.findUnique({
+          where: { id: hospitalId },
+        });
         if (!hospital || hospital.isBlocked) continue;
 
-        const hospitalSubs = subs.filter(s => s.hospitalId === hospitalId);
+        const hospitalSubs = subs.filter((s) => s.hospitalId === hospitalId);
         if (!hospitalSubs.length) continue;
 
         const schedules = await this.prisma.schedule.findMany({
           where: {
             date: DateUtil.startOfDay(new Date()),
             status: 'WORKING',
-            employee: { hospitalId },   // doim filter qilamiz
+            employee: { hospitalId }, // doim filter qilamiz
           },
           include: { employee: { include: { department: true } }, shift: true },
         });
 
         if (!schedules.length) continue;
 
-        const dayShift   = schedules.filter(s => s.shift?.type === 'DAYTIME');
-        const nightShift = schedules.filter(s => s.shift?.type === 'NIGHTTIME');
-        const other      = schedules.filter(s => !s.shift || (s.shift.type !== 'DAYTIME' && s.shift.type !== 'NIGHTTIME'));
+        const dayShift = schedules.filter((s) => s.shift?.type === 'DAYTIME');
+        const nightShift = schedules.filter(
+          (s) => s.shift?.type === 'NIGHTTIME',
+        );
+        const other = schedules.filter(
+          (s) =>
+            !s.shift ||
+            (s.shift.type !== 'DAYTIME' && s.shift.type !== 'NIGHTTIME'),
+        );
 
         let msg =
           `📋 <b>Bugungi ish jadvali (${today})</b>\n` +
           `🏥 <b>${hospital.name}</b>\n\n` +
           `☀️ <b>Kunduzgi smen: ${dayShift.length} nafar</b>\n` +
-          dayShift.slice(0, 15).map(s => `  • ${s.employee.fullName}`).join('\n') +
-          (dayShift.length > 15 ? `\n  ... va yana ${dayShift.length - 15} nafar` : '') +
+          dayShift
+            .slice(0, 15)
+            .map((s) => `  • ${s.employee.fullName}`)
+            .join('\n') +
+          (dayShift.length > 15
+            ? `\n  ... va yana ${dayShift.length - 15} nafar`
+            : '') +
           `\n\n🌙 <b>Kechki smen: ${nightShift.length} nafar</b>`;
 
         if (nightShift.length > 0) {
-          msg += '\n' + nightShift.slice(0, 10).map(s => `  • ${s.employee.fullName}`).join('\n');
-          if (nightShift.length > 10) msg += `\n  ... va yana ${nightShift.length - 10} nafar`;
+          msg +=
+            '\n' +
+            nightShift
+              .slice(0, 10)
+              .map((s) => `  • ${s.employee.fullName}`)
+              .join('\n');
+          if (nightShift.length > 10)
+            msg += `\n  ... va yana ${nightShift.length - 10} nafar`;
         }
 
         if (other.length > 0) {
           msg += `\n\n📌 <b>Boshqa: ${other.length} nafar</b>\n`;
-          msg += other.slice(0, 5).map(s => `  • ${s.employee.fullName}`).join('\n');
+          msg += other
+            .slice(0, 5)
+            .map((s) => `  • ${s.employee.fullName}`)
+            .join('\n');
         }
 
         msg += `\n\n👥 <b>Jami: ${schedules.length} nafar</b>`;
 
         for (const sub of hospitalSubs) {
-          try { await this.telegramService.sendToChat(sub.chatId, msg); } catch { /* skip */ }
+          try {
+            await this.telegramService.sendToChat(sub.chatId, msg);
+          } catch {
+            /* skip */
+          }
         }
       }
     } catch (err) {
@@ -210,13 +266,17 @@ export class CronService {
       const subs = await this.prisma.telegramSubscription.findMany({
         where: { isActive: true, hospitalId: { not: null } },
       });
-      const hospitalIds = [...new Set(subs.map(s => s.hospitalId).filter(Boolean))] as string[];
+      const hospitalIds = [
+        ...new Set(subs.map((s) => s.hospitalId).filter(Boolean)),
+      ] as string[];
 
       for (const hospitalId of hospitalIds) {
-        const hospital = await this.prisma.hospital.findUnique({ where: { id: hospitalId } });
+        const hospital = await this.prisma.hospital.findUnique({
+          where: { id: hospitalId },
+        });
         if (!hospital || hospital.isBlocked) continue;
 
-        const hospitalSubs = subs.filter(s => s.hospitalId === hospitalId);
+        const hospitalSubs = subs.filter((s) => s.hospitalId === hospitalId);
         if (!hospitalSubs.length) continue;
 
         const stats = await this.prisma.weeklyAttendanceStat.findMany({
@@ -232,12 +292,18 @@ export class CronService {
         } else {
           const totalLate = stats.reduce((s, r) => s + r.totalLateMin, 0);
           const totalAbsent = stats.reduce((s, r) => s + r.daysAbsent, 0);
-          const totalDeductions = stats.reduce((s, r) => s + Number(r.deductionAmount), 0);
+          const totalDeductions = stats.reduce(
+            (s, r) => s + Number(r.deductionAmount),
+            0,
+          );
 
           const problemEmployees = stats
-            .filter(s => s.totalLateMin > 30 || s.daysAbsent > 0)
+            .filter((s) => s.totalLateMin > 30 || s.daysAbsent > 0)
             .slice(0, 8)
-            .map(s => `  • ${s.employee.fullName}: ${s.totalLateMin} min kech, ${s.daysAbsent} kun yo'q`)
+            .map(
+              (s) =>
+                `  • ${s.employee.fullName}: ${s.totalLateMin} min kech, ${s.daysAbsent} kun yo'q`,
+            )
             .join('\n');
 
           msg =
@@ -246,11 +312,17 @@ export class CronService {
             `⏱ Kechikish: ${totalLate} daqiqa\n` +
             `❌ Yo'qlik: ${totalAbsent} kun\n` +
             `💰 Kesimlar: ${Math.round(totalDeductions).toLocaleString()} so'm\n\n` +
-            (problemEmployees ? `⚠️ <b>Diqqat talab etuvchilar:</b>\n${problemEmployees}` : '✅ Hamma yaxshi!');
+            (problemEmployees
+              ? `⚠️ <b>Diqqat talab etuvchilar:</b>\n${problemEmployees}`
+              : '✅ Hamma yaxshi!');
         }
 
         for (const sub of hospitalSubs) {
-          try { await this.telegramService.sendToChat(sub.chatId, msg); } catch { /* skip */ }
+          try {
+            await this.telegramService.sendToChat(sub.chatId, msg);
+          } catch {
+            /* skip */
+          }
         }
       }
     } catch (err) {
@@ -270,20 +342,37 @@ export class CronService {
       const month = prevMonth.getMonth() + 1;
       const year = prevMonth.getFullYear();
 
-      const monthNames = ['', 'Yanvar', 'Fevral', 'Mart', 'Aprel', 'May', 'Iyun',
-        'Iyul', 'Avgust', 'Sentyabr', 'Oktyabr', 'Noyabr', 'Dekabr'];
+      const monthNames = [
+        '',
+        'Yanvar',
+        'Fevral',
+        'Mart',
+        'Aprel',
+        'May',
+        'Iyun',
+        'Iyul',
+        'Avgust',
+        'Sentyabr',
+        'Oktyabr',
+        'Noyabr',
+        'Dekabr',
+      ];
 
       // Per-hospital yuborish
       const subs = await this.prisma.telegramSubscription.findMany({
         where: { isActive: true, hospitalId: { not: null } },
       });
-      const hospitalIds = [...new Set(subs.map(s => s.hospitalId).filter(Boolean))] as string[];
+      const hospitalIds = [
+        ...new Set(subs.map((s) => s.hospitalId).filter(Boolean)),
+      ] as string[];
 
       for (const hospitalId of hospitalIds) {
-        const hospital = await this.prisma.hospital.findUnique({ where: { id: hospitalId } });
+        const hospital = await this.prisma.hospital.findUnique({
+          where: { id: hospitalId },
+        });
         if (!hospital || hospital.isBlocked) continue;
 
-        const hospitalSubs = subs.filter(s => s.hospitalId === hospitalId);
+        const hospitalSubs = subs.filter((s) => s.hospitalId === hospitalId);
         if (!hospitalSubs.length) continue;
 
         const payrolls = await this.prisma.payrollRecord.findMany({
@@ -296,12 +385,22 @@ export class CronService {
         if (!payrolls.length) {
           msg = `📋 <b>${hospital.name}</b>\n${monthNames[month]} ${year} uchun maosh hisoblari mavjud emas`;
         } else {
-          const totalNet = payrolls.reduce((s, p) => s + Number(p.netSalary), 0);
-          const totalDeductions = payrolls.reduce(
-            (s, p) => s + Number(p.lateDeduction) + Number(p.absenceDeduction) + Number(p.earlyLeaveDeduction),
+          const totalNet = payrolls.reduce(
+            (s, p) => s + Number(p.netSalary),
             0,
           );
-          const totalAbsences = payrolls.reduce((s, p) => s + p.totalAbsences, 0);
+          const totalDeductions = payrolls.reduce(
+            (s, p) =>
+              s +
+              Number(p.lateDeduction) +
+              Number(p.absenceDeduction) +
+              Number(p.earlyLeaveDeduction),
+            0,
+          );
+          const totalAbsences = payrolls.reduce(
+            (s, p) => s + p.totalAbsences,
+            0,
+          );
 
           msg =
             `📅 <b>${monthNames[month]} ${year} — Oylik hisobot</b>\n` +
@@ -314,7 +413,11 @@ export class CronService {
         }
 
         for (const sub of hospitalSubs) {
-          try { await this.telegramService.sendToChat(sub.chatId, msg); } catch { /* skip */ }
+          try {
+            await this.telegramService.sendToChat(sub.chatId, msg);
+          } catch {
+            /* skip */
+          }
         }
       }
     } catch (err) {
@@ -328,18 +431,24 @@ export class CronService {
    */
   @Cron('5 0 1 * *', { timeZone: TZ })
   async monthlyScheduleRollover() {
-    const now       = dayjs.tz(new Date(), TZ);
-    const toMonth   = now.month() + 1;
-    const toYear    = now.year();
-    const fromDate  = now.subtract(1, 'month');
+    const now = dayjs.tz(new Date(), TZ);
+    const toMonth = now.month() + 1;
+    const toYear = now.year();
+    const fromDate = now.subtract(1, 'month');
     const fromMonth = fromDate.month() + 1;
-    const fromYear  = fromDate.year();
+    const fromYear = fromDate.year();
 
-    this.logger.log(`Schedule rollover start: ${fromMonth}/${fromYear} → ${toMonth}/${toYear}`);
+    this.logger.log(
+      `Schedule rollover start: ${fromMonth}/${fromYear} → ${toMonth}/${toYear}`,
+    );
     try {
       // hospitalId = null → barcha kasalxonalar uchun
       const result = await this.schedulesService.rolloverMonth(
-        fromMonth, fromYear, toMonth, toYear, null,
+        fromMonth,
+        fromYear,
+        toMonth,
+        toYear,
+        null,
       );
       this.logger.log(`Rollover done: ${JSON.stringify(result)}`);
     } catch (err) {
@@ -348,16 +457,16 @@ export class CronService {
   }
 
   /**
- * Har kuni 01:00 da — muddati o'tgan ta'tillarni COMPLETED ga o'tkazadi
- * va xodim statusini ACTIVE ga qaytaradi
- */
-@Cron('0 1 * * *', { timeZone: TZ })
-async completeExpiredLeaves() {
-  this.logger.log('Running completeExpiredLeaves...');
-  try {
-    await this.leaveService.completeExpiredLeaves();
-  } catch (err) {
-    this.logger.error('completeExpiredLeaves failed:', err);
+   * Har kuni 01:00 da — muddati o'tgan ta'tillarni COMPLETED ga o'tkazadi
+   * va xodim statusini ACTIVE ga qaytaradi
+   */
+  @Cron('0 1 * * *', { timeZone: TZ })
+  async completeExpiredLeaves() {
+    this.logger.log('Running completeExpiredLeaves...');
+    try {
+      await this.leaveService.completeExpiredLeaves();
+    } catch (err) {
+      this.logger.error('completeExpiredLeaves failed:', err);
+    }
   }
-}
 }

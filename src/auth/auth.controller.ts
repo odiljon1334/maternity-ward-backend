@@ -1,4 +1,12 @@
-import { Body, Controller, Get, Post, Put, Req, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Post,
+  Put,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { Request } from 'express';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
@@ -14,7 +22,10 @@ import { UserRole } from '@prisma/client';
 /** Proxy orqali kelgan so'rovlarda ham haqiqiy IP ni olish */
 function getIp(req: Request): string {
   const forwarded = req.headers['x-forwarded-for'];
-  if (forwarded) return (Array.isArray(forwarded) ? forwarded[0] : forwarded).split(',')[0].trim();
+  if (forwarded)
+    return (Array.isArray(forwarded) ? forwarded[0] : forwarded)
+      .split(',')[0]
+      .trim();
   return req.ip ?? 'unknown';
 }
 

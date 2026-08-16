@@ -1,4 +1,14 @@
-import { Body, Controller, Delete, Get, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Post,
+  Put,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { DepartmentsService } from './departments.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -6,7 +16,10 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
 
-function resolveHospitalId(jwtHospId: string | null, targetHospId?: string): string | null {
+function resolveHospitalId(
+  jwtHospId: string | null,
+  targetHospId?: string,
+): string | null {
   return jwtHospId || targetHospId || null;
 }
 
@@ -20,7 +33,9 @@ export class DepartmentsController {
     @CurrentUser('hospitalId') hospitalId: string | null,
     @Query('targetHospitalId') targetHospitalId?: string,
   ) {
-    return this.service.findAll(resolveHospitalId(hospitalId, targetHospitalId));
+    return this.service.findAll(
+      resolveHospitalId(hospitalId, targetHospitalId),
+    );
   }
 
   @Get(':id')
@@ -29,7 +44,10 @@ export class DepartmentsController {
     @CurrentUser('hospitalId') hospitalId: string | null,
     @Query('targetHospitalId') targetHospitalId?: string,
   ) {
-    return this.service.findOne(id, resolveHospitalId(hospitalId, targetHospitalId));
+    return this.service.findOne(
+      id,
+      resolveHospitalId(hospitalId, targetHospitalId),
+    );
   }
 
   @Post()
@@ -39,7 +57,10 @@ export class DepartmentsController {
     @CurrentUser('hospitalId') hospitalId: string | null,
     @Query('targetHospitalId') targetHospitalId?: string,
   ) {
-    return this.service.create(body, resolveHospitalId(hospitalId, targetHospitalId)!);
+    return this.service.create(
+      body,
+      resolveHospitalId(hospitalId, targetHospitalId)!,
+    );
   }
 
   @Put(':id')
@@ -50,7 +71,11 @@ export class DepartmentsController {
     @CurrentUser('hospitalId') hospitalId: string | null,
     @Query('targetHospitalId') targetHospitalId?: string,
   ) {
-    return this.service.update(id, body, resolveHospitalId(hospitalId, targetHospitalId));
+    return this.service.update(
+      id,
+      body,
+      resolveHospitalId(hospitalId, targetHospitalId),
+    );
   }
 
   @Delete(':id')
@@ -60,6 +85,9 @@ export class DepartmentsController {
     @CurrentUser('hospitalId') hospitalId: string | null,
     @Query('targetHospitalId') targetHospitalId?: string,
   ) {
-    return this.service.remove(id, resolveHospitalId(hospitalId, targetHospitalId));
+    return this.service.remove(
+      id,
+      resolveHospitalId(hospitalId, targetHospitalId),
+    );
   }
 }

@@ -1,6 +1,17 @@
 import {
-  Body, Controller, Delete, Get, Param, Post, Put, Query,
-  UseGuards, UploadedFile, UseInterceptors, Res, StreamableFile,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Post,
+  Put,
+  Query,
+  UseGuards,
+  UploadedFile,
+  UseInterceptors,
+  Res,
+  StreamableFile,
   Req,
 } from '@nestjs/common';
 import { EmployeesService } from './employees.service';
@@ -20,7 +31,10 @@ import { AuditLogService } from '../audit-log/audit-log.service';
 
 /** SUPER_ADMIN uchun: JWT'dagi hospitalId null bo'lsa, query'dan targetHospitalId oladi.
  *  Ikkalasi ham yo'q bo'lsa — '' qaytaradi (findAll unda filtersiz ko'rsatadi) */
-function resolveHospitalId(jwtHospId: string | null, targetHospId?: string): string {
+function resolveHospitalId(
+  jwtHospId: string | null,
+  targetHospId?: string,
+): string {
   return jwtHospId || targetHospId || '';
 }
 
@@ -38,7 +52,10 @@ export class EmployeesController {
     @CurrentUser('hospitalId') hospitalId: string,
     @Query('targetHospitalId') targetHospitalId?: string,
   ) {
-    return this.service.findAll(query, resolveHospitalId(hospitalId, targetHospitalId));
+    return this.service.findAll(
+      query,
+      resolveHospitalId(hospitalId, targetHospitalId),
+    );
   }
 
   @Get('export/excel')
@@ -52,7 +69,8 @@ export class EmployeesController {
     const buffer = await this.service.exportExcel(hId);
     const filename = `hodimlar_${new Date().toISOString().slice(0, 10)}.xlsx`;
     res.set({
-      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Type':
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'Content-Disposition': `attachment; filename="${filename}"`,
     });
     return new StreamableFile(buffer);
@@ -87,36 +105,40 @@ export class EmployeesController {
 
   @Get('archive')
   async getArchive(
-    @Query('page')   page:   string,
-    @Query('limit')  limit:  string,
+    @Query('page') page: string,
+    @Query('limit') limit: string,
     @Query('search') search: string,
     @Req() req: any,
   ) {
     const hospitalId = req.user.hospitalId ?? '';
     const result = await this.service.getArchive(hospitalId, {
       search: search || undefined,
-      page:  page  ? +page  : 1,
+      page: page ? +page : 1,
       limit: limit ? +limit : 20,
     });
     return { success: true, data: result.data, meta: result.meta };
   }
-  
+
   @Get('archive/:id')
   async getArchivedEmployee(@Param('id') id: string) {
     const result = await this.service.getArchivedEmployee(id);
     return { success: true, data: result };
   }
-  
+
   @Get('lookup')
-async lookup(
-  @Query('fullName')  fullName:  string,
-  @Query('birthDate') birthDate: string,
-  @Req() req: any,
-) {
-  const hospitalId = req.user.hospitalId ?? '';
-  const result = await this.service.lookupByName(fullName, birthDate, hospitalId);
-  return { success: true, data: result };
-}
+  async lookup(
+    @Query('fullName') fullName: string,
+    @Query('birthDate') birthDate: string,
+    @Req() req: any,
+  ) {
+    const hospitalId = req.user.hospitalId ?? '';
+    const result = await this.service.lookupByName(
+      fullName,
+      birthDate,
+      hospitalId,
+    );
+    return { success: true, data: result };
+  }
 
   @Get(':id')
   findOne(
@@ -124,7 +146,10 @@ async lookup(
     @CurrentUser('hospitalId') hospitalId: string,
     @Query('targetHospitalId') targetHospitalId?: string,
   ) {
-    return this.service.findOne(id, resolveHospitalId(hospitalId, targetHospitalId));
+    return this.service.findOne(
+      id,
+      resolveHospitalId(hospitalId, targetHospitalId),
+    );
   }
 
   @Post()
@@ -184,7 +209,13 @@ async lookup(
     if (!file) throw new BadRequestException('Rasm yuklanmadi');
     const hId = resolveHospitalId(hospitalId, targetHospitalId);
     const result = await this.service.updatePhoto(id, file.buffer, hId);
-    this.auditLog.log({ userId, hospitalId: hId, action: 'UPDATE_PHOTO', entity: 'Employee', entityId: id });
+    this.auditLog.log({
+      userId,
+      hospitalId: hId,
+      action: 'UPDATE_PHOTO',
+      entity: 'Employee',
+      entityId: id,
+    });
     return result;
   }
 
@@ -211,27 +242,33 @@ async lookup(
   }
 
   @Put(':id/fire')
-async fire(
-  @Param('id') id: string,
-  @CurrentUser('sub') userId: string,
-  @CurrentUser('hospitalId') hospitalId: string,
-  @Query('targetHospitalId') targetHospitalId?: string,
-  @Body('firedAt')     firedAt?:     string,
-  @Body('fireReason')  fireReason?:  string,  // ← qo'shilmagan!
-  @Body('fireNote')    fireNote?:    string,   // ← qo'shilmagan!
-) {
-  const hId = resolveHospitalId(hospitalId, targetHospitalId);
-  const result = await this.service.fire(id, hId, firedAt, fireReason, fireNote);
-  this.auditLog.log({
-    userId,
-    hospitalId: hId,
-    action: 'FIRE',
-    entity: 'Employee',
-    entityId: id,
-    details: { firedAt, fireReason },
-  });
-  return result;
-}
+  async fire(
+    @Param('id') id: string,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('hospitalId') hospitalId: string,
+    @Query('targetHospitalId') targetHospitalId?: string,
+    @Body('firedAt') firedAt?: string,
+    @Body('fireReason') fireReason?: string, // ← qo'shilmagan!
+    @Body('fireNote') fireNote?: string, // ← qo'shilmagan!
+  ) {
+    const hId = resolveHospitalId(hospitalId, targetHospitalId);
+    const result = await this.service.fire(
+      id,
+      hId,
+      firedAt,
+      fireReason,
+      fireNote,
+    );
+    this.auditLog.log({
+      userId,
+      hospitalId: hId,
+      action: 'FIRE',
+      entity: 'Employee',
+      entityId: id,
+      details: { firedAt, fireReason },
+    });
+    return result;
+  }
 
   @Post('bulk-delete')
   @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN)
@@ -243,7 +280,13 @@ async fire(
   ) {
     const hId = resolveHospitalId(hospitalId, targetHospitalId);
     const result = await this.service.bulkDelete(ids, hId);
-    this.auditLog.log({ userId, hospitalId: hId, action: 'BULK_DELETE', entity: 'Employee', details: { count: ids.length } });
+    this.auditLog.log({
+      userId,
+      hospitalId: hId,
+      action: 'BULK_DELETE',
+      entity: 'Employee',
+      details: { count: ids.length },
+    });
     return result;
   }
 
@@ -257,8 +300,18 @@ async fire(
     @Query('targetHospitalId') targetHospitalId?: string,
   ) {
     const hId = resolveHospitalId(hospitalId, targetHospitalId);
-    const result = await this.service.bulkUpdateDepartment(ids, departmentId, hId);
-    this.auditLog.log({ userId, hospitalId: hId, action: 'BULK_MOVE_DEPT', entity: 'Employee', details: { count: ids.length, departmentId } });
+    const result = await this.service.bulkUpdateDepartment(
+      ids,
+      departmentId,
+      hId,
+    );
+    this.auditLog.log({
+      userId,
+      hospitalId: hId,
+      action: 'BULK_MOVE_DEPT',
+      entity: 'Employee',
+      details: { count: ids.length, departmentId },
+    });
     return result;
   }
 
@@ -289,6 +342,8 @@ async fire(
     @CurrentUser('hospitalId') hospitalId: string,
     @Query('targetHospitalId') targetHospitalId?: string,
   ) {
-    return this.service.fixLegacyEmployeeNumbers(resolveHospitalId(hospitalId, targetHospitalId));
+    return this.service.fixLegacyEmployeeNumbers(
+      resolveHospitalId(hospitalId, targetHospitalId),
+    );
   }
 }

@@ -48,9 +48,12 @@ export class ReportsService {
     workbook.creator = 'Maternity Ward Attendance';
     workbook.created = new Date();
 
-    const sheet = workbook.addWorksheet(`${year}-${String(month).padStart(2, '0')} Davomat`, {
-      pageSetup: { orientation: 'landscape', fitToPage: true },
-    });
+    const sheet = workbook.addWorksheet(
+      `${year}-${String(month).padStart(2, '0')} Davomat`,
+      {
+        pageSetup: { orientation: 'landscape', fitToPage: true },
+      },
+    );
 
     // ── Header ──
     const monthName = dayjs(`${year}-${month}-01`).format('MMMM YYYY');
@@ -85,12 +88,22 @@ export class ReportsService {
       const cell = headerRow.getCell(i + 1);
       cell.value = h.header;
       cell.font = { bold: true, size: 10 };
-      cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
-      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1976D2' } };
+      cell.alignment = {
+        horizontal: 'center',
+        vertical: 'middle',
+        wrapText: true,
+      };
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF1976D2' },
+      };
       cell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10 };
       cell.border = {
-        top: { style: 'thin' }, left: { style: 'thin' },
-        bottom: { style: 'thin' }, right: { style: 'thin' },
+        top: { style: 'thin' },
+        left: { style: 'thin' },
+        bottom: { style: 'thin' },
+        right: { style: 'thin' },
       };
       sheet.getColumn(i + 1).width = h.width;
     });
@@ -99,7 +112,7 @@ export class ReportsService {
     // ── Data rows ──
     const statusSymbols: Record<string, string> = {
       PRESENT: '✓',
-      LATE: 'K',       // Kechikdi
+      LATE: 'K', // Kechikdi
       ABSENT: '—',
       EARLY_LEAVE: 'E', // Erta ketdi
       LATE_EARLY: 'KE',
@@ -117,7 +130,7 @@ export class ReportsService {
       const row = sheet.getRow(idx + 3);
 
       // Attendance map: day → record
-      const attMap = new Map<number, typeof emp.attendances[0]>();
+      const attMap = new Map<number, (typeof emp.attendances)[0]>();
       emp.attendances.forEach((a) => {
         const day = new Date(a.workDate).getDate();
         attMap.set(day, a);
@@ -128,12 +141,20 @@ export class ReportsService {
       let daysLate = 0;
 
       emp.attendances.forEach((a) => {
-        if (a.status === 'PRESENT' || a.status === 'LATE' || a.status === 'EARLY_LEAVE' || a.status === 'LATE_EARLY') daysWorked++;
+        if (
+          a.status === 'PRESENT' ||
+          a.status === 'LATE' ||
+          a.status === 'EARLY_LEAVE' ||
+          a.status === 'LATE_EARLY'
+        )
+          daysWorked++;
         if (a.status === 'ABSENT') daysAbsent++;
         if (a.status === 'LATE' || a.status === 'LATE_EARLY') daysLate++;
       });
 
-      const totalWorkDays = emp.attendances.filter((a) => a.status !== 'ABSENT').length;
+      const totalWorkDays = emp.attendances.filter(
+        (a) => a.status !== 'ABSENT',
+      ).length;
 
       row.getCell(1).value = idx + 1;
       row.getCell(2).value = emp.fullName;
@@ -154,27 +175,49 @@ export class ReportsService {
         const att = attMap.get(d);
         if (isWeekend) {
           cell.value = '○';
-          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF5F5F5' } };
+          cell.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: 'FFF5F5F5' },
+          };
         } else if (att) {
           cell.value = statusSymbols[att.status] || '?';
           cell.fill = {
-            type: 'pattern', pattern: 'solid',
+            type: 'pattern',
+            pattern: 'solid',
             fgColor: { argb: statusColors[att.status] || 'FFFFFFFF' },
           };
         } else {
           cell.value = '';
         }
         cell.alignment = { horizontal: 'center', vertical: 'middle' };
-        cell.border = { top: { style: 'hair' }, left: { style: 'hair' }, bottom: { style: 'hair' }, right: { style: 'hair' } };
+        cell.border = {
+          top: { style: 'hair' },
+          left: { style: 'hair' },
+          bottom: { style: 'hair' },
+          right: { style: 'hair' },
+        };
       }
 
       // Row style
       [1, 2, 3, 4, 5, 6, 7, 8].forEach((c) => {
         const cell = row.getCell(c);
-        cell.alignment = { horizontal: c === 2 ? 'left' : 'center', vertical: 'middle' };
-        cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+        cell.alignment = {
+          horizontal: c === 2 ? 'left' : 'center',
+          vertical: 'middle',
+        };
+        cell.border = {
+          top: { style: 'thin' },
+          left: { style: 'thin' },
+          bottom: { style: 'thin' },
+          right: { style: 'thin' },
+        };
         if (idx % 2 === 0) {
-          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFAFAFA' } };
+          cell.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: 'FFFAFAFA' },
+          };
         }
       });
       row.height = 18;
@@ -184,7 +227,8 @@ export class ReportsService {
     const legendRow = sheet.getRow(employees.length + 4);
     legendRow.getCell(1).value = 'Belgilar:';
     legendRow.getCell(1).font = { bold: true };
-    legendRow.getCell(2).value = '✓ = Keldi  |  K = Kechikdi  |  E = Erta ketdi  |  — = Kelmadi  |  ○ = Dam olish kuni';
+    legendRow.getCell(2).value =
+      '✓ = Keldi  |  K = Kechikdi  |  E = Erta ketdi  |  — = Kelmadi  |  ○ = Dam olish kuni';
     sheet.mergeCells(employees.length + 4, 2, employees.length + 4, 10);
 
     return workbook.xlsx.writeBuffer() as Promise<ExcelJS.Buffer>;
@@ -221,21 +265,39 @@ export class ReportsService {
     const payrollRecords = await this.prisma.payrollRecord.findMany({
       where: { month, year, employee: empWhere },
       select: {
-        employeeId: true, totalWorkDays: true, totalAbsences: true, totalLateMin: true,
-        baseSalary: true, absenceDeduction: true, lateDeduction: true, earlyLeaveDeduction: true,
-        overtimeBonus: true, manualBonus: true, manualDeduction: true, netSalary: true, status: true,
+        employeeId: true,
+        totalWorkDays: true,
+        totalAbsences: true,
+        totalLateMin: true,
+        baseSalary: true,
+        absenceDeduction: true,
+        lateDeduction: true,
+        earlyLeaveDeduction: true,
+        overtimeBonus: true,
+        manualBonus: true,
+        manualDeduction: true,
+        netSalary: true,
+        status: true,
       },
     });
-    const payMap = new Map(payrollRecords.map(p => [p.employeeId, p]));
+    const payMap = new Map(payrollRecords.map((p) => [p.employeeId, p]));
 
     // Barcha hodimlar uchun yozuv (payroll bo'lmasa bo'sh qiymatlar bilan)
-    const records = employees.map(emp => ({
+    const records = employees.map((emp) => ({
       employee: emp,
-      ...( payMap.get(emp.id) ?? {
-        totalWorkDays: 0, totalAbsences: 0, totalLateMin: 0,
-        baseSalary: emp.baseSalary ?? 0, absenceDeduction: 0, lateDeduction: 0,
-        earlyLeaveDeduction: 0, overtimeBonus: 0, manualBonus: 0, manualDeduction: 0,
-        netSalary: emp.baseSalary ?? 0, status: 'DRAFT',
+      ...(payMap.get(emp.id) ?? {
+        totalWorkDays: 0,
+        totalAbsences: 0,
+        totalLateMin: 0,
+        baseSalary: emp.baseSalary ?? 0,
+        absenceDeduction: 0,
+        lateDeduction: 0,
+        earlyLeaveDeduction: 0,
+        overtimeBonus: 0,
+        manualBonus: 0,
+        manualDeduction: 0,
+        netSalary: emp.baseSalary ?? 0,
+        status: 'DRAFT',
       }),
     }));
 
@@ -245,11 +307,22 @@ export class ReportsService {
 
     // Header
     const cols = [
-      '№', 'F.I.O', "Bo'lim", 'Lavozim',
-      'Ish kunlari', "Yo'q kunlari", 'Kechikish (min)',
-      'Asosiy maosh', "Yo'qlik kesimi", 'Kechikish kesimi',
-      'Erta ketish kesimi', 'Qo\'shimcha ish bonusi', "Qo'shimcha bonus",
-      "Qo'shimcha kesim", 'Jami (netto)', 'Holat',
+      '№',
+      'F.I.O',
+      "Bo'lim",
+      'Lavozim',
+      'Ish kunlari',
+      "Yo'q kunlari",
+      'Kechikish (min)',
+      'Asosiy maosh',
+      "Yo'qlik kesimi",
+      'Kechikish kesimi',
+      'Erta ketish kesimi',
+      "Qo'shimcha ish bonusi",
+      "Qo'shimcha bonus",
+      "Qo'shimcha kesim",
+      'Jami (netto)',
+      'Holat',
     ];
 
     const headerRow = sheet.addRow([]);
@@ -263,20 +336,42 @@ export class ReportsService {
     const colRow = sheet.addRow(cols);
     colRow.eachCell((cell) => {
       cell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10 };
-      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1565C0' } };
-      cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
-      cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF1565C0' },
+      };
+      cell.alignment = {
+        horizontal: 'center',
+        vertical: 'middle',
+        wrapText: true,
+      };
+      cell.border = {
+        top: { style: 'thin' },
+        left: { style: 'thin' },
+        bottom: { style: 'thin' },
+        right: { style: 'thin' },
+      };
     });
     colRow.height = 40;
 
     // Widths
-    const widths = [4, 26, 18, 20, 10, 10, 14, 14, 14, 14, 14, 16, 14, 14, 14, 10];
-    widths.forEach((w, i) => { sheet.getColumn(i + 1).width = w; });
+    const widths = [
+      4, 26, 18, 20, 10, 10, 14, 14, 14, 14, 14, 16, 14, 14, 14, 10,
+    ];
+    widths.forEach((w, i) => {
+      sheet.getColumn(i + 1).width = w;
+    });
 
     let totalNet = 0;
 
     records.forEach((r, idx) => {
-      const statusLabel = r.status === 'PAID' ? "To'langan" : r.status === 'APPROVED' ? 'Tasdiqlangan' : 'Loyiha';
+      const statusLabel =
+        r.status === 'PAID'
+          ? "To'langan"
+          : r.status === 'APPROVED'
+            ? 'Tasdiqlangan'
+            : 'Loyiha';
       const net = Number(r.netSalary);
       totalNet += net;
 
@@ -300,31 +395,68 @@ export class ReportsService {
       ]);
 
       row.eachCell({ includeEmpty: true }, (cell, colNum) => {
-        cell.border = { top: { style: 'hair' }, left: { style: 'hair' }, bottom: { style: 'hair' }, right: { style: 'hair' } };
+        cell.border = {
+          top: { style: 'hair' },
+          left: { style: 'hair' },
+          bottom: { style: 'hair' },
+          right: { style: 'hair' },
+        };
         if (colNum >= 8) {
           cell.numFmt = '#,##0';
           cell.alignment = { horizontal: 'right' };
         } else {
-          cell.alignment = { horizontal: colNum === 2 ? 'left' : 'center', vertical: 'middle' };
+          cell.alignment = {
+            horizontal: colNum === 2 ? 'left' : 'center',
+            vertical: 'middle',
+          };
         }
         if (idx % 2 === 0) {
-          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8F9FA' } };
+          cell.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: 'FFF8F9FA' },
+          };
         }
       });
 
       // Net salary highlight
       const netCell = row.getCell(15);
       netCell.font = { bold: true };
-      netCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE3F2FD' } };
+      netCell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFE3F2FD' },
+      };
       row.height = 18;
     });
 
     // Total row
-    const totalRow = sheet.addRow(['', 'JAMI', '', '', '', '', '', '', '', '', '', '', '', '', totalNet, '']);
+    const totalRow = sheet.addRow([
+      '',
+      'JAMI',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      totalNet,
+      '',
+    ]);
     totalRow.getCell(2).font = { bold: true };
     totalRow.getCell(15).font = { bold: true };
     totalRow.getCell(15).numFmt = '#,##0';
-    totalRow.getCell(15).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFBBDEFB' } };
+    totalRow.getCell(15).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFBBDEFB' },
+    };
 
     return workbook.xlsx.writeBuffer() as Promise<ExcelJS.Buffer>;
   }
@@ -366,7 +498,7 @@ export class ReportsService {
     });
 
     // Map: employeeId → Map<dateStr, record>
-    const recMap = new Map<string, Map<string, typeof records[0]>>();
+    const recMap = new Map<string, Map<string, (typeof records)[0]>>();
     for (const r of records) {
       const ds = dayjs(r.workDate).format('YYYY-MM-DD');
       if (!recMap.has(r.employeeId)) recMap.set(r.employeeId, new Map());
@@ -379,54 +511,125 @@ export class ReportsService {
 
     // Ustunlar — hafta kunlari
     const weekDays: string[] = [];
-    for (let i = 0; i < 7; i++) weekDays.push(dayjs(start).add(i, 'day').format('YYYY-MM-DD'));
+    for (let i = 0; i < 7; i++)
+      weekDays.push(dayjs(start).add(i, 'day').format('YYYY-MM-DD'));
 
     const dayLabels = weekDays.map((d) => dayjs(d).format('ddd DD.MM'));
-    const cols = ['№', 'F.I.O', "Bo'lim", 'Lavozim', ...dayLabels, 'Keldi', 'Kelmadi', 'Kechikdi'];
+    const cols = [
+      '№',
+      'F.I.O',
+      "Bo'lim",
+      'Lavozim',
+      ...dayLabels,
+      'Keldi',
+      'Kelmadi',
+      'Kechikdi',
+    ];
 
     const headerRow = sheet.addRow(cols);
     headerRow.eachCell((cell) => {
       cell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10 };
-      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF37474F' } };
-      cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
-      cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF37474F' },
+      };
+      cell.alignment = {
+        horizontal: 'center',
+        vertical: 'middle',
+        wrapText: true,
+      };
+      cell.border = {
+        top: { style: 'thin' },
+        left: { style: 'thin' },
+        bottom: { style: 'thin' },
+        right: { style: 'thin' },
+      };
     });
     headerRow.height = 35;
 
     const statusSymbol: Record<string, string> = {
-      PRESENT: '✓', LATE: 'K', ABSENT: '—', EARLY_LEAVE: 'E', LATE_EARLY: 'KE',
+      PRESENT: '✓',
+      LATE: 'K',
+      ABSENT: '—',
+      EARLY_LEAVE: 'E',
+      LATE_EARLY: 'KE',
     };
     const statusColor: Record<string, string> = {
-      PRESENT: 'FFE8F5E9', LATE: 'FFFFF9C4', ABSENT: 'FFFFEBEE', EARLY_LEAVE: 'FFFFF3E0', LATE_EARLY: 'FFFCE4EC',
+      PRESENT: 'FFE8F5E9',
+      LATE: 'FFFFF9C4',
+      ABSENT: 'FFFFEBEE',
+      EARLY_LEAVE: 'FFFFF3E0',
+      LATE_EARLY: 'FFFCE4EC',
     };
 
     employees.forEach((emp, idx) => {
       const dayMap = recMap.get(emp.id) ?? new Map();
-      let came = 0, absent = 0, late = 0;
+      let came = 0,
+        absent = 0,
+        late = 0;
 
       const dayCells = weekDays.map((ds) => {
         const dow = dayjs(ds).day(); // 0=Sun, 6=Sat
         if (dow === 0 || dow === 6) return { val: '○', color: 'FFF5F5F5' };
         const rec = dayMap.get(ds);
-        if (!rec) { absent++; return { val: '—', color: 'FFFFEBEE' }; }
-        if (rec.status === 'PRESENT' || rec.status === 'EARLY_LEAVE' || rec.status === 'LATE' || rec.status === 'LATE_EARLY') came++;
+        if (!rec) {
+          absent++;
+          return { val: '—', color: 'FFFFEBEE' };
+        }
+        if (
+          rec.status === 'PRESENT' ||
+          rec.status === 'EARLY_LEAVE' ||
+          rec.status === 'LATE' ||
+          rec.status === 'LATE_EARLY'
+        )
+          came++;
         if (rec.status === 'ABSENT') absent++;
         if (rec.status === 'LATE' || rec.status === 'LATE_EARLY') late++;
-        return { val: statusSymbol[rec.status] || '?', color: statusColor[rec.status] || 'FFFFFFFF' };
+        return {
+          val: statusSymbol[rec.status] || '?',
+          color: statusColor[rec.status] || 'FFFFFFFF',
+        };
       });
 
-      const row = sheet.addRow([idx + 1, emp.fullName, emp.department.name, emp.position.name, ...dayCells.map(c => c.val), came, absent, late]);
+      const row = sheet.addRow([
+        idx + 1,
+        emp.fullName,
+        emp.department.name,
+        emp.position.name,
+        ...dayCells.map((c) => c.val),
+        came,
+        absent,
+        late,
+      ]);
 
       dayCells.forEach((c, di) => {
         const cell = row.getCell(5 + di);
-        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: c.color } };
+        cell.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: c.color },
+        };
         cell.alignment = { horizontal: 'center', vertical: 'middle' };
-        cell.border = { top: { style: 'hair' }, left: { style: 'hair' }, bottom: { style: 'hair' }, right: { style: 'hair' } };
+        cell.border = {
+          top: { style: 'hair' },
+          left: { style: 'hair' },
+          bottom: { style: 'hair' },
+          right: { style: 'hair' },
+        };
       });
 
       [1, 2, 3, 4].forEach((c) => {
-        row.getCell(c).alignment = { horizontal: c === 2 ? 'left' : 'center', vertical: 'middle' };
-        row.getCell(c).border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+        row.getCell(c).alignment = {
+          horizontal: c === 2 ? 'left' : 'center',
+          vertical: 'middle',
+        };
+        row.getCell(c).border = {
+          top: { style: 'thin' },
+          left: { style: 'thin' },
+          bottom: { style: 'thin' },
+          right: { style: 'thin' },
+        };
       });
       // Summary cells
       [5 + 7, 5 + 8, 5 + 9].forEach((c) => {
@@ -434,8 +637,12 @@ export class ReportsService {
         row.getCell(c).font = { bold: true };
       });
       if (idx % 2 === 0) {
-        [1, 2, 3, 4].forEach(c => {
-          row.getCell(c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFAFAFA' } };
+        [1, 2, 3, 4].forEach((c) => {
+          row.getCell(c).fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: 'FFFAFAFA' },
+          };
         });
       }
       row.height = 18;
@@ -445,7 +652,8 @@ export class ReportsService {
     const lgRow = sheet.addRow([]);
     lgRow.getCell(1).value = 'Belgilar:';
     lgRow.getCell(1).font = { bold: true };
-    lgRow.getCell(2).value = '✓=Keldi  K=Kechikdi  E=Erta ketdi  —=Kelmadi  ○=Dam olish';
+    lgRow.getCell(2).value =
+      '✓=Keldi  K=Kechikdi  E=Erta ketdi  —=Kelmadi  ○=Dam olish';
     sheet.mergeCells(lgRow.number, 2, lgRow.number, 8);
 
     // Column widths

@@ -31,10 +31,10 @@ import { PrismaService } from '../prisma/prisma.service';
  */
 
 export interface LiveUrlResult {
-  url:        string;
-  protocol:   'hls' | 'rtsp' | 'rtmp';
+  url: string;
+  protocol: 'hls' | 'rtsp' | 'rtmp';
   expireTime: number;
-  source:     'mediamtx' | 'hikconnect';
+  source: 'mediamtx' | 'hikconnect';
 }
 
 @Injectable()
@@ -42,9 +42,9 @@ export class HikConnectService {
   private readonly logger = new Logger(HikConnectService.name);
 
   // HikConnect
-  private readonly hikHost:    string;
-  private readonly appKey:     string;
-  private readonly appSecret:  string;
+  private readonly hikHost: string;
+  private readonly appKey: string;
+  private readonly appSecret: string;
   private readonly hikConfigured: boolean;
 
   // MediaMTX
@@ -54,9 +54,12 @@ export class HikConnectService {
     private readonly config: ConfigService,
     private readonly prisma: PrismaService,
   ) {
-    this.hikHost      = this.config.get('HIKCONNECT_HOST', 'https://open.hikvision.com');
-    this.appKey       = this.config.get('HIKCONNECT_APP_KEY', '');
-    this.appSecret    = this.config.get('HIKCONNECT_APP_SECRET', '');
+    this.hikHost = this.config.get(
+      'HIKCONNECT_HOST',
+      'https://open.hikvision.com',
+    );
+    this.appKey = this.config.get('HIKCONNECT_APP_KEY', '');
+    this.appSecret = this.config.get('HIKCONNECT_APP_SECRET', '');
     this.hikConfigured = !!(this.appKey && this.appSecret);
 
     this.mediamtxHost = this.config.get('MEDIAMTX_HLS_HOST', '');
@@ -65,7 +68,9 @@ export class HikConnectService {
       this.logger.log('HikConnect sozlanmagan — MediaMTX rejimida ishlaydi.');
     }
     if (!this.mediamtxHost) {
-      this.logger.warn('MEDIAMTX_HLS_HOST sozlanmagan. Kamera URL lar ishlamaydi.');
+      this.logger.warn(
+        'MEDIAMTX_HLS_HOST sozlanmagan. Kamera URL lar ishlamaydi.',
+      );
     }
   }
 
@@ -73,38 +78,41 @@ export class HikConnectService {
 
   async getCamerasForHospital(hospitalId: string) {
     return this.prisma.camera.findMany({
-      where:   { hospitalId, isActive: true },
+      where: { hospitalId, isActive: true },
       orderBy: { name: 'asc' },
     });
   }
 
   async getAllCameras(hospitalId?: string) {
     return this.prisma.camera.findMany({
-      where:   hospitalId ? { hospitalId } : {},
+      where: hospitalId ? { hospitalId } : {},
       include: { hospital: { select: { id: true, name: true, code: true } } },
       orderBy: [{ hospital: { name: 'asc' } }, { name: 'asc' }],
     });
   }
 
   async createCamera(data: {
-    hospitalId:      string;
-    name:            string;
-    streamPath?:     string;
+    hospitalId: string;
+    name: string;
+    streamPath?: string;
     cameraIndexCode?: string;
-    channelNo?:      number;
-    deviceSerial?:   string;
+    channelNo?: number;
+    deviceSerial?: string;
   }) {
     return this.prisma.camera.create({ data });
   }
 
-  async updateCamera(id: string, data: {
-    name?:            string;
-    streamPath?:      string;
-    cameraIndexCode?: string;
-    channelNo?:       number;
-    deviceSerial?:    string;
-    isActive?:        boolean;
-  }) {
+  async updateCamera(
+    id: string,
+    data: {
+      name?: string;
+      streamPath?: string;
+      cameraIndexCode?: string;
+      channelNo?: number;
+      deviceSerial?: string;
+      isActive?: boolean;
+    },
+  ) {
     return this.prisma.camera.update({ where: { id }, data });
   }
 
@@ -122,7 +130,9 @@ export class HikConnectService {
    *   2. MediaMTX   (streamPath bor bo'lsa)
    */
   async getLiveUrlById(cameraId: string): Promise<LiveUrlResult> {
-    const camera = await this.prisma.camera.findUnique({ where: { id: cameraId } });
+    const camera = await this.prisma.camera.findUnique({
+      where: { id: cameraId },
+    });
     if (!camera) throw new NotFoundException('Kamera topilmadi');
 
     // HikConnect — birinchi prioritet
@@ -157,11 +167,11 @@ export class HikConnectService {
     return {
       hikconnect: {
         configured: this.hikConfigured,
-        host:       this.hikHost,
+        host: this.hikHost,
       },
       mediamtx: {
         configured: !!this.mediamtxHost,
-        host:       this.mediamtxHost || null,
+        host: this.mediamtxHost || null,
       },
     };
   }
@@ -173,7 +183,7 @@ export class HikConnectService {
   // ─── HikConnect dan kameralar import qilish ────────────────────────────────
 
   async fetchCamerasFromHikConnect(params?: {
-    pageNo?:   number;
+    pageNo?: number;
     pageSize?: number;
   }) {
     if (!this.hikConfigured) {
@@ -182,19 +192,22 @@ export class HikConnectService {
 
     const path = '/artemis/api/resource/v1/cameras/indexCode/cameraList';
     const body = {
-      pageNo:   params?.pageNo   ?? 1,
+      pageNo: params?.pageNo ?? 1,
       pageSize: params?.pageSize ?? 50,
     };
 
-    const response = await this.artemisPost<{ list: any[]; total: number }>(path, body);
+    const response = await this.artemisPost<{ list: any[]; total: number }>(
+      path,
+      body,
+    );
 
     return {
       list: (response.list ?? []).map((c: any) => ({
         cameraIndexCode: c.cameraIndexCode ?? c.indexCode ?? '',
-        cameraName:      c.cameraName ?? c.name ?? '',
-        deviceSerial:    c.deviceSerial ?? '',
-        channelNo:       Number(c.channelNo ?? 1),
-        status:          c.status ?? 'unknown',
+        cameraName: c.cameraName ?? c.name ?? '',
+        deviceSerial: c.deviceSerial ?? '',
+        channelNo: Number(c.channelNo ?? 1),
+        status: c.status ?? 'unknown',
       })),
       total: response.total ?? 0,
     };
@@ -205,37 +218,42 @@ export class HikConnectService {
   private getLiveUrlFromMediaMTX(streamPath: string): LiveUrlResult {
     if (!this.mediamtxHost) {
       throw new InternalServerErrorException(
-        'MEDIAMTX_HLS_HOST sozlanmagan. VPS da MediaMTX o\'rnatilganmi?',
+        "MEDIAMTX_HLS_HOST sozlanmagan. VPS da MediaMTX o'rnatilganmi?",
       );
     }
 
     const host = this.mediamtxHost.replace(/\/$/, '');
     return {
-      url:        `${host}/${streamPath}/index.m3u8`,
-      protocol:   'hls',
-      expireTime: 0,   // MediaMTX da expiry yo'q — FFmpeg agent ishlayotganida doimiy
-      source:     'mediamtx',
+      url: `${host}/${streamPath}/index.m3u8`,
+      protocol: 'hls',
+      expireTime: 0, // MediaMTX da expiry yo'q — FFmpeg agent ishlayotganida doimiy
+      source: 'mediamtx',
     };
   }
 
   // ─── PRIVATE: HikConnect Artemis API ─────────────────────────────────────
 
-  private async getLiveUrlFromHikConnect(cameraIndexCode: string): Promise<LiveUrlResult> {
+  private async getLiveUrlFromHikConnect(
+    cameraIndexCode: string,
+  ): Promise<LiveUrlResult> {
     const path = '/artemis/api/video/v1/cameras/previewURLs';
     const body = {
       cameraIndexCode,
       streamType: 0,
-      protocol:   'hls',
+      protocol: 'hls',
       expireTime: 3600,
     };
 
-    const response = await this.artemisPost<{ url: string; expireTime?: number }>(path, body);
+    const response = await this.artemisPost<{
+      url: string;
+      expireTime?: number;
+    }>(path, body);
 
     return {
-      url:        response.url,
-      protocol:   'hls',
+      url: response.url,
+      protocol: 'hls',
       expireTime: response.expireTime ?? 3600,
-      source:     'hikconnect',
+      source: 'hikconnect',
     };
   }
 
@@ -243,12 +261,15 @@ export class HikConnectService {
    * HikConnect Artemis API — HMAC-SHA256 imzolangan POST so'rov
    */
   private async artemisPost<T>(path: string, body: object): Promise<T> {
-    const timestamp   = Date.now().toString();
-    const nonce       = crypto.randomUUID();
+    const timestamp = Date.now().toString();
+    const nonce = crypto.randomUUID();
     const contentType = 'application/json';
-    const accept      = 'application/json';
-    const bodyStr     = JSON.stringify(body);
-    const contentMd5  = crypto.createHash('md5').update(bodyStr).digest('base64');
+    const accept = 'application/json';
+    const bodyStr = JSON.stringify(body);
+    const contentMd5 = crypto
+      .createHash('md5')
+      .update(bodyStr)
+      .digest('base64');
 
     const signedHeaders = [
       `x-ca-key:${this.appKey}`,
@@ -257,8 +278,13 @@ export class HikConnectService {
     ].join('\n');
 
     const stringToSign = [
-      'POST', accept, contentMd5, contentType, '',
-      signedHeaders, path,
+      'POST',
+      accept,
+      contentMd5,
+      contentType,
+      '',
+      signedHeaders,
+      path,
     ].join('\n');
 
     const signature = crypto
@@ -272,12 +298,12 @@ export class HikConnectService {
         body,
         {
           headers: {
-            'Content-Type':           contentType,
-            'Accept':                 accept,
-            'x-ca-key':               this.appKey,
-            'x-ca-nonce':             nonce,
-            'x-ca-timestamp':         timestamp,
-            'x-ca-signature':         signature,
+            'Content-Type': contentType,
+            Accept: accept,
+            'x-ca-key': this.appKey,
+            'x-ca-nonce': nonce,
+            'x-ca-timestamp': timestamp,
+            'x-ca-signature': signature,
             'x-ca-signature-headers': 'x-ca-key,x-ca-nonce,x-ca-timestamp',
           },
           timeout: 10_000,
