@@ -159,6 +159,7 @@ model Hospital {
   notifications Notification[]
   payments      Payment[]
   cameras       Camera[]
+  hikTerminals  HikTerminal[]
   leaveRequests LeaveRequest[]
 
   createdAt DateTime @default(now())
@@ -710,4 +711,14 @@ model LeaveRequest {
   @@index([employeeId])
   @@index([hospitalId, status])
   @@index([employeeId, startDate, endDate])
+}
+
+model HikTerminal {
+  id        String   @id @default(uuid())
+  name      String                        // "Kirish terminali"
+  devIndex  String   @unique              // Gateway UUID
+  hospitalId String
+  hospital  Hospital @relation(fields: [hospitalId], references: [id])
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
 }

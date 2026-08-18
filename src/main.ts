@@ -58,7 +58,7 @@ async function bootstrap() {
 
   // ✅ Hikvision webhook — raw Buffer (multipart/form-data, xml, json)
   app.use(
-    /^\/(api\/v1\/hikvision|hikvision)/,
+    /^\/(api\/v1\/hikvision\/webhook|hikvision\/webhook)/,
     express.raw({ type: '*/*', limit: '25mb' }),
   );
 

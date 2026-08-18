@@ -1,6 +1,8 @@
+// src/employees/employees.module.ts
 import { Module } from '@nestjs/common';
 import { EmployeesController } from './employees.controller';
 import { EmployeesService } from './employees.service';
+import { HikvisionModule } from '../hikvision/hikvision.module';
 import { MulterModule } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { extname } from 'path';
@@ -11,6 +13,7 @@ if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 @Module({
   imports: [
+    HikvisionModule,
     MulterModule.register({
       storage: diskStorage({
         destination: UPLOAD_DIR,
@@ -24,7 +27,7 @@ if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
         const ext = extname(file.originalname).toLowerCase();
         cb(null, allowed.includes(ext));
       },
-      limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+      limits: { fileSize: 10 * 1024 * 1024 },
     }),
   ],
   controllers: [EmployeesController],

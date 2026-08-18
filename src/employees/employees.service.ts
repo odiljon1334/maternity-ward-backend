@@ -7,6 +7,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateEmployeeDto } from './dto/create-employee.dto';
 import { UpdateEmployeeDto } from './dto/update-employee.dto';
 import { QueryEmployeeDto } from './dto/query-employee.dto';
+import { HikvisionService } from '../hikvision/hikvision.service';
+import { Logger } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import * as ExcelJS from 'exceljs';
 import csv from 'csv-parser';
@@ -120,7 +122,11 @@ function hasCyrillic(str: string): boolean {
 
 @Injectable()
 export class EmployeesService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(EmployeesService.name);
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly hikvision: HikvisionService,
+  ) {}
 
   async findAll(query: QueryEmployeeDto, hospitalId: string) {
     const {
@@ -364,7 +370,48 @@ export class EmployeesService {
       updateData.employeeNo = unique;
     }
 
-    return this.prisma.employee.update({ where: { id }, data: updateData });
+    const updated = await this.prisma.employee.update({
+      where: { id },
+      data: updateData,
+    });
+
+    // ─── Terminal sync ────────────────────────────────────────────────────────
+    const employeeNo = updated.employeeNo;
+    if (employeeNo) {
+      // Bu hospitalga tegishli barcha terminallarni olish
+      const terminals = await this.prisma.hikTerminal.findMany({
+        where: { hospitalId, isActive: true },
+      });
+
+      for (const terminal of terminals) {
+        try {
+          // Avval person qo'shamiz (allaqachon bo'lsa xato bermaydi)
+          await this.hikvision
+            .addPerson(terminal.devIndex, {
+              employeeNo,
+              name: updated.fullName,
+            })
+            .catch(() => {}); // ignore duplicate
+
+          // Face yuklash
+          await this.hikvision.addFacePicture(
+            terminal.devIndex,
+            employeeNo,
+            imageBuffer,
+          );
+          this.logger.log(
+            `Face synced to terminal ${terminal.name}: ${employeeNo}`,
+          );
+        } catch (err: any) {
+          this.logger.error(
+            `Terminal sync failed [${terminal.name}]: ${err.message}`,
+          );
+        }
+      }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
+    return updated;
   }
 
   /** EMP-XXXXXX formatli eski employee numberlarni raqamli formatga o'tkazish */
@@ -684,7 +731,26 @@ export class EmployeesService {
     const emp = await this.findOne(id, hospitalId);
     const isDirector = emp.user?.role === 'DIRECTOR';
 
-    // Bog'liq yozuvlarni avval o'chirish (cascade yo'q jadvallar)
+    // ─── Terminal dan o'chirish ───────────────────────────────────────────────
+    if (emp.employeeNo) {
+      const terminals = await this.prisma.hikTerminal.findMany({
+        where: { hospitalId, isActive: true },
+      });
+      for (const terminal of terminals) {
+        try {
+          await this.hikvision.deletePerson(terminal.devIndex, emp.employeeNo);
+          this.logger.log(
+            `Person removed from terminal ${terminal.name}: ${emp.employeeNo}`,
+          );
+        } catch (err: any) {
+          this.logger.error(
+            `Terminal remove failed [${terminal.name}]: ${err.message}`,
+          );
+        }
+      }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
     await this.prisma.$transaction([
       this.prisma.payrollRecord.deleteMany({ where: { employeeId: id } }),
       this.prisma.weeklyAttendanceStat.deleteMany({
@@ -695,7 +761,6 @@ export class EmployeesService {
       this.prisma.employee.delete({ where: { id } }),
     ]);
 
-    // DIRECTOR o'chirilsa — Telegram obunasini ham o'chirish
     if (isDirector && emp.hospitalId) {
       await this.prisma.telegramSubscription.updateMany({
         where: { hospitalId: emp.hospitalId, isActive: true },

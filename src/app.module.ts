@@ -26,6 +26,7 @@ import { HealthModule } from './health/health.module';
 import { LeaveModule } from './leave/leave.module';
 import { PushModule } from './push/push.module';
 import { BirthdayModule } from './birthday/birthday.module';
+import { HikvisionModule } from './hikvision/hikvision.module';
 
 @Module({
   imports: [
@@ -63,6 +64,7 @@ import { BirthdayModule } from './birthday/birthday.module';
     AuditLogModule,
     MinistryModule,
     HikConnectModule,
+    HikvisionModule,
     HealthModule,
     LeaveModule,
     PushModule,
