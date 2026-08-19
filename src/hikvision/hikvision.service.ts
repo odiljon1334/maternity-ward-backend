@@ -135,6 +135,29 @@ export class HikvisionService {
     return statusMap;
   }
 
+  // Terminal parolini hisobga olib Axios client yasash
+  private getTerminalClient(terminalPassword?: string | null): AxiosInstance {
+    const password = terminalPassword || this.terminalPass || this.gatewayPass;
+    return axios.create({
+      baseURL: this.baseUrl,
+      timeout: 15_000,
+      auth: { username: this.gatewayUser, password },
+    });
+  }
+
+  // Terminal paroli bilan xodimni o'chirish
+  async deletePersonWithClient(
+    client: AxiosInstance,
+    devIndex: string,
+    employeeNo: string,
+  ) {
+    const res = await client.put(
+      `/ISAPI/AccessControl/UserInfo/Delete?format=json&devIndex=${devIndex}`,
+      { UserInfoDelCond: { EmployeeNoList: [{ employeeNo }] } },
+    );
+    return res.data;
+  }
+
   // ─── Person ───────────────────────────────────────────────────────────────
 
   async addPerson(

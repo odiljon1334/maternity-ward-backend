@@ -385,20 +385,24 @@ export class EmployeesService {
 
       for (const terminal of terminals) {
         try {
-          // Avval person qo'shamiz (allaqachon bo'lsa xato bermaydi)
-          await this.hikvision
-            .addPerson(terminal.devIndex, {
+          const terminalHttp = (this.hikvision as any).getTerminalClient(
+            terminal.password,
+          );
+
+          await (this.hikvision as any)
+            .addPersonWithClient(terminalHttp, terminal.devIndex, {
               employeeNo,
               name: updated.fullName,
             })
-            .catch(() => {}); // ignore duplicate
+            .catch(() => {});
 
-          // Face yuklash
-          await this.hikvision.addFacePicture(
+          await (this.hikvision as any).addFacePictureWithClient(
+            terminalHttp,
             terminal.devIndex,
             employeeNo,
             imageBuffer,
           );
+
           this.logger.log(
             `Face synced to terminal ${terminal.name}: ${employeeNo}`,
           );
@@ -738,7 +742,16 @@ export class EmployeesService {
       });
       for (const terminal of terminals) {
         try {
-          await this.hikvision.deletePerson(terminal.devIndex, emp.employeeNo);
+          const terminalHttp = (this.hikvision as any).getTerminalClient(
+            terminal.password,
+          );
+
+          await (this.hikvision as any).deletePersonWithClient(
+            terminalHttp,
+            terminal.devIndex,
+            emp.employeeNo,
+          );
+
           this.logger.log(
             `Person removed from terminal ${terminal.name}: ${emp.employeeNo}`,
           );
