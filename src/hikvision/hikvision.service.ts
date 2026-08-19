@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios, { AxiosInstance } from 'axios';
+import * as crypto from 'crypto';
 import FormData from 'form-data';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -10,23 +11,117 @@ import { PrismaService } from '../prisma/prisma.service';
 export class HikvisionService {
   private readonly logger = new Logger(HikvisionService.name);
   private readonly http: AxiosInstance;
+  private readonly baseUrl: string;
+  private readonly gatewayUser: string;
+  private readonly gatewayPass: string;
 
   constructor(
     private readonly config: ConfigService,
     private readonly prisma: PrismaService,
   ) {
-    const baseUrl = this.config.get(
+    this.baseUrl = this.config.get(
       'HIK_GATEWAY_URL',
       'http://95.111.252.83:8080',
     );
-    const user = this.config.get('HIK_GATEWAY_USER', 'admin');
-    const pass = this.config.get('HIK_GATEWAY_PASS', '');
+    this.gatewayUser = this.config.get('HIK_GATEWAY_USER', 'admin');
+    this.gatewayPass = this.config.get('HIK_GATEWAY_PASS', '');
 
     this.http = axios.create({
-      baseURL: baseUrl,
+      baseURL: this.baseUrl,
       timeout: 15_000,
-      auth: { username: user, password: pass },
+      auth: { username: this.gatewayUser, password: this.gatewayPass },
     });
+  }
+
+  // ─── Digest Auth helper ───────────────────────────────────────────────────
+
+  private async digestRequest(
+    method: string,
+    url: string,
+    data?: any,
+  ): Promise<any> {
+    try {
+      return await axios({
+        method,
+        url,
+        data,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    } catch (err: any) {
+      if (err.response?.status !== 401) throw err;
+
+      const wwwAuth = err.response.headers['www-authenticate'] || '';
+      const realm = wwwAuth.match(/realm="([^"]+)"/)?.[1] ?? '';
+      const nonce = wwwAuth.match(/nonce="([^"]+)"/)?.[1] ?? '';
+      const qop = (wwwAuth.match(/qop="([^"]+)"/)?.[1] ?? '')
+        .split(',')[0]
+        .trim();
+
+      const parsedUrl = new URL(url);
+      const uri = parsedUrl.pathname + parsedUrl.search;
+      const nc = '00000001';
+      const cnonce = crypto.randomBytes(8).toString('hex');
+
+      const ha1 = crypto
+        .createHash('md5')
+        .update(`${this.gatewayUser}:${realm}:${this.gatewayPass}`)
+        .digest('hex');
+      const ha2 = crypto
+        .createHash('md5')
+        .update(`${method.toUpperCase()}:${uri}`)
+        .digest('hex');
+      const response = crypto
+        .createHash('md5')
+        .update(`${ha1}:${nonce}:${nc}:${cnonce}:${qop}:${ha2}`)
+        .digest('hex');
+
+      const authHeader = `Digest username="${this.gatewayUser}", realm="${realm}", nonce="${nonce}", uri="${uri}", qop=${qop}, nc=${nc}, cnonce="${cnonce}", response="${response}"`;
+
+      return axios({
+        method,
+        url,
+        data,
+        headers: {
+          Authorization: authHeader,
+          'Content-Type': 'application/json',
+        },
+      });
+    }
+  }
+
+  // ─── Gateway device list (Digest auth) ───────────────────────────────────
+
+  private async fetchGatewayDevices(): Promise<any[]> {
+    try {
+      const res = await this.digestRequest(
+        'POST',
+        `${this.baseUrl}/ISAPI/ContentMgmt/DeviceMgmt/deviceList?format=json`,
+        {
+          SearchDescription: {
+            position: 0,
+            maxResult: 100,
+            Filter: {
+              key: '',
+              devType: '',
+              protocolType: ['ehomeV5'],
+              devStatus: ['online', 'offline'],
+            },
+          },
+        },
+      );
+      return res.data?.SearchResult?.MatchList ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  private buildStatusMap(gatewayDevices: any[]): Record<string, string> {
+    const statusMap: Record<string, string> = {};
+    for (const item of gatewayDevices) {
+      const dev = item.Device;
+      if (dev?.devIndex) statusMap[dev.devIndex] = dev.devStatus ?? 'offline';
+    }
+    return statusMap;
   }
 
   // ─── Person ───────────────────────────────────────────────────────────────
@@ -66,11 +161,7 @@ export class HikvisionService {
   async deletePerson(devIndex: string, employeeNo: string) {
     const res = await this.http.put(
       `/ISAPI/AccessControl/UserInfo/Delete?format=json&devIndex=${devIndex}`,
-      {
-        UserInfoDelCond: {
-          EmployeeNoList: [{ employeeNo }],
-        },
-      },
+      { UserInfoDelCond: { EmployeeNoList: [{ employeeNo }] } },
     );
     this.logger.log(`Person deleted: ${employeeNo}`);
     return res.data;
@@ -88,19 +179,14 @@ export class HikvisionService {
     form.append(
       'FaceDataRecord',
       JSON.stringify({
-        FaceInfo: {
-          employeeNo,
-          faceLibType: 'blackFD',
-        },
+        FaceInfo: { employeeNo, faceLibType: 'blackFD' },
       }),
       { contentType: 'application/json' },
     );
-
     form.append('FaceImage', imageBuffer, {
       filename: `${employeeNo}.jpg`,
       contentType: mimeType,
     });
-
     const res = await this.http.post(
       `/ISAPI/Intelligent/FDLib/FaceDataRecord?format=json&devIndex=${devIndex}`,
       form,
@@ -113,11 +199,7 @@ export class HikvisionService {
   async deleteFacePicture(devIndex: string, employeeNo: string) {
     const res = await this.http.put(
       `/ISAPI/Intelligent/FDLib/FaceDataRecord/Delete?format=json&devIndex=${devIndex}`,
-      {
-        FaceInfoDelCond: {
-          EmployeeNoList: [{ employeeNo }],
-        },
-      },
+      { FaceInfoDelCond: { EmployeeNoList: [{ employeeNo }] } },
     );
     return res.data;
   }
@@ -148,7 +230,7 @@ export class HikvisionService {
       data: {
         name: data.name,
         devIndex: data.devIndex,
-        hospitalId: hospitalId,
+        hospitalId,
       },
     });
   }
@@ -164,6 +246,33 @@ export class HikvisionService {
       where: { id, hospitalId },
       data: { isActive },
     });
+  }
+
+  // ─── Terminal status ──────────────────────────────────────────────────────
+
+  async getTerminalsWithStatus(hospitalId: string) {
+    const terminals = await this.prisma.hikTerminal.findMany({
+      where: { hospitalId },
+      orderBy: { createdAt: 'desc' },
+    });
+    const gatewayDevices = await this.fetchGatewayDevices();
+    const statusMap = this.buildStatusMap(gatewayDevices);
+    return terminals.map((t) => ({
+      ...t,
+      onlineStatus: statusMap[t.devIndex] ?? 'offline',
+    }));
+  }
+
+  async getAllTerminalsWithStatus() {
+    const terminals = await this.prisma.hikTerminal.findMany({
+      orderBy: { createdAt: 'desc' },
+    });
+    const gatewayDevices = await this.fetchGatewayDevices();
+    const statusMap = this.buildStatusMap(gatewayDevices);
+    return terminals.map((t) => ({
+      ...t,
+      onlineStatus: statusMap[t.devIndex] ?? 'offline',
+    }));
   }
 
   // ─── Bulk Sync ────────────────────────────────────────────────────────────
@@ -214,7 +323,7 @@ export class HikvisionService {
           await this.addPerson(terminal.devIndex, {
             employeeNo: emp.employeeNo!,
             name: emp.fullName,
-          }).catch(() => {}); // ignore duplicate
+          }).catch(() => {});
 
           await this.addFacePicture(
             terminal.devIndex,
@@ -230,88 +339,5 @@ export class HikvisionService {
     }
 
     return { total: employees.length, success, failed, errors };
-  }
-
-  async getTerminalsWithStatus(hospitalId: string) {
-    const terminals = await this.prisma.hikTerminal.findMany({
-      where: { hospitalId },
-      orderBy: { createdAt: 'desc' },
-    });
-
-    // Gateway dan barcha qurilmalar statusini olish
-    let gatewayDevices: any[] = [];
-    try {
-      const res = await this.http.post(
-        '/ISAPI/ContentMgmt/DeviceMgmt/deviceList?format=json',
-        {
-          SearchDescription: {
-            position: 0,
-            maxResult: 100,
-            Filter: {
-              key: '',
-              devType: '',
-              protocolType: ['ehomeV5'],
-              devStatus: ['online', 'offline'],
-            },
-          },
-        },
-      );
-      gatewayDevices = res.data?.SearchResult?.MatchList ?? [];
-    } catch {
-      // Gateway ulanmasa — hammasi offline
-    }
-
-    // devIndex bo'yicha status map
-    const statusMap: Record<string, string> = {};
-    for (const item of gatewayDevices) {
-      const dev = item.Device;
-      if (dev?.devIndex) {
-        statusMap[dev.devIndex] = dev.devStatus ?? 'offline';
-      }
-    }
-
-    return terminals.map((t) => ({
-      ...t,
-      onlineStatus: statusMap[t.devIndex] ?? 'offline',
-    }));
-  }
-
-  async getAllTerminalsWithStatus() {
-    const terminals = await this.prisma.hikTerminal.findMany({
-      orderBy: { createdAt: 'desc' },
-    });
-
-    let gatewayDevices: any[] = [];
-    try {
-      const res = await this.http.post(
-        '/ISAPI/ContentMgmt/DeviceMgmt/deviceList?format=json',
-        {
-          SearchDescription: {
-            position: 0,
-            maxResult: 100,
-            Filter: {
-              key: '',
-              devType: '',
-              protocolType: ['ehomeV5'],
-              devStatus: ['online', 'offline'],
-            },
-          },
-        },
-      );
-      gatewayDevices = res.data?.SearchResult?.MatchList ?? [];
-    } catch {
-      /* offline */
-    }
-
-    const statusMap: Record<string, string> = {};
-    for (const item of gatewayDevices) {
-      const dev = item.Device;
-      if (dev?.devIndex) statusMap[dev.devIndex] = dev.devStatus ?? 'offline';
-    }
-
-    return terminals.map((t) => ({
-      ...t,
-      onlineStatus: statusMap[t.devIndex] ?? 'offline',
-    }));
   }
 }
