@@ -294,7 +294,7 @@ export class HikvisionService {
       data: {
         name: data.name,
         devIndex: data.devIndex,
-        password: data.password,
+        password: data.password ?? null,
         hospitalId,
       },
     });
@@ -392,7 +392,7 @@ export class HikvisionService {
           const terminalHttp = axios.create({
             baseURL: this.baseUrl,
             timeout: 15_000,
-            auth: { username: this.gatewayUser, password: terminalPassword },
+            auth: { username: this.terminalUser, password: terminalPassword },
           });
 
           // addPerson va addFacePicture metodlariga ushbu terminalHttp'ni uzatamiz

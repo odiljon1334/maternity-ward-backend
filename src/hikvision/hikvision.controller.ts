@@ -75,12 +75,18 @@ export class HikvisionController {
 
   @Post('terminals')
   addTerminal(
-    @Body() body: { hospitalId: string; name: string; devIndex: string },
+    @Body()
+    body: {
+      hospitalId: string;
+      name: string;
+      devIndex: string;
+      password?: string;
+    },
   ) {
-    console.log('BODY RECEIVED:', body);
     return this.hikvision.addTerminal(body.hospitalId, {
       name: body.name,
       devIndex: body.devIndex,
+      password: body.password,
     });
   }
 
