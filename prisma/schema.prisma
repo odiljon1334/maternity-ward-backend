@@ -718,6 +718,7 @@ model HikTerminal {
   name      String                        // "Kirish terminali"
   devIndex  String   @unique              // Gateway UUID
   hospitalId String
+  password  String?
   hospital  Hospital @relation(fields: [hospitalId], references: [id])
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
