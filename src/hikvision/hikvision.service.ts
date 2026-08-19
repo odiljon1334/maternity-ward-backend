@@ -93,6 +93,7 @@ export class HikvisionService {
 
   private async fetchGatewayDevices(): Promise<any[]> {
     try {
+      this.logger.log("fetchGatewayDevices: so'rov yuborilmoqda...");
       const res = await this.digestRequest(
         'POST',
         `${this.baseUrl}/ISAPI/ContentMgmt/DeviceMgmt/deviceList?format=json`,
@@ -109,8 +110,13 @@ export class HikvisionService {
           },
         },
       );
-      return res.data?.SearchResult?.MatchList ?? [];
-    } catch {
+      const devices = res.data?.SearchResult?.MatchList ?? [];
+      this.logger.log(
+        `fetchGatewayDevices: ${devices.length} ta qurilma. ${JSON.stringify(devices.map((d: any) => ({ devIndex: d.Device?.devIndex, status: d.Device?.devStatus })))}`,
+      );
+      return devices;
+    } catch (err: any) {
+      this.logger.error(`fetchGatewayDevices xato: ${err.message}`);
       return [];
     }
   }
