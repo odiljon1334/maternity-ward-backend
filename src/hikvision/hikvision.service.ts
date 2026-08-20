@@ -135,29 +135,6 @@ export class HikvisionService {
     return statusMap;
   }
 
-  // Terminal parolini hisobga olib Axios client yasash
-  private getTerminalClient(terminalPassword?: string | null): AxiosInstance {
-    const password = terminalPassword || this.terminalPass || this.gatewayPass;
-    return axios.create({
-      baseURL: this.baseUrl,
-      timeout: 15_000,
-      auth: { username: this.gatewayUser, password },
-    });
-  }
-
-  // Terminal paroli bilan xodimni o'chirish
-  public async deletePersonWithClient(
-    client: AxiosInstance,
-    devIndex: string,
-    employeeNo: string,
-  ) {
-    const res = await client.put(
-      `/ISAPI/AccessControl/UserInfo/Delete?format=json&devIndex=${devIndex}`,
-      { UserInfoDelCond: { EmployeeNoList: [{ employeeNo }] } },
-    );
-    return res.data;
-  }
-
   // ─── Person ───────────────────────────────────────────────────────────────
 
   async addPerson(
@@ -268,59 +245,6 @@ export class HikvisionService {
       'PUT',
       `${this.baseUrl}/ISAPI/Intelligent/FDLib/FaceDataRecord/Delete?format=json&devIndex=${devIndex}`,
       { FaceInfoDelCond: { EmployeeNoList: [{ employeeNo }] } },
-    );
-    return res.data;
-  }
-
-  public async addPersonWithClient(
-    client: AxiosInstance,
-    devIndex: string,
-    data: any,
-  ) {
-    const res = await client.post(
-      `/ISAPI/AccessControl/UserInfo/Record?format=json&devIndex=${devIndex}`,
-      {
-        UserInfo: [
-          {
-            employeeNo: data.employeeNo,
-            name: data.name,
-            Valid: {
-              beginTime: data.beginTime ?? '2020-01-01T00:00:00',
-              endTime: data.endTime ?? '2030-12-31T23:59:59',
-            },
-          },
-        ],
-      },
-    );
-    const result = res.data?.UserInfoOutList?.UserInfoOut?.[0];
-    if (result?.statusCode !== 1) {
-      throw new Error(`addPerson failed: ${result?.errorMsg}`);
-    }
-    return result;
-  }
-
-  public async addFacePictureWithClient(
-    client: AxiosInstance,
-    devIndex: string,
-    employeeNo: string,
-    imageBuffer: Buffer,
-  ) {
-    const form = new FormData();
-    form.append(
-      'FaceDataRecord',
-      JSON.stringify({
-        FaceInfo: { employeeNo, faceLibType: 'blackFD' },
-      }),
-      { contentType: 'application/json' },
-    );
-    form.append('FaceImage', imageBuffer, {
-      filename: `${employeeNo}.jpg`,
-      contentType: 'image/jpeg',
-    });
-    const res = await client.post(
-      `/ISAPI/Intelligent/FDLib/FaceDataRecord?format=json&devIndex=${devIndex}`,
-      form,
-      { headers: form.getHeaders() },
     );
     return res.data;
   }
@@ -442,26 +366,12 @@ export class HikvisionService {
 
       for (const terminal of terminals) {
         try {
-          // Terminalning o'z paroli bo'lmasa, .env dagi gateway/default parolni olamiz
-          const terminalPassword = terminal.password || this.gatewayPass;
-
-          // Shu terminal uchun maxsus axios instance yaratamiz
-          const terminalHttp = axios.create({
-            baseURL: this.baseUrl,
-            timeout: 15_000,
-            auth: { username: this.terminalUser, password: terminalPassword },
-          });
-
-          // addPerson va addFacePicture metodlariga ushbu terminalHttp'ni uzatamiz
-          // (yoki metodlarni moslashtirasiz)
-
-          await this.addPersonWithClient(terminalHttp, terminal.devIndex, {
+          await this.addPerson(terminal.devIndex, {
             employeeNo: emp.employeeNo!,
             name: emp.fullName,
           }).catch(() => {});
 
-          await this.addFacePictureWithClient(
-            terminalHttp,
+          await this.addFacePicture(
             terminal.devIndex,
             emp.employeeNo!,
             imageBuffer,

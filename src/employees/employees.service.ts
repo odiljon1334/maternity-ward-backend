@@ -378,26 +378,20 @@ export class EmployeesService {
     // ─── Terminal sync ────────────────────────────────────────────────────────
     const employeeNo = updated.employeeNo;
     if (employeeNo) {
-      // Bu hospitalga tegishli barcha terminallarni olish
       const terminals = await this.prisma.hikTerminal.findMany({
         where: { hospitalId, isActive: true },
       });
 
       for (const terminal of terminals) {
         try {
-          const terminalHttp = (this.hikvision as any).getTerminalClient(
-            terminal.password,
-          );
-
-          await (this.hikvision as any)
-            .addPersonWithClient(terminalHttp, terminal.devIndex, {
+          await this.hikvision
+            .addPerson(terminal.devIndex, {
               employeeNo,
               name: updated.fullName,
             })
             .catch(() => {});
 
-          await (this.hikvision as any).addFacePictureWithClient(
-            terminalHttp,
+          await this.hikvision.addFacePicture(
             terminal.devIndex,
             employeeNo,
             imageBuffer,
@@ -406,19 +400,14 @@ export class EmployeesService {
           this.logger.log(
             `Face synced to terminal ${terminal.name}: ${employeeNo}`,
           );
-          this.logger.log(
-            `Terminal ${terminal.name} uchun ishlatilayotgan parol: ${terminal.password || 'ENV dan olingan'}`,
-          );
         } catch (err: any) {
           this.logger.error(
             `Terminal sync failed [${terminal.name}]: ${err.message}`,
           );
         }
       }
+      return updated;
     }
-    // ─────────────────────────────────────────────────────────────────────────
-
-    return updated;
   }
 
   /** EMP-XXXXXX formatli eski employee numberlarni raqamli formatga o'tkazish */
@@ -745,16 +734,7 @@ export class EmployeesService {
       });
       for (const terminal of terminals) {
         try {
-          const terminalHttp = (this.hikvision as any).getTerminalClient(
-            terminal.password,
-          );
-
-          await (this.hikvision as any).deletePersonWithClient(
-            terminalHttp,
-            terminal.devIndex,
-            emp.employeeNo,
-          );
-
+          await this.hikvision.deletePerson(terminal.devIndex, emp.employeeNo);
           this.logger.log(
             `Person removed from terminal ${terminal.name}: ${emp.employeeNo}`,
           );
