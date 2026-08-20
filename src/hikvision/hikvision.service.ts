@@ -198,6 +198,9 @@ export class HikvisionService {
       filename: `${employeeNo}.jpg`,
       contentType: mimeType,
     });
+    this.logger.log(
+      `Uploading face: employee=${employeeNo} devIndex=${devIndex} size=${imageBuffer.length}`,
+    );
 
     // Face uchun multipart — maxsus digest request
     try {
@@ -207,7 +210,16 @@ export class HikvisionService {
         { headers: form.getHeaders() },
       );
     } catch (err: any) {
-      if (err.response?.status !== 401) throw err;
+      this.logger.error('Face upload failed (1st attempt)', {
+        message: err.message,
+        code: err.code,
+        status: err.response?.status,
+        data: err.response?.data,
+      });
+
+      if (err.response?.status !== 401) {
+        throw err;
+      }
 
       const wwwAuth = err.response.headers['www-authenticate'] || '';
       const realm = wwwAuth.match(/realm="([^"]+)"/)?.[1] ?? '';
@@ -231,12 +243,30 @@ export class HikvisionService {
 
       const authHeader = `Digest username="${this.gatewayUser}", realm="${realm}", nonce="${nonce}", uri="${uri}", qop=${qop}, nc=${nc}, cnonce="${cnonce}", response="${response}"`;
 
-      const http2 = axios.create({ baseURL: this.baseUrl, timeout: 15_000 });
-      return http2.post(
-        `/ISAPI/Intelligent/FDLib/FaceDataRecord?format=json&devIndex=${devIndex}`,
-        form,
-        { headers: { ...form.getHeaders(), Authorization: authHeader } },
-      );
+      const http2 = axios.create({
+        baseURL: this.baseUrl,
+        timeout: 15_000,
+      });
+      try {
+        return await http2.post(
+          `/ISAPI/Intelligent/FDLib/FaceDataRecord?format=json&devIndex=${devIndex}`,
+          form,
+          {
+            headers: {
+              ...form.getHeaders(),
+              Authorization: authHeader,
+            },
+          },
+        );
+      } catch (err: any) {
+        this.logger.error('Face upload failed (Digest retry)', {
+          message: err.message,
+          code: err.code,
+          status: err.response?.status,
+          data: err.response?.data,
+        });
+        throw err;
+      }
     }
   }
 
