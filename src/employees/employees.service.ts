@@ -384,12 +384,10 @@ export class EmployeesService {
 
       for (const terminal of terminals) {
         try {
-          await this.hikvision
-            .addPerson(terminal.devIndex, {
-              employeeNo,
-              name: updated.fullName,
-            })
-            .catch(() => {});
+          await this.hikvision.addPerson(terminal.devIndex, {
+            employeeNo,
+            name: updated.fullName,
+          });
 
           await this.hikvision.addFacePicture(
             terminal.devIndex,
