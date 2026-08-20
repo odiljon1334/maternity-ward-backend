@@ -146,7 +146,7 @@ export class HikvisionService {
   }
 
   // Terminal paroli bilan xodimni o'chirish
-  async deletePersonWithClient(
+  public async deletePersonWithClient(
     client: AxiosInstance,
     devIndex: string,
     employeeNo: string,
@@ -169,8 +169,9 @@ export class HikvisionService {
       endTime?: string;
     },
   ) {
-    const res = await this.http.post(
-      `/ISAPI/AccessControl/UserInfo/Record?format=json&devIndex=${devIndex}`,
+    const res = await this.digestRequest(
+      'POST',
+      `${this.baseUrl}/ISAPI/AccessControl/UserInfo/Record?format=json&devIndex=${devIndex}`,
       {
         UserInfo: [
           {
@@ -192,7 +193,86 @@ export class HikvisionService {
     return result;
   }
 
-  private async addPersonWithClient(
+  async deletePerson(devIndex: string, employeeNo: string) {
+    const res = await this.digestRequest(
+      'PUT',
+      `${this.baseUrl}/ISAPI/AccessControl/UserInfo/Delete?format=json&devIndex=${devIndex}`,
+      { UserInfoDelCond: { EmployeeNoList: [{ employeeNo }] } },
+    );
+    this.logger.log(`Person deleted: ${employeeNo}`);
+    return res.data;
+  }
+
+  async addFacePicture(
+    devIndex: string,
+    employeeNo: string,
+    imageBuffer: Buffer,
+    mimeType = 'image/jpeg',
+  ) {
+    const form = new FormData();
+    form.append(
+      'FaceDataRecord',
+      JSON.stringify({
+        FaceInfo: { employeeNo, faceLibType: 'blackFD' },
+      }),
+      { contentType: 'application/json' },
+    );
+    form.append('FaceImage', imageBuffer, {
+      filename: `${employeeNo}.jpg`,
+      contentType: mimeType,
+    });
+
+    // Face uchun multipart — maxsus digest request
+    try {
+      return await this.http.post(
+        `/ISAPI/Intelligent/FDLib/FaceDataRecord?format=json&devIndex=${devIndex}`,
+        form,
+        { headers: form.getHeaders() },
+      );
+    } catch (err: any) {
+      if (err.response?.status !== 401) throw err;
+
+      const wwwAuth = err.response.headers['www-authenticate'] || '';
+      const realm = wwwAuth.match(/realm="([^"]+)"/)?.[1] ?? '';
+      const nonce = wwwAuth.match(/nonce="([^"]+)"/)?.[1] ?? '';
+      const qop = (wwwAuth.match(/qop="([^"]+)"/)?.[1] ?? '')
+        .split(',')[0]
+        .trim();
+      const uri = `/ISAPI/Intelligent/FDLib/FaceDataRecord?format=json&devIndex=${devIndex}`;
+      const nc = '00000001';
+      const cnonce = crypto.randomBytes(8).toString('hex');
+
+      const ha1 = crypto
+        .createHash('md5')
+        .update(`${this.gatewayUser}:${realm}:${this.gatewayPass}`)
+        .digest('hex');
+      const ha2 = crypto.createHash('md5').update(`POST:${uri}`).digest('hex');
+      const response = crypto
+        .createHash('md5')
+        .update(`${ha1}:${nonce}:${nc}:${cnonce}:${qop}:${ha2}`)
+        .digest('hex');
+
+      const authHeader = `Digest username="${this.gatewayUser}", realm="${realm}", nonce="${nonce}", uri="${uri}", qop=${qop}, nc=${nc}, cnonce="${cnonce}", response="${response}"`;
+
+      const http2 = axios.create({ baseURL: this.baseUrl, timeout: 15_000 });
+      return http2.post(
+        `/ISAPI/Intelligent/FDLib/FaceDataRecord?format=json&devIndex=${devIndex}`,
+        form,
+        { headers: { ...form.getHeaders(), Authorization: authHeader } },
+      );
+    }
+  }
+
+  async deleteFacePicture(devIndex: string, employeeNo: string) {
+    const res = await this.digestRequest(
+      'PUT',
+      `${this.baseUrl}/ISAPI/Intelligent/FDLib/FaceDataRecord/Delete?format=json&devIndex=${devIndex}`,
+      { FaceInfoDelCond: { EmployeeNoList: [{ employeeNo }] } },
+    );
+    return res.data;
+  }
+
+  public async addPersonWithClient(
     client: AxiosInstance,
     devIndex: string,
     data: any,
@@ -219,7 +299,7 @@ export class HikvisionService {
     return result;
   }
 
-  private async addFacePictureWithClient(
+  public async addFacePictureWithClient(
     client: AxiosInstance,
     devIndex: string,
     employeeNo: string,
@@ -241,52 +321,6 @@ export class HikvisionService {
       `/ISAPI/Intelligent/FDLib/FaceDataRecord?format=json&devIndex=${devIndex}`,
       form,
       { headers: form.getHeaders() },
-    );
-    return res.data;
-  }
-
-  async deletePerson(devIndex: string, employeeNo: string) {
-    const res = await this.http.put(
-      `/ISAPI/AccessControl/UserInfo/Delete?format=json&devIndex=${devIndex}`,
-      { UserInfoDelCond: { EmployeeNoList: [{ employeeNo }] } },
-    );
-    this.logger.log(`Person deleted: ${employeeNo}`);
-    return res.data;
-  }
-
-  // ─── Face ─────────────────────────────────────────────────────────────────
-
-  async addFacePicture(
-    devIndex: string,
-    employeeNo: string,
-    imageBuffer: Buffer,
-    mimeType = 'image/jpeg',
-  ) {
-    const form = new FormData();
-    form.append(
-      'FaceDataRecord',
-      JSON.stringify({
-        FaceInfo: { employeeNo, faceLibType: 'blackFD' },
-      }),
-      { contentType: 'application/json' },
-    );
-    form.append('FaceImage', imageBuffer, {
-      filename: `${employeeNo}.jpg`,
-      contentType: mimeType,
-    });
-    const res = await this.http.post(
-      `/ISAPI/Intelligent/FDLib/FaceDataRecord?format=json&devIndex=${devIndex}`,
-      form,
-      { headers: form.getHeaders() },
-    );
-    this.logger.log(`Face added: ${employeeNo}`);
-    return res.data;
-  }
-
-  async deleteFacePicture(devIndex: string, employeeNo: string) {
-    const res = await this.http.put(
-      `/ISAPI/Intelligent/FDLib/FaceDataRecord/Delete?format=json&devIndex=${devIndex}`,
-      { FaceInfoDelCond: { EmployeeNoList: [{ employeeNo }] } },
     );
     return res.data;
   }

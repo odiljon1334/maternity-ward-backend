@@ -406,6 +406,9 @@ export class EmployeesService {
           this.logger.log(
             `Face synced to terminal ${terminal.name}: ${employeeNo}`,
           );
+          this.logger.log(
+            `Terminal ${terminal.name} uchun ishlatilayotgan parol: ${terminal.password || 'ENV dan olingan'}`,
+          );
         } catch (err: any) {
           this.logger.error(
             `Terminal sync failed [${terminal.name}]: ${err.message}`,
