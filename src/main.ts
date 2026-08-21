@@ -6,7 +6,7 @@ if (!global.crypto) {
 
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
-import { WsAdapter } from '@nestjs/platform-ws';
+import { IoAdapter } from '@nestjs/platform-socket.io';
 import { AppModule } from './app.module';
 import { AllExceptionsFilter } from './common/filters/http-exception.filter';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
@@ -22,6 +22,7 @@ async function bootstrap() {
     logger: ['error', 'warn', 'log'],
     bodyParser: false,
   });
+  app.useWebSocketAdapter(new IoAdapter(app));
 
   // Security headers
   app.use(
@@ -30,9 +31,6 @@ async function bootstrap() {
       contentSecurityPolicy: false, // API server uchun kerak emas
     }),
   );
-
-  // WebSocket adapter (same port as HTTP)
-  app.useWebSocketAdapter(new WsAdapter(app));
 
   // CORS — production da FRONTEND_URL majburiy
   const allowedOrigins = process.env.FRONTEND_URL

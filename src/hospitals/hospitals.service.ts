@@ -88,6 +88,9 @@ export class HospitalsService {
       address?: string;
       phone?: string;
       isActive?: boolean;
+      gpsLat?: number;
+      gpsLng?: number;
+      gpsRadius?: number;
     },
   ) {
     await this.findOne(id);

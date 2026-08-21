@@ -210,6 +210,7 @@ model User {
 
   employee          Employee?
   pushSubscriptions PushSubscription[]
+  liveLocations LiveLocation[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -422,6 +423,8 @@ model AttendanceRecord {
   gpsLat         Float?                          // Check-in paytidagi koordinata
   gpsLng         Float?
   gpsAccuracy    Float?                          // GPS aniqligi (metr)
+  gpsVerified  Boolean @default(false)
+  faceVerified Boolean @default(false)
 
   // Check-out selfie + GPS (mobil ilovadan)
   checkOutSelfieUrl  String?
@@ -722,4 +725,19 @@ model HikTerminal {
   hospital  Hospital @relation(fields: [hospitalId], references: [id])
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
+}
+
+model LiveLocation {
+  id        String   @id @default(uuid())
+  userId    String
+  latitude  Float
+  longitude Float
+  accuracy  Float
+  speed     Float?
+  battery   Int?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt])
 }

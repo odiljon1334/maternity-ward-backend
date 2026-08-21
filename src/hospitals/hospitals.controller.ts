@@ -60,6 +60,9 @@ export class HospitalsController {
       address?: string;
       phone?: string;
       isActive?: boolean;
+      gpsLat?: number;
+      gpsLng?: number;
+      gpsRadius?: number;
     },
   ) {
     return this.svc.update(id, body);

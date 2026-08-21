@@ -114,7 +114,7 @@ export class PushService {
     payload: PushPayload,
   ) {
     try {
-      await webpush.sendNotification(
+      const result = await webpush.sendNotification(
         {
           endpoint: sub.endpoint,
           keys: { p256dh: sub.p256dh, auth: sub.auth },
@@ -128,19 +128,15 @@ export class PushService {
           tag: payload.tag,
           data: payload.data,
         }),
-        { TTL: 60 * 60 * 24 }, // 24 soat saqlanadi
+        { TTL: 60 * 60 * 24 },
       );
+      this.logger.log(`Push sent successfully: ${result.statusCode}`);
     } catch (err: any) {
-      // 410 Gone yoki 404 = subscription o'chirilgan → DBdan tozalaymiz
+      this.logger.error(`Push failed: ${err?.statusCode} — ${err?.body}`);
       if (err?.statusCode === 410 || err?.statusCode === 404) {
         await this.prisma.pushSubscription
           .delete({ where: { endpoint: sub.endpoint } })
           .catch(() => null);
-        this.logger.debug(
-          `Stale push sub removed: ${sub.endpoint.slice(0, 40)}…`,
-        );
-      } else {
-        this.logger.error(`Push send failed: ${err?.message}`);
       }
     }
   }

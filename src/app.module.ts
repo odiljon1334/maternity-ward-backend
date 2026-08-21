@@ -27,6 +27,7 @@ import { LeaveModule } from './leave/leave.module';
 import { PushModule } from './push/push.module';
 import { BirthdayModule } from './birthday/birthday.module';
 import { HikvisionModule } from './hikvision/hikvision.module';
+import { LocationModule } from './location/location.module';
 
 @Module({
   imports: [
@@ -69,6 +70,7 @@ import { HikvisionModule } from './hikvision/hikvision.module';
     LeaveModule,
     PushModule,
     BirthdayModule,
+    LocationModule,
   ],
   providers: [],
 })
