@@ -6,6 +6,7 @@ import { SchedulesService } from '../schedules/schedules.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { DateUtil } from '../common/utils/date.util';
 import { LeaveService } from '../leave/leave.service';
+import { PushService } from 'src/push/push.service';
 import dayjs from 'dayjs';
 import timezone from 'dayjs/plugin/timezone';
 import utc from 'dayjs/plugin/utc';
@@ -23,6 +24,7 @@ export class CronService {
     private readonly schedulesService: SchedulesService,
     private readonly prisma: PrismaService,
     private readonly leaveService: LeaveService,
+    private readonly pushService: PushService,
   ) {}
 
   /**
@@ -248,6 +250,60 @@ export class CronService {
       }
     } catch (err) {
       this.logger.error('morningReport failed:', err);
+    }
+  }
+
+  /**
+   * Har 5 daqiqada — ish soati tugagan lekin check-out qilmagan xodimlarni tekshiradi
+   */
+  @Cron('*/5 * * * *', { timeZone: TZ })
+  async checkoutReminderCron() {
+    try {
+      const now = dayjs.tz(new Date(), TZ);
+      const todayStart = now.startOf('day').toDate();
+
+      // Check-in qilgan lekin check-out qilmagan va ish vaqti tugagan xodimlar
+      const records = await this.prisma.attendanceRecord.findMany({
+        where: {
+          workDate: { gte: todayStart },
+          checkIn: { not: null },
+          checkOut: null,
+          expectedCheckOut: { lte: now.toDate() },
+          status: { not: 'ABSENT' },
+        },
+        include: {
+          employee: {
+            include: {
+              user: true,
+            },
+          },
+        },
+      });
+
+      for (const record of records) {
+        const userId = record.employee.user?.id;
+        if (!userId) continue;
+
+        // Faqat bir marta yuborish uchun — 5 dan 10 daqiqa oralig'ida
+        const minutesOverdue = now.diff(
+          dayjs(record.expectedCheckOut),
+          'minute',
+        );
+        if (minutesOverdue < 5 || minutesOverdue > 10) continue;
+
+        await this.pushService.sendToUser(userId, {
+          title: 'Check-out eslatmasi ⏰',
+          body: 'Ish vaqtingiz tugadi. Iltimos, check-out qilishni unutmang!',
+          url: '/dashboard/my-checkin',
+          tag: `checkout-reminder-${record.id}`,
+        });
+
+        this.logger.log(
+          `Checkout reminder sent to: ${record.employee.fullName}`,
+        );
+      }
+    } catch (err) {
+      this.logger.error('checkoutReminderCron failed:', err);
     }
   }
 
