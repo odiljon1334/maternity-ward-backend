@@ -2,6 +2,7 @@ import {
   Injectable,
   ConflictException,
   NotFoundException,
+  BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateEmployeeDto } from './dto/create-employee.dto';
@@ -252,6 +253,19 @@ export class EmployeesService {
 
     return this.prisma.$transaction(async (tx) => {
       let userId: string | undefined;
+
+      if (username) {
+        // Avval bunday username borligini tekshiramiz
+        const existingUser = await tx.user.findUnique({
+          where: { username },
+        });
+
+        if (existingUser) {
+          throw new BadRequestException(
+            'Bu username band, iltimos boshqasini kiriting.',
+          );
+        }
+      }
 
       if (username && password) {
         const hash = await bcrypt.hash(password, 12);
