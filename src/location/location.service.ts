@@ -79,6 +79,20 @@ export class LocationService {
             hospital: {
               select: { gpsLat: true, gpsLng: true },
             },
+            attendances: {
+              where: {
+                workDate: {
+                  gte: new Date(new Date().setHours(0, 0, 0, 0)),
+                },
+              },
+              orderBy: { workDate: 'desc' },
+              take: 1,
+              select: {
+                checkIn: true,
+                checkOut: true,
+                status: true,
+              },
+            },
           },
         },
         liveLocations: {
@@ -109,6 +123,9 @@ export class LocationService {
           name: u.employee?.fullName,
           photo: u.employee?.photoUrl,
           distance,
+          checkIn: u.employee?.attendances?.[0]?.checkIn ?? null,
+          checkOut: u.employee?.attendances?.[0]?.checkOut ?? null,
+          attendanceStatus: u.employee?.attendances?.[0]?.status ?? null,
           ...loc,
         };
       });
