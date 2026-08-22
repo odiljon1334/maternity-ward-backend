@@ -66,68 +66,50 @@ export class LocationService {
         hospitalId,
         role: UserRole.EMPLOYEE,
         status: UserStatus.ACTIVE,
-        employee: {
-          isNot: null,
-        },
-        liveLocations: {
-          some: {},
-        },
       },
-
       select: {
         id: true,
-
         employee: {
           select: {
             fullName: true,
             photoUrl: true,
-
-            attendances: {
-              orderBy: {
-                workDate: 'desc',
-              },
-              take: 1,
-              select: {
-                checkIn: true,
-                checkOut: true,
-                status: true,
-              },
+            position: {
+              select: { gpsLat: true, gpsLng: true },
+            },
+            hospital: {
+              select: { gpsLat: true, gpsLng: true },
             },
           },
         },
-
         liveLocations: {
-          orderBy: {
-            createdAt: 'desc',
-          },
+          orderBy: { createdAt: 'desc' },
           take: 1,
         },
       },
     });
 
     return employees
-      .filter(
-        (u) => u.employee && u.employee.fullName && u.liveLocations.length > 0,
-      )
+      .filter((u) => u.liveLocations.length > 0)
       .map((u) => {
-        const location = u.liveLocations[0];
-        const attendance = u.employee?.attendances[0];
+        const loc = u.liveLocations[0];
+        const geoLat =
+          u.employee?.position?.gpsLat ?? u.employee?.hospital?.gpsLat ?? null;
+        const geoLng =
+          u.employee?.position?.gpsLng ?? u.employee?.hospital?.gpsLng ?? null;
+
+        let distance: number | null = null;
+        if (geoLat && geoLng) {
+          distance = Math.round(
+            this.getDistance(geoLat, geoLng, loc.latitude, loc.longitude),
+          );
+        }
 
         return {
           userId: u.id,
-          name: u.employee?.fullName ?? null,
-          photo: u.employee?.photoUrl ?? null,
-
-          checkIn: attendance?.checkIn ?? null,
-          checkOut: attendance?.checkOut ?? null,
-          attendanceStatus: attendance?.status ?? null,
-
-          latitude: location.latitude,
-          longitude: location.longitude,
-          accuracy: location.accuracy,
-          speed: location.speed,
-          battery: location.battery,
-          timestamp: location.createdAt,
+          name: u.employee?.fullName,
+          photo: u.employee?.photoUrl,
+          distance,
+          ...loc,
         };
       });
   }

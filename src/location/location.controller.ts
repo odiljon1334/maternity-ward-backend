@@ -18,7 +18,6 @@ export class LocationController {
     private readonly prisma: PrismaService,
   ) {}
 
-  // EMPLOYEE — o'z locationini yuboradi
   @Post('live')
   @Roles(UserRole.EMPLOYEE)
   async updateLiveLocation(
@@ -34,10 +33,38 @@ export class LocationController {
           select: {
             fullName: true,
             photoUrl: true,
+            position: {
+              select: { gpsLat: true, gpsLng: true },
+            },
+            hospital: {
+              select: { gpsLat: true, gpsLng: true },
+            },
           },
         },
       },
     });
+
+    // Position GPS ustuvor, yo'q bo'lsa Hospital GPS
+    const geoLat =
+      employee?.employee?.position?.gpsLat ??
+      employee?.employee?.hospital?.gpsLat ??
+      null;
+    const geoLng =
+      employee?.employee?.position?.gpsLng ??
+      employee?.employee?.hospital?.gpsLng ??
+      null;
+
+    let distance: number | null = null;
+    if (geoLat && geoLng) {
+      distance = Math.round(
+        this.locationService.getDistance(
+          geoLat,
+          geoLng,
+          dto.latitude,
+          dto.longitude,
+        ),
+      );
+    }
 
     this.locationGateway.broadcastLocation(user.hospitalId, {
       userId: user.sub,
@@ -48,6 +75,7 @@ export class LocationController {
       accuracy: dto.accuracy,
       speed: dto.speed,
       battery: dto.battery,
+      distance,
       timestamp: saved.createdAt,
     });
 
