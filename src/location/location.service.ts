@@ -61,24 +61,31 @@ export class LocationService {
   }
 
   async getLatestLocations(hospitalId: string) {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
     const employees = await this.prisma.user.findMany({
       where: {
         hospitalId,
         role: UserRole.EMPLOYEE,
         status: UserStatus.ACTIVE,
+        employee: {
+          isNot: null,
+        },
+        liveLocations: {
+          some: {},
+        },
       },
+
       select: {
         id: true,
+
         employee: {
           select: {
             fullName: true,
             photoUrl: true,
+
             attendances: {
-              where: { workDate: { gte: today } },
-              orderBy: { workDate: 'desc' },
+              orderBy: {
+                workDate: 'desc',
+              },
               take: 1,
               select: {
                 checkIn: true,
@@ -88,23 +95,40 @@ export class LocationService {
             },
           },
         },
+
         liveLocations: {
-          orderBy: { createdAt: 'desc' },
+          orderBy: {
+            createdAt: 'desc',
+          },
           take: 1,
         },
       },
     });
 
     return employees
-      .filter((u) => u.liveLocations.length > 0)
-      .map((u) => ({
-        userId: u.id,
-        name: u.employee?.fullName,
-        photo: u.employee?.photoUrl,
-        checkIn: u.employee?.attendances[0]?.checkIn ?? null,
-        checkOut: u.employee?.attendances[0]?.checkOut ?? null,
-        attendanceStatus: u.employee?.attendances[0]?.status ?? null,
-        ...u.liveLocations[0],
-      }));
+      .filter(
+        (u) => u.employee && u.employee.fullName && u.liveLocations.length > 0,
+      )
+      .map((u) => {
+        const location = u.liveLocations[0];
+        const attendance = u.employee?.attendances[0];
+
+        return {
+          userId: u.id,
+          name: u.employee?.fullName ?? null,
+          photo: u.employee?.photoUrl ?? null,
+
+          checkIn: attendance?.checkIn ?? null,
+          checkOut: attendance?.checkOut ?? null,
+          attendanceStatus: attendance?.status ?? null,
+
+          latitude: location.latitude,
+          longitude: location.longitude,
+          accuracy: location.accuracy,
+          speed: location.speed,
+          battery: location.battery,
+          timestamp: location.createdAt,
+        };
+      });
   }
 }

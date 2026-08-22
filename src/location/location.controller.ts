@@ -73,7 +73,7 @@ export class LocationController {
       user.role === UserRole.SUPER_ADMIN ||
       user.role === UserRole.MINISTRY ||
       user.role === UserRole.ASSISTANT_ADMIN
-        ? queryHospitalId // ← query param majburiy
+        ? queryHospitalId
         : user.hospitalId;
 
     if (!targetHospitalId) {
@@ -83,35 +83,46 @@ export class LocationController {
     return this.locationService.getLatestLocations(targetHospitalId);
   }
 
-  // Geofence tekshirish (check-in paytida mobile chaqiradi)
   @Post('check-geofence')
   @Roles(UserRole.EMPLOYEE)
   async checkGeofence(
     @CurrentUser() user: { sub: string; hospitalId: string },
     @Body() dto: { latitude: number; longitude: number },
   ) {
-    const hospital = await this.prisma.hospital.findUnique({
-      where: { id: user.hospitalId },
-      select: { gpsLat: true, gpsLng: true, gpsRadius: true },
+    // Avval Position GPS, yo'q bo'lsa Hospital GPS
+    const employee = await this.prisma.user.findUnique({
+      where: { id: user.sub },
+      include: {
+        employee: {
+          include: { position: true, hospital: true },
+        },
+      },
     });
 
-    if (!hospital?.gpsLat || !hospital?.gpsLng) {
+    const position = employee?.employee?.position;
+    const hospital = employee?.employee?.hospital;
+
+    const geoLat = position?.gpsLat ?? hospital?.gpsLat ?? null;
+    const geoLng = position?.gpsLng ?? hospital?.gpsLng ?? null;
+    const geoRadius = position?.gpsRadius ?? hospital?.gpsRadius ?? 200;
+
+    if (!geoLat || !geoLng) {
       return { inside: true, distance: 0, message: 'GPS sozlanmagan' };
     }
 
     const distance = this.locationService.getDistance(
-      hospital.gpsLat,
-      hospital.gpsLng,
+      geoLat,
+      geoLng,
       dto.latitude,
       dto.longitude,
     );
 
-    const inside = distance <= (hospital.gpsRadius ?? 200);
+    const inside = distance <= geoRadius;
 
     return {
       inside,
       distance: Math.round(distance),
-      radius: hospital.gpsRadius ?? 200,
+      radius: geoRadius,
     };
   }
 }

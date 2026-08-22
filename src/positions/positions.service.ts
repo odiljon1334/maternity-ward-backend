@@ -38,6 +38,42 @@ export class PositionsService {
     return this.prisma.position.update({ where: { id }, data });
   }
 
+  async updateGps(
+    id: string,
+    hospitalId: string | null,
+    data: {
+      gpsLat?: number | null;
+      gpsLng?: number | null;
+      gpsRadius?: number | null;
+    },
+  ) {
+    await this.findOne(id, hospitalId);
+    return this.prisma.position.update({
+      where: { id },
+      data: {
+        gpsLat: data.gpsLat,
+        gpsLng: data.gpsLng,
+        gpsRadius: data.gpsRadius ?? 100,
+      },
+      select: {
+        id: true,
+        name: true,
+        gpsLat: true,
+        gpsLng: true,
+        gpsRadius: true,
+      },
+    });
+  }
+
+  async resetGps(id: string, hospitalId: string | null) {
+    await this.findOne(id, hospitalId);
+    return this.prisma.position.update({
+      where: { id },
+      data: { gpsLat: null, gpsLng: null },
+      select: { id: true, name: true, gpsLat: true, gpsLng: true },
+    });
+  }
+
   async remove(id: string, hospitalId: string | null) {
     await this.findOne(id, hospitalId);
     return this.prisma.position.delete({ where: { id } });

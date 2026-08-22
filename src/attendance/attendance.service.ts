@@ -999,6 +999,42 @@ export class AttendanceService {
     return { saved: true, alreadySet: false };
   }
 
+  async setPositionGps(
+    userId: string,
+    lat: number,
+    lng: number,
+  ): Promise<{ saved: boolean; alreadySet: boolean }> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: {
+        employee: {
+          include: { position: true },
+        },
+      },
+    });
+
+    if (!user?.employee) throw new NotFoundException('Xodim profili topilmadi');
+
+    const position = user.employee.position;
+    if (!position) throw new NotFoundException('Lavozim topilmadi');
+
+    // Faqat position GPS null bo'lsa saqlaydi
+    if (position.gpsLat != null && position.gpsLng != null) {
+      return { saved: false, alreadySet: true };
+    }
+
+    await this.prisma.position.update({
+      where: { id: position.id },
+      data: { gpsLat: lat, gpsLng: lng },
+    });
+
+    this.logger.log(
+      `Position GPS set: ${position.name} → (${lat}, ${lng}) by ${user.username}`,
+    );
+
+    return { saved: true, alreadySet: false };
+  }
+
   /**
    * Mobil ilovadan GPS + selfie bilan check-in / check-out.
    * Schema yangi maydonlari: checkInSource='MOBILE', selfieUrl, gpsLat, gpsLng, gpsAccuracy.
@@ -1028,25 +1064,26 @@ export class AttendanceService {
       );
     }
 
-    // 3. Geofencing — kasalxona GPS o'rnatilgan bo'lsa masofa tekshiruvi
+    // 3. Geofencing — avval Position GPS, yo'q bo'lsa Hospital GPS
+    const position = employee.position as any;
     const hospital = employee.hospital as any;
+
+    // Position GPS ustuvor (maktab hamshirasi)
+    const geoLat = position?.gpsLat ?? hospital?.gpsLat;
+    const geoLng = position?.gpsLng ?? hospital?.gpsLng;
+    const geoRadius = position?.gpsRadius ?? hospital?.gpsRadius ?? 200;
+
     if (
-      hospital?.gpsLat != null &&
-      hospital?.gpsLng != null &&
+      geoLat != null &&
+      geoLng != null &&
       dto.gpsLat != null &&
       dto.gpsLng != null
     ) {
-      const radius = hospital.gpsRadius ?? 200; // metr
-      const distance = haversineMeters(
-        dto.gpsLat,
-        dto.gpsLng,
-        hospital.gpsLat,
-        hospital.gpsLng,
-      );
-      if (distance > radius) {
+      const distance = haversineMeters(dto.gpsLat, dto.gpsLng, geoLat, geoLng);
+      if (distance > geoRadius) {
         const distStr = formatDistance(Math.round(distance));
         throw new BadRequestException(
-          `Siz ish joyidan ${distStr} uzoqdasiz (ruxsat: ${radius}m). Ish joyida bo'lgan holda check-in qiling.`,
+          `Siz ish joyidan ${distStr} uzoqdasiz (ruxsat: ${geoRadius}m). Ish joyida bo'lgan holda check-in qiling.`,
         );
       }
       this.logger.log(

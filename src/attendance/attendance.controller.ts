@@ -112,6 +112,20 @@ export class AttendanceController {
     );
   }
 
+  @Post('set-position-gps')
+  @Roles(UserRole.EMPLOYEE)
+  setPositionGps(
+    @CurrentUser('sub') userId: string,
+    @Body('lat') lat: string,
+    @Body('lng') lng: string,
+  ) {
+    return this.service.setPositionGps(
+      userId,
+      parseFloat(lat),
+      parseFloat(lng),
+    );
+  }
+
   @Post('manual-checkin')
   @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
   manualCheckIn(

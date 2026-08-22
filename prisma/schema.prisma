@@ -270,6 +270,11 @@ model Position {
 
   employees  Employee[]
 
+  // Maktab hamshirasi uchun GPS geofence (ixtiyoriy)
+  gpsLat    Float?
+  gpsLng    Float?
+  gpsRadius Int?   @default(100)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

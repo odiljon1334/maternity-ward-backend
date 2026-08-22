@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  Patch,
   Post,
   Put,
   Query,
@@ -74,6 +75,39 @@ export class PositionsController {
     return this.service.update(
       id,
       body,
+      resolveHospitalId(hospitalId, targetHospitalId),
+    );
+  }
+
+  @Patch(':id/gps')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  updateGps(
+    @Param('id') id: string,
+    @Body()
+    body: {
+      gpsLat?: number | null;
+      gpsLng?: number | null;
+      gpsRadius?: number | null;
+    },
+    @CurrentUser('hospitalId') hospitalId: string | null,
+    @Query('targetHospitalId') targetHospitalId?: string,
+  ) {
+    return this.service.updateGps(
+      id,
+      resolveHospitalId(hospitalId, targetHospitalId),
+      body,
+    );
+  }
+
+  @Patch(':id/gps-reset')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  resetGps(
+    @Param('id') id: string,
+    @CurrentUser('hospitalId') hospitalId: string | null,
+    @Query('targetHospitalId') targetHospitalId?: string,
+  ) {
+    return this.service.resetGps(
+      id,
       resolveHospitalId(hospitalId, targetHospitalId),
     );
   }
