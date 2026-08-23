@@ -24,6 +24,7 @@ import {
   WEEKLY_LATE_THRESHOLD_MIN,
 } from '../common/constants';
 import { SelfCheckInDto } from './dto/self-check-in.dto';
+import { LocationGateway } from '../location/location.gateway';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -74,6 +75,7 @@ export class AttendanceService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly telegram: TelegramService,
+    private readonly locationGateway: LocationGateway,
   ) {}
 
   // ──────────────────────────────────────────────────────────────────────────────
@@ -345,6 +347,14 @@ export class AttendanceService {
         status: newStatus,
       },
     });
+
+    // Xodimda ilova akkaunti (userId) bo'lsa — live xaritadan darhol olib tashlash
+    if (employee.userId) {
+      this.locationGateway.broadcastLocationRemoved(
+        employee.hospitalId,
+        employee.userId,
+      );
+    }
 
     await this.updateWeeklyStats(
       employee.id,
@@ -1274,6 +1284,12 @@ export class AttendanceService {
           checkOutGpsAccuracy: dto.gpsAccuracy,
         },
       });
+
+      // Live xaritadan darhol olib tashlash
+      this.locationGateway.broadcastLocationRemoved(
+        employee.hospitalId,
+        userId,
+      );
 
       await this.updateWeeklyStats(
         employee.id,

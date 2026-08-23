@@ -112,7 +112,12 @@ export class LeaveService {
       );
 
     this.push
-      .notifyLeaveCreated(employee.hospitalId, employee.fullName, dto.type)
+      .notifyLeaveCreated(
+        employee.hospitalId,
+        employee.fullName,
+        dto.type,
+        leave.id,
+      )
       .catch((e) =>
         this.logger.warn(`Push leave created failed: ${e?.message ?? e}`),
       );
@@ -260,6 +265,7 @@ export class LeaveService {
           updated.employee.userId,
           dto.decision,
           updated.type,
+          updated.id,
         )
         .catch((e) =>
           this.logger.warn(`Push leave reviewed failed: ${e?.message ?? e}`),

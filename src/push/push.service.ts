@@ -170,6 +170,7 @@ export class PushService {
     hospitalId: string,
     employeeName: string,
     leaveType: string,
+    leaveId: string,
   ) {
     const LEAVE_LABELS: Record<string, string> = {
       VACATION: "Ta'til",
@@ -180,10 +181,11 @@ export class PushService {
     };
     const title = "Yangi ta'til so'rovi 📋";
     const body = `${employeeName} — ${LEAVE_LABELS[leaveType] ?? leaveType} so'rov yubordi`;
+    const url = `/dashboard/leaves?highlight=${leaveId}`;
 
     const recipientIds = await this.sendToHospital(
       hospitalId,
-      { title, body, url: '/dashboard/leaves', tag: 'leave-new' },
+      { title, body, url, tag: 'leave-new' },
       ['DIRECTOR', 'ADMIN', 'SUPER_ADMIN'],
     );
 
@@ -192,7 +194,7 @@ export class PushService {
         type: NotificationType.ALERT,
         title,
         message: body,
-        metadata: { kind: 'leave-new', hospitalId },
+        metadata: { kind: 'leave-new', hospitalId, leaveId },
       })
       .catch((e) =>
         this.logger.warn(`Notification persist failed: ${e?.message ?? e}`),
@@ -204,6 +206,7 @@ export class PushService {
     userId: string,
     decision: 'APPROVED' | 'REJECTED',
     leaveType: string,
+    leaveId: string,
   ) {
     const LEAVE_LABELS: Record<string, string> = {
       VACATION: "Ta'til",
@@ -221,11 +224,12 @@ export class PushService {
       decision === 'APPROVED'
         ? `${label} so'rovingiz tasdiqlandi`
         : `${label} so'rovingiz rad etildi`;
+    const url = `/dashboard/my-leaves?highlight=${leaveId}`;
 
     await this.sendToUser(userId, {
       title,
       body,
-      url: '/dashboard/my-leaves',
+      url,
       tag: 'leave-reviewed',
     });
 
@@ -235,7 +239,7 @@ export class PushService {
         title,
         message: body,
         userId,
-        metadata: { kind: 'leave-reviewed', decision },
+        metadata: { kind: 'leave-reviewed', decision, leaveId },
       })
       .catch((e) =>
         this.logger.warn(`Notification persist failed: ${e?.message ?? e}`),

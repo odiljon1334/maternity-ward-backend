@@ -71,4 +71,12 @@ export class LocationGateway
     this.server.to(`hospital:${hospitalId}`).emit('location:update', data);
     this.server.to('super-admins').emit('location:update', data);
   }
+
+  /** Xodim check-out qilganda live xaritadan darhol olib tashlash uchun signal */
+  broadcastLocationRemoved(hospitalId: string, userId: string) {
+    this.server
+      .to(`hospital:${hospitalId}`)
+      .emit('location:remove', { userId });
+    this.server.to('super-admins').emit('location:remove', { userId });
+  }
 }

@@ -14,6 +14,6 @@ import { PrismaModule } from '../prisma/prisma.module';
   ],
   controllers: [LocationController],
   providers: [LocationService, LocationGateway],
-  exports: [LocationService],
+  exports: [LocationService, LocationGateway],
 })
 export class LocationModule {}

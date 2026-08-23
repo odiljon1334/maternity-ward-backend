@@ -103,7 +103,14 @@ export class LocationService {
     });
 
     return employees
-      .filter((u) => u.liveLocations.length > 0)
+      .filter((u) => {
+        if (u.liveLocations.length === 0) return false;
+        // Faqat hozir smenada bo'lgan xodimlar (check-in qilgan, check-out qilmagan)
+        // "live" sifatida ko'rsatiladi — aks holda check-out qilingandan keyin ham
+        // eski GPS nuqtasi live xaritada qolib ketaveradi
+        const today = u.employee?.attendances?.[0];
+        return !!today?.checkIn && !today?.checkOut;
+      })
       .map((u) => {
         const loc = u.liveLocations[0];
         const geoLat =
