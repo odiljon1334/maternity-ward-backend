@@ -211,6 +211,7 @@ model User {
   employee          Employee?
   pushSubscriptions PushSubscription[]
   liveLocations LiveLocation[]
+  notifications     Notification[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -597,6 +598,13 @@ model Notification {
   message    String
   isRead     Boolean          @default(false)
 
+  // Shaxsiy xabar (masalan: "ta'tilingiz tasdiqlandi") — set bo'lsa, faqat shu user ko'radi
+  userId     String?
+  user       User?            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Broadcast xabar (masalan: "yangi ta'til so'rovi") — userId=null, hospitalId=set bo'lsa,
+  // shu kasalxonadagi tegishli userlar (DIRECTOR/ADMIN va h.k.) ko'radi.
+  // userId=null va hospitalId=null bo'lsa — global (SUPER_ADMIN) broadcast.
   hospitalId String?
   hospital   Hospital?        @relation(fields: [hospitalId], references: [id], onDelete: Cascade)
 
@@ -604,6 +612,7 @@ model Notification {
   createdAt  DateTime         @default(now())
 
   @@index([hospitalId, isRead])
+  @@index([userId, isRead])
 }
 
 // ─────────────────────────────────────────────

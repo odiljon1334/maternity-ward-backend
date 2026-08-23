@@ -291,12 +291,7 @@ export class CronService {
         );
         if (minutesOverdue < 5 || minutesOverdue > 10) continue;
 
-        await this.pushService.sendToUser(userId, {
-          title: 'Check-out eslatmasi ⏰',
-          body: 'Ish vaqtingiz tugadi. Iltimos, check-out qilishni unutmang!',
-          url: '/dashboard/my-checkin',
-          tag: `checkout-reminder-${record.id}`,
-        });
+        await this.pushService.notifyCheckoutReminder(userId, record.id);
 
         this.logger.log(
           `Checkout reminder sent to: ${record.employee.fullName}`,

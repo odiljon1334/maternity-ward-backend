@@ -1,6 +1,8 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import * as webpush from 'web-push';
+import { NotificationType, UserRole } from '@prisma/client';
+import { NotificationsService } from '../notifications/notifications.service';
 
 export interface PushPayload {
   title: string;
@@ -17,7 +19,10 @@ export class PushService {
   private readonly logger = new Logger(PushService.name);
   private readonly configured: boolean;
 
-  constructor(private readonly prisma: PrismaService) {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationsService,
+  ) {
     const publicKey = process.env.VAPID_PUBLIC_KEY;
     const privateKey = process.env.VAPID_PRIVATE_KEY;
     const email = process.env.VAPID_EMAIL || 'mailto:admin@maternity-ward.uz';
@@ -77,27 +82,41 @@ export class PushService {
     const subs = await this.prisma.pushSubscription.findMany({
       where: { userId },
     });
+
+    if (subs.length === 0) {
+      this.logger.warn(`No push subscriptions for user: ${userId}`);
+      return;
+    }
+
     await Promise.allSettled(subs.map((s) => this.sendOne(s, payload)));
   }
 
-  // ── Send to all users of a hospital ───────────────────────────────
+  // ── Send to all users of a hospital, returns matched userIds ──────
   async sendToHospital(
     hospitalId: string,
     payload: PushPayload,
     roles?: string[],
-  ) {
-    if (!this.configured) return;
-
-    const where: any = { hospitalId };
-    if (roles?.length) where.role = { in: roles };
-
+  ): Promise<string[]> {
     const users = await this.prisma.user.findMany({
-      where,
+      where: roles?.length
+        ? {
+            role: { in: roles as UserRole[] },
+            OR: [{ hospitalId }, { role: UserRole.SUPER_ADMIN }],
+          }
+        : { hospitalId },
       include: { pushSubscriptions: true },
     });
 
-    const allSubs = users.flatMap((u) => u.pushSubscriptions);
-    await Promise.allSettled(allSubs.map((s) => this.sendOne(s, payload)));
+    if (this.configured) {
+      const allSubs = users.flatMap((u) => u.pushSubscriptions);
+      if (allSubs.length === 0) {
+        this.logger.warn(`No push subscriptions for hospital: ${hospitalId}`);
+      } else {
+        await Promise.allSettled(allSubs.map((s) => this.sendOne(s, payload)));
+      }
+    }
+
+    return users.map((u) => u.id);
   }
 
   // ── Send to all users (SUPER_ADMIN broadcast) ─────────────────────
@@ -142,6 +161,9 @@ export class PushService {
   }
 
   // ── Convenience methods for common events ─────────────────────────
+  // Har biri: (1) push yuboradi (agar VAPID sozlangan bo'lsa),
+  // (2) Notification jadvaliga yozadi (doim, push holatidan qat'i nazar —
+  //     shunda bell icon push o'chiq bo'lsa ham tarixni ko'rsatadi).
 
   /** Ta'til so'rovi yaratilganda direktorni xabardor qilish */
   async notifyLeaveCreated(
@@ -156,16 +178,25 @@ export class PushService {
       MATERNITY: "Tuğruq ta'tili",
       UNPAID: "Haqsiz ta'til",
     };
-    await this.sendToHospital(
+    const title = "Yangi ta'til so'rovi 📋";
+    const body = `${employeeName} — ${LEAVE_LABELS[leaveType] ?? leaveType} so'rov yubordi`;
+
+    const recipientIds = await this.sendToHospital(
       hospitalId,
-      {
-        title: "Yangi ta'til so'rovi 📋",
-        body: `${employeeName} — ${LEAVE_LABELS[leaveType] ?? leaveType} so'rov yubordi`,
-        url: '/dashboard/leaves',
-        tag: 'leave-new',
-      },
+      { title, body, url: '/dashboard/leaves', tag: 'leave-new' },
       ['DIRECTOR', 'ADMIN', 'SUPER_ADMIN'],
     );
+
+    await this.notifications
+      .createForUsers(recipientIds, {
+        type: NotificationType.ALERT,
+        title,
+        message: body,
+        metadata: { kind: 'leave-new', hospitalId },
+      })
+      .catch((e) =>
+        this.logger.warn(`Notification persist failed: ${e?.message ?? e}`),
+      );
   }
 
   /** Ta'til so'rovi tasdiqlanganda/rad etilganda xodimni xabardor qilish */
@@ -182,18 +213,33 @@ export class PushService {
       UNPAID: "Haqsiz ta'til",
     };
     const label = LEAVE_LABELS[leaveType] ?? leaveType;
+    const title =
+      decision === 'APPROVED'
+        ? "Ta'til tasdiqlandi ✅"
+        : "Ta'til rad etildi ❌";
+    const body =
+      decision === 'APPROVED'
+        ? `${label} so'rovingiz tasdiqlandi`
+        : `${label} so'rovingiz rad etildi`;
+
     await this.sendToUser(userId, {
-      title:
-        decision === 'APPROVED'
-          ? "Ta'til tasdiqlandi ✅"
-          : "Ta'til rad etildi ❌",
-      body:
-        decision === 'APPROVED'
-          ? `${label} so'rovingiz tasdiqlandi`
-          : `${label} so'rovingiz rad etildi`,
+      title,
+      body,
       url: '/dashboard/my-leaves',
       tag: 'leave-reviewed',
     });
+
+    await this.notifications
+      .create({
+        type: NotificationType.ALERT,
+        title,
+        message: body,
+        userId,
+        metadata: { kind: 'leave-reviewed', decision },
+      })
+      .catch((e) =>
+        this.logger.warn(`Notification persist failed: ${e?.message ?? e}`),
+      );
   }
 
   /** Maosh hisoblanganda xodimni xabardor qilish */
@@ -218,25 +264,74 @@ export class PushService {
       'Noyabr',
       'Dekabr',
     ];
+    const title = 'Maosh hisoblandi 💰';
+    const body = `${MONTHS[month]} ${year} — ${Math.round(netSalary).toLocaleString('ru-RU')} so'm`;
+
     await this.sendToUser(userId, {
-      title: 'Maosh hisoblandi 💰',
-      body: `${MONTHS[month]} ${year} — ${Math.round(netSalary).toLocaleString('ru-RU')} so'm`,
+      title,
+      body,
       url: '/dashboard/my-payroll',
       tag: `payroll-${month}-${year}`,
     });
+
+    await this.notifications
+      .create({
+        type: NotificationType.PAYMENT,
+        title,
+        message: body,
+        userId,
+        metadata: { kind: 'payroll', month, year },
+      })
+      .catch((e) =>
+        this.logger.warn(`Notification persist failed: ${e?.message ?? e}`),
+      );
   }
 
   /** Bugungi check-in eslatmasi (kun boshida) */
   async notifyCheckinReminder(hospitalId: string) {
-    await this.sendToHospital(
+    const title = 'Bugungi ish kuni boshlandi 🏥';
+    const body = 'Iltimos, check-in qilishni unutmang';
+
+    const recipientIds = await this.sendToHospital(
       hospitalId,
-      {
-        title: 'Bugungi ish kuni boshlandi 🏥',
-        body: 'Iltimos, check-in qilishni unutmang',
-        url: '/dashboard/my-checkin',
-        tag: 'checkin-reminder',
-      },
+      { title, body, url: '/dashboard/my-checkin', tag: 'checkin-reminder' },
       ['EMPLOYEE'],
     );
+
+    await this.notifications
+      .createForUsers(recipientIds, {
+        type: NotificationType.ALERT,
+        title,
+        message: body,
+        metadata: { kind: 'checkin-reminder', hospitalId },
+      })
+      .catch((e) =>
+        this.logger.warn(`Notification persist failed: ${e?.message ?? e}`),
+      );
+  }
+
+  /** Ish vaqti tugagan, lekin check-out qilinmagan xodimga eslatma */
+  async notifyCheckoutReminder(userId: string, recordId: string) {
+    const title = 'Check-out eslatmasi ⏰';
+    const body = 'Ish vaqtingiz tugadi. Iltimos, check-out qilishni unutmang!';
+
+    await this.sendToUser(userId, {
+      title,
+      body,
+      url: '/dashboard/my-checkin',
+      tag: `checkout-reminder-${recordId}`,
+    });
+
+    await this.notifications
+      .create({
+        type: NotificationType.ALERT,
+        title,
+        message: body,
+        userId,
+        metadata: { kind: 'checkout-reminder', recordId },
+      })
+      .catch((e) =>
+        this.logger.warn(`Notification persist failed: ${e?.message ?? e}`),
+      );
   }
 }
