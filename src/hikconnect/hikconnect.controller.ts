@@ -62,6 +62,12 @@ export class HikConnectController {
     return this.svc.deleteCamera(id);
   }
 
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ASSISTANT_ADMIN)
+  @Get('devices/:serial/detail')
+  getDeviceDetail(@Param('serial') serial: string) {
+    return this.svc.getDeviceDetail(serial);
+  }
+
   // ─── Live Stream ───────────────────────────────────────────────────────────
 
   /**
@@ -78,19 +84,5 @@ export class HikConnectController {
   @Get('cameras/:id/live')
   getLiveUrl(@Param('id') id: string) {
     return this.svc.getLiveUrlById(id);
-  }
-
-  // ─── HikConnect import (keyinroq) ─────────────────────────────────────────
-
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ASSISTANT_ADMIN)
-  @Get('fetch-cameras')
-  fetchFromHikConnect(
-    @Query('pageNo') pageNo?: string,
-    @Query('pageSize') pageSize?: string,
-  ) {
-    return this.svc.fetchCamerasFromHikConnect({
-      pageNo: pageNo ? Number(pageNo) : 1,
-      pageSize: pageSize ? Number(pageSize) : 50,
-    });
   }
 }

@@ -143,6 +143,66 @@ export class HikConnectService implements OnModuleInit {
     return this.prisma.camera.delete({ where: { id } });
   }
 
+  async getDeviceDetail(deviceSerial: string) {
+    if (!this.hikConfigured) {
+      throw new InternalServerErrorException('HikConnect sozlanmagan.');
+    }
+
+    const res = await this.hccPost<{
+      device: {
+        baseInfo: {
+          id: string;
+          name: string;
+          category: string;
+          serialNo: string;
+          version: string;
+          streamEncryptEnable: string;
+          availableCameraChannelNum: string;
+          areaId: string;
+        };
+
+        onlineStatus: number;
+
+        cameraChannel: Array<{
+          id: string;
+          name: string;
+          no: string;
+          online: string;
+        }>;
+
+        doorChannel?: Array<{
+          id: string;
+          name: string;
+          no: string;
+          online: string;
+        }>;
+      };
+    }>('/api/hccgw/resource/v1/devicedetail/get', {
+      deviceSerialNo: deviceSerial,
+    });
+
+    const device = res.device;
+
+    return {
+      device: {
+        id: device.baseInfo.id,
+        name: device.baseInfo.name,
+        serialNo: device.baseInfo.serialNo,
+        type: device.baseInfo.category,
+        version: device.baseInfo.version,
+        areaId: device.baseInfo.areaId,
+        online: device.onlineStatus === 1,
+      },
+
+      cameras: (device.cameraChannel ?? []).map((camera) => ({
+        cameraIndexCode: camera.id,
+        name: camera.name,
+        channelNo: Number(camera.no),
+        online: camera.online === '1',
+      })),
+    };
+  }
+
   // ─── Live URL — asosiy metod ──────────────────────────────────────────────────
 
   /**
@@ -208,56 +268,6 @@ export class HikConnectService implements OnModuleInit {
 
   isConfigured(): boolean {
     return this.hikConfigured || !!this.mediamtxHost;
-  }
-
-  // ─── HikConnect kameralari import qilish ─────────────────────────────────────
-
-  /**
-   * POST /api/hccgw/resource/v1/areas/cameras/get
-   * PDF §5.6.3 — HikConnect'dagi kameralar ro'yxati.
-   * cameraIndexCode = camera.id (resource ID)
-   * deviceSerial    = camera.device.devInfo.serialNo
-   */
-  async fetchCamerasFromHikConnect(params?: {
-    pageNo?: number;
-    pageSize?: number;
-  }) {
-    if (!this.hikConfigured) {
-      throw new InternalServerErrorException('HikConnect sozlanmagan.');
-    }
-
-    const res = await this.hccPost<{
-      totalCount: number;
-      pageIndex: number;
-      pageSize: number;
-      camera: Array<{
-        id: string;
-        name: string;
-        online: string;
-        device: {
-          devInfo: { id: string; serialNo: string; streamSecretKey: string };
-          channelInfo: { id: string; no: string };
-        };
-      }>;
-    }>('/api/hccgw/resource/v1/areas/cameras/get', {
-      pageIndex: params?.pageNo ?? 1,
-      pageSize: params?.pageSize ?? 50,
-      filter: {
-        areaID: '-1', // barcha arealar
-        includeSubArea: '-1', // sub-arealar ham
-      },
-    });
-
-    return {
-      list: (res.camera ?? []).map((c) => ({
-        cameraIndexCode: c.id,
-        cameraName: c.name,
-        deviceSerial: c.device?.devInfo?.serialNo ?? '',
-        channelNo: Number(c.device?.channelInfo?.no ?? 1),
-        status: c.online === '1' ? 'online' : 'offline',
-      })),
-      total: res.totalCount ?? 0,
-    };
   }
 
   // ─── PRIVATE: MediaMTX HLS URL ───────────────────────────────────────────────
