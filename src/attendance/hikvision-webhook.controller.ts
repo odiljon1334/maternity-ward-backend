@@ -1,5 +1,14 @@
-import { Controller, Get, Post, HttpCode, Logger, Req } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  HttpCode,
+  Logger,
+  Req,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { Request } from 'express';
+import { timingSafeEqual } from 'crypto';
 import { TerminalEventType } from '@prisma/client';
 
 import { AttendanceService, HikvisionEvent } from './attendance.service';
@@ -26,6 +35,8 @@ export class HikvisionWebhookController {
   @Post('webhook')
   @HttpCode(200)
   async handleWebhook(@Req() req: Request) {
+    this.assertValidSecret(req);
+
     const ct = String(req.headers['content-type'] || '');
     const body = req.body as Buffer;
 
@@ -72,6 +83,42 @@ export class HikvisionWebhookController {
     } catch (err) {
       this.logger.error('Webhook processing error:', err);
       return { status: 'error', message: err.message };
+    }
+  }
+
+  // ─── XAVFSIZLIK: URL query'dagi secret'ni tekshirish ─────────────────────────
+  //
+  // Terminalning "HTTP Listening" sozlamasida header/Basic Auth maydoni yo'q —
+  // shuning uchun secret URL query-parametr sifatida yuboriladi:
+  //   /api/v1/hikvision/webhook?key=<HIKVISION_WEBHOOK_SECRET>
+  //
+  // HIKVISION_WEBHOOK_SECRET .env da sozlanmagan bo'lsa, eski/hali
+  // yangilanmagan terminallar bilan uzilib qolmaslik uchun faqat WARNING
+  // beriladi va so'rov o'tkaziladi. Production'da bu ENV albatta sozlanishi kerak.
+  private assertValidSecret(req: Request) {
+    const expected = process.env.HIKVISION_WEBHOOK_SECRET;
+
+    if (!expected) {
+      this.logger.warn(
+        'HIKVISION_WEBHOOK_SECRET sozlanmagan — webhook HIMOYASIZ qabul qilinmoqda!',
+      );
+      return;
+    }
+
+    const provided = String(req.query.key ?? '');
+    const a = Buffer.from(provided);
+    const b = Buffer.from(expected);
+
+    const valid =
+      a.length === b.length && provided.length > 0
+        ? timingSafeEqual(a, b)
+        : false;
+
+    if (!valid) {
+      this.logger.warn(
+        `Webhook: noto'g'ri/yo'q secret. IP=${req.ip} UA=${req.headers['user-agent'] ?? '-'}`,
+      );
+      throw new UnauthorizedException('Invalid webhook secret');
     }
   }
 
@@ -185,7 +232,7 @@ export class HikvisionWebhookController {
       }
     }
 
-    // XML topilmadiymu — '<' belgisi bo'lgan partni sinab ko'r
+    // XML topilmadi — '<' belgisi bo'lgan partni sinab ko'r
     if (!xmlText) {
       const maybe = parts.find((p) => p.body.toString('utf8').includes('<'));
       if (maybe) xmlText = maybe.body.toString('utf8');

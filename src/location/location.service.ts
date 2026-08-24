@@ -119,7 +119,7 @@ export class LocationService {
           u.employee?.position?.gpsLng ?? u.employee?.hospital?.gpsLng ?? null;
 
         let distance: number | null = null;
-        if (geoLat && geoLng) {
+        if (geoLat != null && geoLng != null) {
           distance = Math.round(
             this.getDistance(geoLat, geoLng, loc.latitude, loc.longitude),
           );
