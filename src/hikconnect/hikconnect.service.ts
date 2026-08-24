@@ -3,9 +3,9 @@ import {
   Logger,
   InternalServerErrorException,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import * as crypto from 'crypto';
 import axios from 'axios';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -18,31 +18,40 @@ import { PrismaService } from '../prisma/prisma.service';
  *    - Camera.streamPath = "hospital1/cam1"
  *    - HLS URL: https://{MEDIAMTX_HOST}/{streamPath}/index.m3u8
  *
- * 2. HikConnect OpenAPI (keyinroq, AppKey olinganda):
- *    - Camera.cameraIndexCode = HikConnect ID
- *    - HIKCONNECT_APP_KEY + HIKCONNECT_APP_SECRET .env ga qo'shiladi
- *    - Avtomatik HikConnect ga switch bo'ladi
+ * 2. Hik-Connect for Teams OpenAPI V2.15.0 (konfiguratsiya bo'lsa):
+ *    - PDF §3.2: POST /api/hccgw/platform/v1/token/get → accessToken + areaDomain
+ *    - PDF §5.1.4: GET  /api/hccgw/platform/v1/streamtoken/get → appToken (SDK uchun)
+ *    - PDF §5.11.6: POST /api/hccgw/video/v1/live/address/get → HLS/RTMP URL
+ *    - Camera.cameraIndexCode = HikConnect camera resource ID
+ *    - Camera.deviceSerial    = qurilma seriyasi (live URL uchun zarur)
  *
  * .env:
- *   MEDIAMTX_HLS_HOST     = https://vps-ip:8888        (MediaMTX HLS port)
- *   HIKCONNECT_HOST       = https://open.hikvision.com  (keyinroq)
- *   HIKCONNECT_APP_KEY    = ...                         (keyinroq)
- *   HIKCONNECT_APP_SECRET = ...                         (keyinroq)
+ *   MEDIAMTX_HLS_HOST         = https://vps-ip:8888
+ *   HIKCONNECT_APP_KEY        = 9xAJIZEOr5enH580IGk2A3ooJQgyWX26
+ *   HIKCONNECT_APP_SECRET     = mAqGVnNxmQZkO56sXTZgPnNHhLnzcQgR
+ *   HIKCONNECT_BASE_URL       = https://iotservice.hik-connect.com
  */
 
 export interface LiveUrlResult {
   url: string;
-  protocol: 'hls' | 'rtsp' | 'rtmp';
+  protocol: 'hls' | 'rtsp' | 'rtmp' | 'ezopen';
   expireTime: number;
   source: 'mediamtx' | 'hikconnect';
 }
 
+// ─── Token cache (modul ichida) ───────────────────────────────────────────────
+interface TokenCache {
+  accessToken: string;
+  areaDomain: string;
+  expiresAt: number; // ms
+}
+
 @Injectable()
-export class HikConnectService {
+export class HikConnectService implements OnModuleInit {
   private readonly logger = new Logger(HikConnectService.name);
 
-  // HikConnect
-  private readonly hikHost: string;
+  // Hik-Connect for Teams
+  private readonly hikBaseUrl: string; // token/get uchun (iotservice.hik-connect.com)
   private readonly appKey: string;
   private readonly appSecret: string;
   private readonly hikConfigured: boolean;
@@ -50,13 +59,16 @@ export class HikConnectService {
   // MediaMTX
   private readonly mediamtxHost: string;
 
+  // Token cache
+  private tokenCache: TokenCache | null = null;
+
   constructor(
     private readonly config: ConfigService,
     private readonly prisma: PrismaService,
   ) {
-    this.hikHost = this.config.get(
-      'HIKCONNECT_HOST',
-      'https://open.hikvision.com',
+    this.hikBaseUrl = this.config.get(
+      'HIKCONNECT_BASE_URL',
+      'https://iotservice.hik-connect.com',
     );
     this.appKey = this.config.get('HIKCONNECT_APP_KEY', '');
     this.appSecret = this.config.get('HIKCONNECT_APP_SECRET', '');
@@ -74,7 +86,18 @@ export class HikConnectService {
     }
   }
 
-  // ─── Camera CRUD ───────────────────────────────────────────────────────────
+  async onModuleInit() {
+    if (this.hikConfigured) {
+      try {
+        await this.ensureToken();
+        this.logger.log('HikConnect token muvaffaqiyatli olindi');
+      } catch (err: any) {
+        this.logger.error(`HikConnect token xatosi: ${err.message}`);
+      }
+    }
+  }
+
+  // ─── Camera CRUD ─────────────────────────────────────────────────────────────
 
   async getCamerasForHospital(hospitalId: string) {
     return this.prisma.camera.findMany({
@@ -120,14 +143,12 @@ export class HikConnectService {
     return this.prisma.camera.delete({ where: { id } });
   }
 
-  // ─── Live URL — asosiy metod ───────────────────────────────────────────────
+  // ─── Live URL — asosiy metod ──────────────────────────────────────────────────
 
   /**
-   * Kamera ID si bo'yicha HLS stream URL qaytaradi.
-   *
    * Prioritet:
-   *   1. HikConnect (configured bo'lsa va cameraIndexCode bor bo'lsa)
-   *   2. MediaMTX   (streamPath bor bo'lsa)
+   *   1. Hik-Connect for Teams (hikConfigured && cameraIndexCode && deviceSerial)
+   *   2. MediaMTX (streamPath)
    */
   async getLiveUrlById(cameraId: string): Promise<LiveUrlResult> {
     const camera = await this.prisma.camera.findUnique({
@@ -135,39 +156,48 @@ export class HikConnectService {
     });
     if (!camera) throw new NotFoundException('Kamera topilmadi');
 
-    // HikConnect — birinchi prioritet
-    if (this.hikConfigured && camera.cameraIndexCode) {
-      return this.getLiveUrlFromHikConnect(camera.cameraIndexCode);
+    if (this.hikConfigured && camera.cameraIndexCode && camera.deviceSerial) {
+      return this.getLiveUrlFromHikConnect(
+        camera.cameraIndexCode,
+        camera.deviceSerial,
+      );
     }
 
-    // MediaMTX — ikkinchi prioritet
     if (camera.streamPath) {
       return this.getLiveUrlFromMediaMTX(camera.streamPath);
     }
 
     throw new InternalServerErrorException(
-      'Kamera uchun stream sozlanmagan. streamPath yoki cameraIndexCode kerak.',
+      'Kamera uchun stream sozlanmagan. streamPath yoki (cameraIndexCode + deviceSerial) kerak.',
     );
   }
 
-  /**
-   * cameraIndexCode bo'yicha (eski interfeys — HikConnect uchun saqlanadi)
-   */
-  async getLiveUrl(cameraIndexCode: string): Promise<LiveUrlResult> {
+  /** Eski interfeys — to'g'ridan-to'g'ri cameraIndexCode + deviceSerial bilan */
+  async getLiveUrl(
+    cameraIndexCode: string,
+    deviceSerial?: string,
+  ): Promise<LiveUrlResult> {
     if (!this.hikConfigured) {
       throw new InternalServerErrorException(
-        'HikConnect sozlanmagan. MEDIAMTX orqali getLiveUrlById ishlatilsin.',
+        'HikConnect sozlanmagan. getLiveUrlById ishlatilsin.',
       );
     }
-    return this.getLiveUrlFromHikConnect(cameraIndexCode);
+    if (!deviceSerial) {
+      throw new InternalServerErrorException(
+        'deviceSerial kerak (HikConnect live URL uchun).',
+      );
+    }
+    return this.getLiveUrlFromHikConnect(cameraIndexCode, deviceSerial);
   }
 
-  /** Barcha sozlamalar holati */
+  /** Sozlamalar holati */
   getStatus() {
     return {
       hikconnect: {
         configured: this.hikConfigured,
-        host: this.hikHost,
+        baseUrl: this.hikBaseUrl,
+        tokenCached: !!this.tokenCache,
+        areaDomain: this.tokenCache?.areaDomain ?? null,
       },
       mediamtx: {
         configured: !!this.mediamtxHost,
@@ -180,8 +210,14 @@ export class HikConnectService {
     return this.hikConfigured || !!this.mediamtxHost;
   }
 
-  // ─── HikConnect dan kameralar import qilish ────────────────────────────────
+  // ─── HikConnect kameralari import qilish ─────────────────────────────────────
 
+  /**
+   * POST /api/hccgw/resource/v1/areas/cameras/get
+   * PDF §5.6.3 — HikConnect'dagi kameralar ro'yxati.
+   * cameraIndexCode = camera.id (resource ID)
+   * deviceSerial    = camera.device.devInfo.serialNo
+   */
   async fetchCamerasFromHikConnect(params?: {
     pageNo?: number;
     pageSize?: number;
@@ -190,30 +226,41 @@ export class HikConnectService {
       throw new InternalServerErrorException('HikConnect sozlanmagan.');
     }
 
-    const path = '/artemis/api/resource/v1/cameras/indexCode/cameraList';
-    const body = {
-      pageNo: params?.pageNo ?? 1,
+    const res = await this.hccPost<{
+      totalCount: number;
+      pageIndex: number;
+      pageSize: number;
+      camera: Array<{
+        id: string;
+        name: string;
+        online: string;
+        device: {
+          devInfo: { id: string; serialNo: string; streamSecretKey: string };
+          channelInfo: { id: string; no: string };
+        };
+      }>;
+    }>('/api/hccgw/resource/v1/areas/cameras/get', {
+      pageIndex: params?.pageNo ?? 1,
       pageSize: params?.pageSize ?? 50,
-    };
-
-    const response = await this.artemisPost<{ list: any[]; total: number }>(
-      path,
-      body,
-    );
+      filter: {
+        areaID: '-1', // barcha arealar
+        includeSubArea: '-1', // sub-arealar ham
+      },
+    });
 
     return {
-      list: (response.list ?? []).map((c: any) => ({
-        cameraIndexCode: c.cameraIndexCode ?? c.indexCode ?? '',
-        cameraName: c.cameraName ?? c.name ?? '',
-        deviceSerial: c.deviceSerial ?? '',
-        channelNo: Number(c.channelNo ?? 1),
-        status: c.status ?? 'unknown',
+      list: (res.camera ?? []).map((c) => ({
+        cameraIndexCode: c.id,
+        cameraName: c.name,
+        deviceSerial: c.device?.devInfo?.serialNo ?? '',
+        channelNo: Number(c.device?.channelInfo?.no ?? 1),
+        status: c.online === '1' ? 'online' : 'offline',
       })),
-      total: response.total ?? 0,
+      total: res.totalCount ?? 0,
     };
   }
 
-  // ─── PRIVATE: MediaMTX HLS URL ────────────────────────────────────────────
+  // ─── PRIVATE: MediaMTX HLS URL ───────────────────────────────────────────────
 
   private getLiveUrlFromMediaMTX(streamPath: string): LiveUrlResult {
     if (!this.mediamtxHost) {
@@ -221,100 +268,150 @@ export class HikConnectService {
         "MEDIAMTX_HLS_HOST sozlanmagan. VPS da MediaMTX o'rnatilganmi?",
       );
     }
-
     const host = this.mediamtxHost.replace(/\/$/, '');
     return {
       url: `${host}/${streamPath}/index.m3u8`,
       protocol: 'hls',
-      expireTime: 0, // MediaMTX da expiry yo'q — FFmpeg agent ishlayotganida doimiy
+      expireTime: 0,
       source: 'mediamtx',
     };
   }
 
-  // ─── PRIVATE: HikConnect Artemis API ─────────────────────────────────────
+  // ─── PRIVATE: Hik-Connect for Teams live URL ─────────────────────────────────
 
+  /**
+   * POST /api/hccgw/video/v1/live/address/get
+   * PDF §5.11.6
+   *
+   * protocol: 2 = HLS, 3 = RTMP, 1 = EZOPEN (JS SDK)
+   * HLS tanlangan: H264 kerak, stream encryption o'chirilgan bo'lishi kerak.
+   */
   private async getLiveUrlFromHikConnect(
     cameraIndexCode: string,
+    deviceSerial: string,
   ): Promise<LiveUrlResult> {
-    const path = '/artemis/api/video/v1/cameras/previewURLs';
-    const body = {
-      cameraIndexCode,
-      streamType: 0,
-      protocol: 'hls',
-      expireTime: 3600,
-    };
-
-    const response = await this.artemisPost<{
+    const res = await this.hccPost<{
+      id: string;
       url: string;
-      expireTime?: number;
-    }>(path, body);
+      expireTime: number;
+    }>('/api/hccgw/video/v1/live/address/get', {
+      resourceId: cameraIndexCode,
+      deviceSerial: deviceSerial,
+      type: '1', // 1 = live view
+      protocol: 2, // 2 = HLS
+      quality: 2, // 2 = Fluent (sub-bitrate) — mobil uchun yaxshi
+      expireTime: 3600, // 1 soat
+    });
 
     return {
-      url: response.url,
+      url: res.url,
       protocol: 'hls',
-      expireTime: response.expireTime ?? 3600,
+      expireTime: res.expireTime ?? 0,
       source: 'hikconnect',
     };
   }
 
+  // ─── PRIVATE: Token boshqaruvi ────────────────────────────────────────────────
+
   /**
-   * HikConnect Artemis API — HMAC-SHA256 imzolangan POST so'rov
+   * Token 1 soat zaxira qoldirib yangilanadi.
+   * POST /api/hccgw/platform/v1/token/get
+   * PDF §5.1.1 — appKey + secretKey, Artemis imzosi YO'Q.
    */
-  private async artemisPost<T>(path: string, body: object): Promise<T> {
-    const timestamp = Date.now().toString();
-    const nonce = crypto.randomUUID();
-    const contentType = 'application/json';
-    const accept = 'application/json';
-    const bodyStr = JSON.stringify(body);
-    const contentMd5 = crypto
-      .createHash('md5')
-      .update(bodyStr)
-      .digest('base64');
+  private async ensureToken(): Promise<{
+    accessToken: string;
+    areaDomain: string;
+  }> {
+    const bufferMs = 60 * 60 * 1000; // 1 soat oldin yangilash
+    if (this.tokenCache && Date.now() < this.tokenCache.expiresAt - bufferMs) {
+      return this.tokenCache;
+    }
 
-    const signedHeaders = [
-      `x-ca-key:${this.appKey}`,
-      `x-ca-nonce:${nonce}`,
-      `x-ca-timestamp:${timestamp}`,
-    ].join('\n');
+    const url = `${this.hikBaseUrl}/api/hccgw/platform/v1/token/get`;
+    const res = await axios.post<{
+      errorCode: string;
+      message?: string;
+      data?: {
+        accessToken: string;
+        expireTime: number; // Unix seconds
+        userId: string;
+        areaDomain: string;
+      };
+    }>(
+      url,
+      { appKey: this.appKey, secretKey: this.appSecret },
+      { headers: { 'Content-Type': 'application/json' }, timeout: 10_000 },
+    );
 
-    const stringToSign = [
-      'POST',
-      accept,
-      contentMd5,
-      contentType,
-      '',
-      signedHeaders,
-      path,
-    ].join('\n');
+    if (res.data.errorCode !== '0' || !res.data.data) {
+      throw new InternalServerErrorException(
+        `HikConnect token xatosi [${res.data.errorCode}]: ${res.data.message}`,
+      );
+    }
 
-    const signature = crypto
-      .createHmac('sha256', this.appSecret)
-      .update(stringToSign)
-      .digest('base64');
+    const { accessToken, areaDomain, expireTime } = res.data.data;
+    this.tokenCache = {
+      accessToken,
+      areaDomain,
+      expiresAt: expireTime * 1000, // seconds → ms
+    };
+
+    this.logger.log(`Token yangilandi. areaDomain: ${areaDomain}`);
+    return this.tokenCache;
+  }
+
+  // ─── PRIVATE: Umumiy Hik-Connect for Teams POST yordamchisi ─────────────────
+
+  /**
+   * areaDomain + path birlashtiradi, Token header qo'shadi.
+   * Hamma API so'rovlari (token/get dan tashqari) shu orqali o'tadi.
+   */
+  private async hccPost<T>(path: string, body: object): Promise<T> {
+    const { accessToken, areaDomain } = await this.ensureToken();
+    const url = `${areaDomain}${path}`;
 
     try {
-      const res = await axios.post<{ code: string; msg: string; data: T }>(
-        `${this.hikHost}${path}`,
-        body,
-        {
-          headers: {
-            'Content-Type': contentType,
-            Accept: accept,
-            'x-ca-key': this.appKey,
-            'x-ca-nonce': nonce,
-            'x-ca-timestamp': timestamp,
-            'x-ca-signature': signature,
-            'x-ca-signature-headers': 'x-ca-key,x-ca-nonce,x-ca-timestamp',
-          },
-          timeout: 10_000,
+      const res = await axios.post<{
+        errorCode: string;
+        message?: string;
+        data: T;
+      }>(url, body, {
+        headers: {
+          'Content-Type': 'application/json',
+          Token: accessToken,
         },
-      );
+        timeout: 10_000,
+      });
 
-      if (res.data.code !== '0' && res.data.code !== '200') {
+      if (res.data.errorCode !== '0') {
+        // Token muddati o'tgan bo'lsa — bir marta tozalab qayta urinish
+        if (res.data.errorCode === '10002' || res.data.errorCode === '401') {
+          this.tokenCache = null;
+          const retry = await this.ensureToken();
+          const res2 = await axios.post<{
+            errorCode: string;
+            message?: string;
+            data: T;
+          }>(`${retry.areaDomain}${path}`, body, {
+            headers: {
+              'Content-Type': 'application/json',
+              Token: retry.accessToken,
+            },
+            timeout: 10_000,
+          });
+          if (res2.data.errorCode !== '0') {
+            throw new InternalServerErrorException(
+              `HikConnect API xatosi [${res2.data.errorCode}]: ${res2.data.message}`,
+            );
+          }
+          return res2.data.data;
+        }
+
         throw new InternalServerErrorException(
-          `HikConnect API xatosi: ${res.data.code} — ${res.data.msg}`,
+          `HikConnect API xatosi [${res.data.errorCode}]: ${res.data.message}`,
         );
       }
+
       return res.data.data;
     } catch (err: any) {
       if (err instanceof InternalServerErrorException) throw err;
