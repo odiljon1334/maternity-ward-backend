@@ -563,9 +563,6 @@ export class EmployeesService {
     const candidates = await this.prisma.employee.findMany({
       where: {
         firedAt: { not: null },
-        ...(currentHospitalId
-          ? { hospitalId: { not: currentHospitalId } }
-          : {}),
       },
       include: {
         department: true,

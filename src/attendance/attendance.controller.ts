@@ -126,6 +126,28 @@ export class AttendanceController {
     );
   }
 
+  // ─────────────────────────────────────────────────────────────────────────────
+// QO'SHISH KERAK: attendance.controller.ts ichiga, setEmployeeGps() dan keyin
+// UserRole importida ASSISTANT_ADMIN allaqachon bor deb faraz qilinmoqda —
+// bo'lmasa import qatoridan olib tashlang yoki qo'shing.
+// ─────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Admin: xodimning (adashib belgilangan) ish joyi GPS'ini tozalaydi,
+   * shunda xodim keyingi safar ilovaga kirganda qaytadan to'g'ri joyda
+   * turib belgilay oladi.
+   */
+  @Post('reset-employee-gps/:employeeId')
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+  )
+  resetEmployeeGps(@Param('employeeId') employeeId: string) {
+    return this.service.resetEmployeeGps(employeeId);
+  }
+
   @Post('manual-checkin')
   @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
   manualCheckIn(

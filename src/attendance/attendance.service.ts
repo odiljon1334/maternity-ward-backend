@@ -1039,6 +1039,34 @@ export class AttendanceService {
     return { saved: true, alreadySet: false };
   }
 
+  // ─────────────────────────────────────────────────────────────────────────────
+// QO'SHISH KERAK: attendance.service.ts ichiga, setEmployeeGps() dan keyin
+// ─────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * SUPER_ADMIN/ASSISTANT_ADMIN/DIRECTOR/ADMIN tomonidan: xodimning
+   * (noto'g'ri/adashib) saqlangan ish joyi GPS'ini tozalaydi — shundan keyin
+   * xodim ilovaga kirganda "Ish joyi manzilini belgilang" banneri qayta
+   * chiqadi va u to'g'ri joyda turib qaytadan belgilashi mumkin bo'ladi.
+   */
+  async resetEmployeeGps(employeeId: string): Promise<{ reset: boolean }> {
+    const employee = await this.prisma.employee.findUnique({
+      where: { id: employeeId },
+    });
+    if (!employee) throw new NotFoundException('Xodim topilmadi');
+
+    await this.prisma.employee.update({
+      where: { id: employeeId },
+      data: { gpsLat: null, gpsLng: null },
+    });
+
+    this.logger.log(
+      `Employee GPS reset: ${employee.fullName} (${employeeId})`,
+    );
+
+    return { reset: true };
+  }
+
   /**
    * Mobil ilovadan GPS + selfie bilan check-in / check-out.
    * Schema yangi maydonlari: checkInSource='MOBILE', selfieUrl, gpsLat, gpsLng, gpsAccuracy.
