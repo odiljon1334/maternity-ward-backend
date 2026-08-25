@@ -33,23 +33,28 @@ export class LocationController {
           select: {
             fullName: true,
             photoUrl: true,
+            gpsLat: true,
+            gpsLng: true,
+            gpsRadius: true,
             position: {
-              select: { gpsLat: true, gpsLng: true },
+              select: { gpsLat: true, gpsLng: true, gpsRadius: true },
             },
             hospital: {
-              select: { gpsLat: true, gpsLng: true },
+              select: { gpsLat: true, gpsLng: true, gpsRadius: true },
             },
           },
         },
       },
     });
 
-    // Position GPS ustuvor, yo'q bo'lsa Hospital GPS
     const geoLat =
+      employee?.employee?.gpsLat ??
       employee?.employee?.position?.gpsLat ??
       employee?.employee?.hospital?.gpsLat ??
       null;
+
     const geoLng =
+      employee?.employee?.gpsLng ??
       employee?.employee?.position?.gpsLng ??
       employee?.employee?.hospital?.gpsLng ??
       null;
@@ -130,9 +135,23 @@ export class LocationController {
     const position = employee?.employee?.position;
     const hospital = employee?.employee?.hospital;
 
-    const geoLat = position?.gpsLat ?? hospital?.gpsLat ?? null;
-    const geoLng = position?.gpsLng ?? hospital?.gpsLng ?? null;
-    const geoRadius = position?.gpsRadius ?? hospital?.gpsRadius ?? 200;
+    const geoLat =
+      employee?.employee?.gpsLat ??
+      position?.gpsLat ??
+      hospital?.gpsLat ??
+      null;
+
+    const geoLng =
+      employee?.employee?.gpsLng ??
+      position?.gpsLng ??
+      hospital?.gpsLng ??
+      null;
+
+    const geoRadius =
+      employee?.employee?.gpsRadius ??
+      position?.gpsRadius ??
+      hospital?.gpsRadius ??
+      200;
 
     if (!geoLat || !geoLng) {
       return { inside: true, distance: 0, message: 'GPS sozlanmagan' };

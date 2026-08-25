@@ -14,6 +14,9 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { HikvisionService } from './hikvision.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { RolesGuard } from '../common/guards/roles.guard';
+import { Roles } from '../common/decorators/roles.decorator';
+import { UserRole } from '@prisma/client';
 import { AddPersonDto } from './hikvision.dto';
 
 @UseGuards(JwtAuthGuard)
@@ -110,5 +113,13 @@ export class HikvisionController {
   @Post('sync/:hospitalId')
   syncHospital(@Param('hospitalId') hospitalId: string) {
     return this.hikvision.syncHospital(hospitalId);
+  }
+
+  // Reboot — faqat admin, chunki terminal ~30-90s offline bo'lib qoladi
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ASSISTANT_ADMIN)
+  @Post('devices/:devIndex/reboot')
+  rebootTerminal(@Param('devIndex') devIndex: string) {
+    return this.hikvision.rebootTerminal(devIndex);
   }
 }

@@ -112,14 +112,14 @@ export class AttendanceController {
     );
   }
 
-  @Post('set-position-gps')
+  @Post('set-employee-gps')
   @Roles(UserRole.EMPLOYEE)
-  setPositionGps(
+  setEmployeeGps(
     @CurrentUser('sub') userId: string,
     @Body('lat') lat: string,
     @Body('lng') lng: string,
   ) {
-    return this.service.setPositionGps(
+    return this.service.setEmployeeGps(
       userId,
       parseFloat(lat),
       parseFloat(lng),

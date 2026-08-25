@@ -1009,37 +1009,31 @@ export class AttendanceService {
     return { saved: true, alreadySet: false };
   }
 
-  async setPositionGps(
+  async setEmployeeGps(
     userId: string,
     lat: number,
     lng: number,
   ): Promise<{ saved: boolean; alreadySet: boolean }> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      include: {
-        employee: {
-          include: { position: true },
-        },
-      },
+      include: { employee: true },
     });
 
     if (!user?.employee) throw new NotFoundException('Xodim profili topilmadi');
 
-    const position = user.employee.position;
-    if (!position) throw new NotFoundException('Lavozim topilmadi');
+    const employee = user.employee;
 
-    // Faqat position GPS null bo'lsa saqlaydi
-    if (position.gpsLat != null && position.gpsLng != null) {
+    if (employee.gpsLat != null && employee.gpsLng != null) {
       return { saved: false, alreadySet: true };
     }
 
-    await this.prisma.position.update({
-      where: { id: position.id },
+    await this.prisma.employee.update({
+      where: { id: employee.id },
       data: { gpsLat: lat, gpsLng: lng },
     });
 
     this.logger.log(
-      `Position GPS set: ${position.name} → (${lat}, ${lng}) by ${user.username}`,
+      `Employee GPS set: ${employee.fullName} → (${lat}, ${lng}) by ${user.username}`,
     );
 
     return { saved: true, alreadySet: false };
@@ -1078,10 +1072,16 @@ export class AttendanceService {
     const position = employee.position as any;
     const hospital = employee.hospital as any;
 
-    // Position GPS ustuvor (maktab hamshirasi)
-    const geoLat = position?.gpsLat ?? hospital?.gpsLat;
-    const geoLng = position?.gpsLng ?? hospital?.gpsLng;
-    const geoRadius = position?.gpsRadius ?? hospital?.gpsRadius ?? 200;
+    // Employee GPS ustuvor, keyin Position, keyin Hospital
+    const geoLat =
+      (employee as any).gpsLat ?? position?.gpsLat ?? hospital?.gpsLat;
+    const geoLng =
+      (employee as any).gpsLng ?? position?.gpsLng ?? hospital?.gpsLng;
+    const geoRadius =
+      (employee as any).gpsRadius ??
+      position?.gpsRadius ??
+      hospital?.gpsRadius ??
+      200;
 
     if (
       geoLat != null &&

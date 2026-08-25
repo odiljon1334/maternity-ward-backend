@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import crypto from 'crypto';
 import axios from 'axios';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -66,6 +67,36 @@ export class HikConnectService {
 
   // MediaMTX
   private readonly mediamtxHost: string;
+
+  generateWebhookSignature(timestamp: string, batchId: string): string {
+    const stringToSign = `${timestamp}\n${batchId}`;
+
+    return crypto
+      .createHmac('sha256', this.appSecret)
+      .update(stringToSign, 'utf8')
+      .digest('base64');
+  }
+
+  verifyWebhookSignature(
+    signature: string,
+    timestamp: string,
+    batchId: string,
+  ): boolean {
+    if (!this.appSecret || !signature || !timestamp || !batchId) {
+      return false;
+    }
+
+    const expectedSignature = this.generateWebhookSignature(timestamp, batchId);
+
+    try {
+      return crypto.timingSafeEqual(
+        Buffer.from(signature, 'utf8'),
+        Buffer.from(expectedSignature, 'utf8'),
+      );
+    } catch {
+      return false;
+    }
+  }
 
   constructor(
     private readonly config: ConfigService,

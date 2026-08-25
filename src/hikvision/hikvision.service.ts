@@ -739,20 +739,100 @@ export class HikvisionService {
   // Bulk Sync
   // ═══════════════════════════════════════════════════════════════════════════
 
+  /**
+   * Hikvision "allaqachon mavjud" xatolarini aniqlaydi (masalan
+   * deviceUserAlreadyExistFace, employeeNoAlreadyExist va h.k.).
+   * Turli firmware/model'larda aniq nom farq qilishi mumkin — shuning uchun
+   * "AlreadyExist" so'z birikmasiga (katta-kichik harfga qaramay) qarab tekshiriladi.
+   */
+  private isAlreadyExistsError(message: string): boolean {
+    return /alreadyexist/i.test(message);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Reboot — faqat qo'lda, admin so'rovi bilan chaqiriladi
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  async rebootTerminal(devIndex: string) {
+    const url = this.buildUrl('/ISAPI/System/reboot', { devIndex });
+    const response = await this.digestRequest('PUT', url, {});
+    this.logger.warn(
+      `Hikvision terminal reboot buyurildi: devIndex=${devIndex}`,
+    );
+    return response.data;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Search: terminaldagi mavjud UserInfo (person) ro'yxati
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Terminaldagi mavjud userlarni qaytaradi: employeeNo → hasFace.
+   * UserInfo/Search javobidagi "numOfFace" maydoni orqali (haqiqiy terminal
+   * javobida tasdiqlangan) — FDSearch'ga ehtiyoj yo'q, bitta so'rov yetarli.
+   */
+  private async getExistingPersons(
+    devIndex: string,
+  ): Promise<Map<string, boolean>> {
+    const url = this.buildUrl('/ISAPI/AccessControl/UserInfo/Search', {
+      format: 'json',
+      devIndex,
+    });
+
+    const result = new Map<string, boolean>();
+    let position = 0;
+    const pageSize = 30;
+
+    // Cheksiz tsiklga tushib qolmaslik uchun xavfsizlik chegarasi
+    for (let page = 0; page < 500; page++) {
+      const searchID = crypto.randomUUID();
+      const response = await this.digestRequest('POST', url, {
+        data: {
+          UserInfoSearchCond: {
+            searchID,
+            searchResultPosition: position,
+            maxResults: pageSize,
+          },
+        },
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      const search = response.data?.UserInfoSearch;
+      const list: any[] = search?.UserInfo ?? [];
+
+      for (const u of list) {
+        if (u?.employeeNo) {
+          result.set(String(u.employeeNo), Number(u.numOfFace ?? 0) > 0);
+        }
+      }
+
+      const status = search?.responseStatusStrg;
+      const numOfMatches = Number(search?.numOfMatches ?? list.length);
+
+      if (status !== 'MORE' || numOfMatches < pageSize) break;
+      position += pageSize;
+    }
+
+    return result;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Bulk Sync — mavjud (person + face) bo'lganlarni skip qiladi
+  // ═══════════════════════════════════════════════════════════════════════════
+
   async syncHospital(hospitalId: string) {
     const terminals = await this.prisma.hikTerminal.findMany({
-      where: {
-        hospitalId,
-        isActive: true,
-      },
+      where: { hospitalId, isActive: true },
     });
 
     if (terminals.length === 0) {
       return {
         total: 0,
-        success: 0,
+        created: 0,
+        skipped: 0,
         failed: 0,
-        errors: ['Terminal topilmadi'],
+        errors: [{ employeeNo: '-', name: '-', reason: 'Terminal topilmadi' }],
+        perTerminal: [],
       };
     }
 
@@ -760,93 +840,147 @@ export class HikvisionService {
       where: {
         hospitalId,
         firedAt: null,
-        employeeNo: {
-          not: null,
-        },
-        photoUrl: {
-          not: null,
-        },
+        employeeNo: { not: null },
+        photoUrl: { not: null },
       },
-      select: {
-        employeeNo: true,
-        fullName: true,
-        photoUrl: true,
-      },
+      select: { employeeNo: true, fullName: true, photoUrl: true },
     });
 
     const uploadDir = this.config.get<string>('UPLOAD_DIR', './uploads');
 
-    let success = 0;
+    let created = 0;
+    let skipped = 0;
     let failed = 0;
+    const errors: { employeeNo: string; name: string; reason: string }[] = [];
+    const perTerminal: {
+      terminalId: string;
+      terminalName: string;
+      created: number;
+      skipped: number;
+      failed: number;
+    }[] = [];
 
-    const errors: string[] = [];
+    for (const terminal of terminals) {
+      let tCreated = 0;
+      let tSkipped = 0;
+      let tFailed = 0;
 
-    for (const employee of employees) {
-      if (!employee.employeeNo) {
-        continue;
+      // Terminaldagi mavjud userlar: employeeNo → hasFace (bitta so'rov, aniq)
+      let existing: Map<string, boolean>;
+      try {
+        existing = await this.getExistingPersons(terminal.devIndex);
+      } catch (err: any) {
+        this.logger.warn(
+          `Terminal ${terminal.name}: mavjud ro'yxatni olishda xato (${err?.message}) — hammasi qayta yuboriladi`,
+        );
+        existing = new Map();
       }
 
-      if (!employee.photoUrl) {
-        continue;
-      }
+      for (const employee of employees) {
+        if (!employee.employeeNo || !employee.photoUrl) continue;
 
-      const filename = employee.photoUrl.replace(/^\/uploads\//, '');
+        const filename = employee.photoUrl.replace(/^\/uploads\//, '');
+        const filePath = path.join(uploadDir, filename);
 
-      const filePath = path.join(uploadDir, filename);
-
-      if (!fs.existsSync(filePath)) {
-        failed++;
-
-        errors.push(`${employee.employeeNo}: rasm fayli topilmadi`);
-
-        continue;
-      }
-
-      const imageBuffer = fs.readFileSync(filePath);
-
-      for (const terminal of terminals) {
-        try {
-          /*
-           * 1. Person
-           */
-          await this.addPerson(terminal.devIndex, {
+        if (!fs.existsSync(filePath)) {
+          tFailed++;
+          errors.push({
             employeeNo: employee.employeeNo,
             name: employee.fullName,
+            reason: `Rasm fayli topilmadi (${terminal.name})`,
           });
+          continue;
+        }
 
-          /*
-           * 2. Face
-           */
-          await this.addFacePicture(
-            terminal.devIndex,
-            employee.employeeNo,
-            imageBuffer,
-          );
+        const personExists = existing.has(employee.employeeNo);
+        const faceExists = existing.get(employee.employeeNo) === true;
 
-          success++;
+        let personIsNew = false;
+        let faceIsNew = false;
+        let hadFatalError = false;
 
-          this.logger.log(
-            `Sync success: ${employee.employeeNo} → ${terminal.name}`,
-          );
-        } catch (err: any) {
-          failed++;
+        // ── 1. Person ──────────────────────────────────────────────────────
+        if (!personExists) {
+          try {
+            await this.addPerson(terminal.devIndex, {
+              employeeNo: employee.employeeNo,
+              name: employee.fullName,
+            });
+            personIsNew = true;
+          } catch (err: any) {
+            const message = err?.message ?? "Noma'lum xato";
+            if (!this.isAlreadyExistsError(message)) {
+              hadFatalError = true;
+              tFailed++;
+              errors.push({
+                employeeNo: employee.employeeNo,
+                name: employee.fullName,
+                reason: `${terminal.name}: ${message}`,
+              });
+            }
+          }
+        }
 
-          const message = err?.message ?? 'Unknown error';
+        // ── 2. Face — faqat hali yo'q bo'lsa yuklaymiz ──────────────────────
+        if (!hadFatalError && !faceExists) {
+          try {
+            const imageBuffer = fs.readFileSync(filePath);
+            await this.addFacePicture(
+              terminal.devIndex,
+              employee.employeeNo,
+              imageBuffer,
+            );
+            faceIsNew = true;
+          } catch (err: any) {
+            const message = err?.message ?? "Noma'lum xato";
+            if (!this.isAlreadyExistsError(message)) {
+              hadFatalError = true;
+              tFailed++;
+              errors.push({
+                employeeNo: employee.employeeNo,
+                name: employee.fullName,
+                reason: `${terminal.name}: ${message}`,
+              });
+            }
+          }
+        }
 
-          errors.push(`${employee.employeeNo} → ${terminal.name}: ${message}`);
-
+        if (hadFatalError) {
           this.logger.error(
-            `Sync failed: ${employee.employeeNo} → ${terminal.name}: ${message}`,
+            `Sync failed: ${employee.employeeNo} → ${terminal.name}`,
           );
+          continue;
+        }
+
+        if (personIsNew || faceIsNew) {
+          tCreated++;
+          this.logger.log(
+            `Sync created: ${employee.employeeNo} → ${terminal.name}`,
+          );
+        } else {
+          tSkipped++;
         }
       }
+
+      created += tCreated;
+      skipped += tSkipped;
+      failed += tFailed;
+      perTerminal.push({
+        terminalId: terminal.id,
+        terminalName: terminal.name,
+        created: tCreated,
+        skipped: tSkipped,
+        failed: tFailed,
+      });
     }
 
     return {
       total: employees.length,
-      success,
+      created,
+      skipped,
       failed,
       errors,
+      perTerminal,
     };
   }
 }

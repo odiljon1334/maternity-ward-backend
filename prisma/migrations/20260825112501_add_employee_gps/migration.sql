@@ -1,0 +1,4 @@
+-- AlterTable
+ALTER TABLE "Employee" ADD COLUMN     "gpsLat" DOUBLE PRECISION,
+ADD COLUMN     "gpsLng" DOUBLE PRECISION,
+ADD COLUMN     "gpsRadius" INTEGER DEFAULT 100;

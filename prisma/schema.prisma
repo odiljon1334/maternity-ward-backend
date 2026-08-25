@@ -300,6 +300,10 @@ model Employee {
   photoUrl   String?
   baseSalary Decimal @db.Decimal(12, 2)
 
+  gpsLat    Float?
+  gpsLng    Float?
+  gpsRadius Int?   @default(100)
+
   hospitalId   String
   hospital     Hospital   @relation(fields: [hospitalId], references: [id])
 

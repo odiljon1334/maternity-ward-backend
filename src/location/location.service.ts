@@ -73,6 +73,9 @@ export class LocationService {
           select: {
             fullName: true,
             photoUrl: true,
+            gpsLat: true,
+            gpsLng: true,
+            gpsRadius: true,
             position: {
               select: { gpsLat: true, gpsLng: true },
             },
@@ -114,9 +117,16 @@ export class LocationService {
       .map((u) => {
         const loc = u.liveLocations[0];
         const geoLat =
-          u.employee?.position?.gpsLat ?? u.employee?.hospital?.gpsLat ?? null;
+          u.employee?.gpsLat ??
+          u.employee?.position?.gpsLat ??
+          u.employee?.hospital?.gpsLat ??
+          null;
+
         const geoLng =
-          u.employee?.position?.gpsLng ?? u.employee?.hospital?.gpsLng ?? null;
+          u.employee?.gpsLng ??
+          u.employee?.position?.gpsLng ??
+          u.employee?.hospital?.gpsLng ??
+          null;
 
         let distance: number | null = null;
         if (geoLat != null && geoLng != null) {
