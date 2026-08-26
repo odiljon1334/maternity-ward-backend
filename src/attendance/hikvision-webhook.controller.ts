@@ -96,31 +96,32 @@ export class HikvisionWebhookController {
   // yangilanmagan terminallar bilan uzilib qolmaslik uchun faqat WARNING
   // beriladi va so'rov o'tkaziladi. Production'da bu ENV albatta sozlanishi kerak.
   private assertValidSecret(req: Request) {
-    const expected = process.env.HIKVISION_WEBHOOK_SECRET;
+  const expected = process.env.HIKVISION_WEBHOOK_SECRET;
+  const provided = String(req.query.key ?? '');
+  
+  // VAQTINCHALIK LOG
+  this.logger.warn(`PROVIDED: "${provided}" len=${provided.length}`);
+  this.logger.warn(`EXPECTED: "${expected}" len=${expected?.length}`);
 
-    if (!expected) {
-      this.logger.warn(
-        'HIKVISION_WEBHOOK_SECRET sozlanmagan — webhook HIMOYASIZ qabul qilinmoqda!',
-      );
-      return;
-    }
-
-    const provided = String(req.query.key ?? '');
-    const a = Buffer.from(provided);
-    const b = Buffer.from(expected);
-
-    const valid =
-      a.length === b.length && provided.length > 0
-        ? timingSafeEqual(a, b)
-        : false;
-
-    if (!valid) {
-      this.logger.warn(
-        `Webhook: noto'g'ri/yo'q secret. IP=${req.ip} UA=${req.headers['user-agent'] ?? '-'}`,
-      );
-      throw new UnauthorizedException('Invalid webhook secret');
-    }
+  if (!expected) {
+    return;
   }
+
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expected);
+
+  const valid =
+    a.length === b.length && provided.length > 0
+      ? timingSafeEqual(a, b)
+      : false;
+
+  if (!valid) {
+    this.logger.warn(
+      `Webhook: noto'g'ri/yo'q secret. IP=${req.ip} UA=${req.headers['user-agent'] ?? '-'}`,
+    );
+    throw new UnauthorizedException('Invalid webhook secret');
+  }
+}
 
   // ─── PAYLOAD PARSER ──────────────────────────────────────────────────────────
 
