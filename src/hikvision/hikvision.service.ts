@@ -6,6 +6,34 @@ import FormData from 'form-data';
 import * as fs from 'fs';
 import * as path from 'path';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  translateHikvisionError,
+  parseHikvisionErrorBody,
+} from '../common/utils/hikvision-error-messages.util';
+
+/**
+ * Hikvision Gateway'dan kelgan xatolik.
+ *
+ * - message           → texnik (inglizcha) xabar, loglar va
+ *                        isAlreadyExistsError() kabi ichki tekshiruvlar uchun
+ * - friendlyMessage    → o'zbekcha, foydalanuvchiga ko'rsatsa bo'ladigan xabar
+ * - raw                → Hikvision'dan kelgan xom JSON javob (agar bo'lsa)
+ */
+export class HikvisionApiError extends Error {
+  readonly friendlyMessage: string;
+  readonly raw: unknown;
+  readonly httpStatus?: number;
+
+  constructor(technicalMessage: string, raw?: unknown, httpStatus?: number) {
+    super(technicalMessage);
+    this.name = 'HikvisionApiError';
+    this.raw = raw;
+    this.httpStatus = httpStatus;
+    this.friendlyMessage = translateHikvisionError(
+      parseHikvisionErrorBody(raw),
+    );
+  }
+}
 
 @Injectable()
 export class HikvisionService {
@@ -349,13 +377,27 @@ export class HikvisionService {
   // Error helpers
   // ═══════════════════════════════════════════════════════════════════════════
 
-  private createHttpError(response: AxiosResponse): Error {
+  /**
+   * HTTP 400+ javobini xato obyektiga aylantiradi.
+   *
+   * - Texnik xabar (err.message) o'zgarishsiz qoladi — loglarda va
+   *   isAlreadyExistsError() kabi ichki tekshiruvlarda ishlatiladi.
+   * - err.friendlyMessage — Hikvision javobidagi statusCode/subStatusCode
+   *   asosida tarjima qilingan, foydalanuvchiga ko'rsatsa bo'ladigan matn.
+   */
+  private createHttpError(response: AxiosResponse): HikvisionApiError {
     const data =
       typeof response.data === 'string'
         ? response.data
         : JSON.stringify(response.data);
 
-    return new Error(`Hikvision Gateway HTTP ${response.status}: ${data}`);
+    const technicalMessage = `Hikvision Gateway HTTP ${response.status}: ${data}`;
+
+    return new HikvisionApiError(
+      technicalMessage,
+      response.data,
+      response.status,
+    );
   }
 
   private normalizeAxiosError(error: any): Error {
@@ -426,11 +468,10 @@ export class HikvisionService {
      */
 
     if (result && result.statusCode !== 1) {
-      throw new Error(
-        `Hikvision addPerson failed: ${
-          result.errorMsg ?? JSON.stringify(result)
-        }`,
-      );
+      const technicalMessage = `Hikvision addPerson failed: ${
+        result.errorMsg ?? JSON.stringify(result)
+      }`;
+      throw new HikvisionApiError(technicalMessage, result);
     }
 
     this.logger.log(`Hikvision Person added successfully: ${data.employeeNo}`);
@@ -744,6 +785,10 @@ export class HikvisionService {
    * deviceUserAlreadyExistFace, employeeNoAlreadyExist va h.k.).
    * Turli firmware/model'larda aniq nom farq qilishi mumkin — shuning uchun
    * "AlreadyExist" so'z birikmasiga (katta-kichik harfga qaramay) qarab tekshiriladi.
+   *
+   * DIQQAT: bu funksiya har doim TEXNIK xabar (err.message) bilan
+   * chaqirilishi kerak, err.friendlyMessage bilan emas — chunki tarjima
+   * qilingan o'zbekcha matnda "AlreadyExist" so'zi bo'lmaydi.
    */
   private isAlreadyExistsError(message: string): boolean {
     return /alreadyexist/i.test(message);
@@ -908,15 +953,23 @@ export class HikvisionService {
             });
             personIsNew = true;
           } catch (err: any) {
-            const message = err?.message ?? "Noma'lum xato";
-            if (!this.isAlreadyExistsError(message)) {
+            // isAlreadyExistsError texnik xabar (err.message) bilan tekshiriladi
+            const technicalMessage = err?.message ?? "Noma'lum xato";
+            if (!this.isAlreadyExistsError(technicalMessage)) {
               hadFatalError = true;
               tFailed++;
+              // Foydalanuvchi ko'radigan xato ro'yxatiga — tarjima qilingan matn
+              const displayMessage =
+                err?.friendlyMessage ?? technicalMessage;
               errors.push({
                 employeeNo: employee.employeeNo,
                 name: employee.fullName,
-                reason: `${terminal.name}: ${message}`,
+                reason: `${terminal.name}: ${displayMessage}`,
               });
+              // Texnik tafsilotlar faqat serverning ichki logida qoladi
+              this.logger.error(
+                `[Person xatoligi | ${employee.employeeNo} @ ${terminal.name}] ${technicalMessage}`,
+              );
             }
           }
         }
@@ -932,15 +985,25 @@ export class HikvisionService {
             );
             faceIsNew = true;
           } catch (err: any) {
-            const message = err?.message ?? "Noma'lum xato";
-            if (!this.isAlreadyExistsError(message)) {
+            // isAlreadyExistsError texnik xabar (err.message) bilan tekshiriladi
+            const technicalMessage = err?.message ?? "Noma'lum xato";
+            if (!this.isAlreadyExistsError(technicalMessage)) {
               hadFatalError = true;
               tFailed++;
+              // Foydalanuvchi ko'radigan xato ro'yxatiga — tarjima qilingan matn
+              // (masalan: "Yuz rasmi terminal tomonidan tan olinmadi...")
+              const displayMessage =
+                err?.friendlyMessage ?? technicalMessage;
               errors.push({
                 employeeNo: employee.employeeNo,
                 name: employee.fullName,
-                reason: `${terminal.name}: ${message}`,
+                reason: `${terminal.name}: ${displayMessage}`,
               });
+              // Texnik tafsilotlar (errorCode, subStatusCode va h.k.)
+              // faqat serverning ichki logida qoladi — debug uchun
+              this.logger.error(
+                `[Yuz yuklash xatoligi | ${employee.employeeNo} @ ${terminal.name}] ${technicalMessage}`,
+              );
             }
           }
         }
