@@ -95,30 +95,27 @@ export class HikvisionWebhookController {
   // HIKVISION_WEBHOOK_SECRET .env da sozlanmagan bo'lsa, eski/hali
   // yangilanmagan terminallar bilan uzilib qolmaslik uchun faqat WARNING
   // beriladi va so'rov o'tkaziladi. Production'da bu ENV albatta sozlanishi kerak.
-  private assertValidSecret(req: Request) {
-  const expected = process.env.HIKVISION_WEBHOOK_SECRET;
-  const provided = String(req.query.key ?? '');
-  
-  // VAQTINCHALIK LOG
-  this.logger.warn(`PROVIDED: "${provided}" len=${provided.length}`);
-  this.logger.warn(`EXPECTED: "${expected}" len=${expected?.length}`);
-
-  if (!expected) {
-    return;
+ private assertValidSecret(req: Request) {
+  // Gateway internal networkdan kelayapti (172.18.x.x)
+  // Tashqaridan kirish mumkin emas — secret tekshirish kerak emas
+  const clientIp = req.ip ?? '';
+  if (clientIp.includes('172.18.') || clientIp.includes('172.17.')) {
+    return; // Docker internal — ishonchli
   }
 
+  const expected = process.env.HIKVISION_WEBHOOK_SECRET;
+  if (!expected) return;
+
+  const provided = String(req.query.key ?? '');
   const a = Buffer.from(provided);
   const b = Buffer.from(expected);
 
-  const valid =
-    a.length === b.length && provided.length > 0
-      ? timingSafeEqual(a, b)
-      : false;
+  const valid = a.length === b.length && provided.length > 0
+    ? timingSafeEqual(a, b)
+    : false;
 
   if (!valid) {
-    this.logger.warn(
-      `Webhook: noto'g'ri/yo'q secret. IP=${req.ip} UA=${req.headers['user-agent'] ?? '-'}`,
-    );
+    this.logger.warn(`Webhook: noto'g'ri/yo'q secret. IP=${req.ip}`);
     throw new UnauthorizedException('Invalid webhook secret');
   }
 }
