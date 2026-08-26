@@ -1,15 +1,21 @@
+# syntax=docker/dockerfile:1.7
 # ─── Build stage ────────────────────────────────────────────────────────────
 FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Dependencies (devDeps ham kerak — TypeScript build uchun)
+# Dependencies (devDeps ham kerak — TypeScript build va Prisma CLI uchun)
 COPY package*.json ./
-RUN npm ci --legacy-peer-deps
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --legacy-peer-deps
 
 COPY . .
 RUN DATABASE_URL=postgresql://dummy:dummy@localhost/dummy npx prisma generate
 RUN npm run build
+
+# devDependencies'ni endi kerak emas — tarmoqsiz, tez tozalash
+# (alohida "npm ci --omit=dev" bosqichidan ancha tezroq)
+RUN npm prune --omit=dev --legacy-peer-deps
 
 # ─── Production stage ────────────────────────────────────────────────────────
 FROM node:20-alpine AS production
@@ -18,21 +24,18 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
-# Faqat production dependencies
-COPY package*.json ./
-RUN npm ci --omit=dev --legacy-peer-deps && npm cache clean --force
-
-# Build artifacts
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/prisma ./prisma
-
-# node_modules dan prisma client ko'chirish
-COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
-COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
-
-# Uploads papkasi (volumes bilan mount qilinadi)
+# uploads papkasi va foydalanuvchini OLDIN yaratamiz — shunda COPY --chown
+# to'g'ridan-to'g'ri to'g'ri egalik bilan ko'chiradi, alohida "chown -R"
+# (avvalgi loglarda 271s / 473s yeb qo'ygan qadam) kerak bo'lmaydi
 RUN mkdir -p uploads && addgroup -S appgroup && adduser -S appuser -G appgroup
-RUN chown -R appuser:appgroup /app
+
+COPY --chown=appuser:appgroup --from=builder /app/node_modules ./node_modules
+COPY --chown=appuser:appgroup --from=builder /app/package*.json ./
+COPY --chown=appuser:appgroup --from=builder /app/dist ./dist
+COPY --chown=appuser:appgroup --from=builder /app/prisma ./prisma
+
+# uploads papkasini appuser'ga tegishli qilish (bo'sh papka — tez)
+RUN chown appuser:appgroup uploads
 
 USER appuser
 

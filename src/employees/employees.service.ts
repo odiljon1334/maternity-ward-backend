@@ -19,6 +19,7 @@ import archiver from 'archiver';
 import * as fs from 'fs';
 import * as path from 'path';
 import { processAndSavePhoto } from '../common/utils/image.util';
+import { UserStatus, Prisma } from '@prisma/client';
 
 // ─── Kirill → Lotin transliteratsiya ────────────────────────────────────────
 const CYR_TO_LAT: Record<string, string> = {
@@ -463,6 +464,9 @@ export class EmployeesService {
     return { fixed, skipped };
   }
 
+  // ──────────────────────────────────────────
+  // FIRE — xodimni bo'shatish (User ham bloklanadi, atomik)
+  // ──────────────────────────────────────────
   async fire(
     id: string,
     hospitalId: string,
@@ -472,22 +476,39 @@ export class EmployeesService {
   ) {
     const emp = await this.findOne(id, hospitalId);
 
-    const result = await this.prisma.employee.update({
-      where: { id },
-      data: {
-        firedAt: firedAt ? new Date(firedAt) : new Date(),
-        status: 'FIRED',
-        fireReason: fireReason ?? null,
-        fireNote: fireNote ?? null,
-      },
-    });
+    // Bajariladigan operatsiyalar ro'yxati — hammasi bitta transactionda
+    const ops: Prisma.PrismaPromise<any>[] = [
+      this.prisma.employee.update({
+        where: { id },
+        data: {
+          firedAt: firedAt ? new Date(firedAt) : new Date(),
+          status: 'FIRED',
+          fireReason: fireReason ?? null,
+          fireNote: fireNote ?? null,
+        },
+      }),
+    ];
+
+    if (emp.userId) {
+      ops.push(
+        this.prisma.user.update({
+          where: { id: emp.userId },
+          data: { status: UserStatus.INACTIVE },
+        }),
+      );
+    }
 
     if (emp.user?.role === 'DIRECTOR' && emp.hospitalId) {
-      await this.prisma.telegramSubscription.updateMany({
-        where: { hospitalId: emp.hospitalId, isActive: true },
-        data: { isActive: false },
-      });
+      ops.push(
+        this.prisma.telegramSubscription.updateMany({
+          where: { hospitalId: emp.hospitalId, isActive: true },
+          data: { isActive: false },
+        }),
+      );
     }
+
+    // Birinchi element — employee.update natijasi (o'zgarmadi)
+    const [result] = await this.prisma.$transaction(ops);
     return result;
   }
 
@@ -732,11 +753,16 @@ export class EmployeesService {
     };
   }
 
+  // ──────────────────────────────────────────
+  // REMOVE — xodimni butunlay o'chirish (User ham bloklanadi, atomik)
+  // ──────────────────────────────────────────
   async remove(id: string, hospitalId: string) {
     const emp = await this.findOne(id, hospitalId);
     const isDirector = emp.user?.role === 'DIRECTOR';
 
     // ─── Terminal dan o'chirish ───────────────────────────────────────────────
+    // Bu tashqi tarmoq chaqiruvi (Hikvision API), DB emas — shuning uchun
+    // $transaction ichiga kiritilmaydi, avvalgidek alohida bajariladi.
     if (emp.employeeNo) {
       const terminals = await this.prisma.hikTerminal.findMany({
         where: { hospitalId, isActive: true },
@@ -756,7 +782,20 @@ export class EmployeesService {
     }
     // ─────────────────────────────────────────────────────────────────────────
 
-    await this.prisma.$transaction([
+    // Bajariladigan DB operatsiyalari — hammasi bitta transactionda,
+    // shu jumladan User statusini bloklash (avval alohida bajarilardi)
+    const ops: Prisma.PrismaPromise<any>[] = [];
+
+    if (emp.userId) {
+      ops.push(
+        this.prisma.user.update({
+          where: { id: emp.userId },
+          data: { status: UserStatus.INACTIVE },
+        }),
+      );
+    }
+
+    ops.push(
       this.prisma.payrollRecord.deleteMany({ where: { employeeId: id } }),
       this.prisma.weeklyAttendanceStat.deleteMany({
         where: { employeeId: id },
@@ -764,14 +803,18 @@ export class EmployeesService {
       this.prisma.attendanceRecord.deleteMany({ where: { employeeId: id } }),
       this.prisma.schedule.deleteMany({ where: { employeeId: id } }),
       this.prisma.employee.delete({ where: { id } }),
-    ]);
+    );
 
     if (isDirector && emp.hospitalId) {
-      await this.prisma.telegramSubscription.updateMany({
-        where: { hospitalId: emp.hospitalId, isActive: true },
-        data: { isActive: false },
-      });
+      ops.push(
+        this.prisma.telegramSubscription.updateMany({
+          where: { hospitalId: emp.hospitalId, isActive: true },
+          data: { isActive: false },
+        }),
+      );
     }
+
+    await this.prisma.$transaction(ops);
 
     return { success: true, message: "Hodim o'chirildi" };
   }

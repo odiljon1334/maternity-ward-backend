@@ -6,6 +6,11 @@
 
 set -e  # Har qanday xatoda to'xtasin
 
+# BuildKit'ni yoqish — cache mount (npm ci uchun) va umuman
+# tezroq, parallel build shu orqali ishlaydi
+export DOCKER_BUILDKIT=1
+export COMPOSE_DOCKER_CLI_BUILD=1
+
 BACKEND_DIR="/home/maternit-backend/maternity-ward-backend"
 FRONTEND_DIR="/home/maternit-backend/maternity-ward-frontend"
 COMPOSE_FILE="$BACKEND_DIR/docker-compose.production.yml"
@@ -64,8 +69,14 @@ docker ps -a --format "{{.Names}}" | grep -i "maternity" | xargs -r docker rm -f
 success "Containerlar o'chirildi"
 
 # ── 4. Build ─────────────────────────────────────────────────
-log "4. Docker image build qilinmoqda (bu biroz vaqt oladi)..."
-docker compose -f docker-compose.production.yml --env-file .env.prod build --no-cache
+# DIQQAT: --no-cache olib tashlandi. Kod git reset --hard bilan
+# allaqachon yangilangan (2-qadam), shuning uchun Docker layer
+# cache "eski kod" muammosini keltirib chiqarmaydi — u fayllar
+# haqiqatan o'zgarganini avtomatik aniqlaydi va faqat kerakli
+# qatlamlarni qayta quradi. --no-cache har safar HAMMA narsani
+# (shu jumladan npm ci'ni ham) noldan bajarishga majburlar edi.
+log "4. Docker image build qilinmoqda..."
+docker compose -f docker-compose.production.yml --env-file .env.prod build
 success "Build tugadi"
 
 # ── 5. Start ─────────────────────────────────────────────────
