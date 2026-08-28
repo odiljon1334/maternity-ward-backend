@@ -52,12 +52,7 @@ export class HikvisionController {
     @Param('employeeNo') employeeNo: string,
     @UploadedFile() file: Express.Multer.File,
   ) {
-    return this.hikvision.addFacePicture(
-      devIndex,
-      employeeNo,
-      file.buffer,
-      file.mimetype,
-    );
+    return this.hikvision.addFacePicture(devIndex, employeeNo, file.buffer);
   }
 
   @Delete('devices/:devIndex/persons/:employeeNo/face')

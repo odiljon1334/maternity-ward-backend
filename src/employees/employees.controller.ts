@@ -129,14 +129,8 @@ export class EmployeesController {
   async lookup(
     @Query('fullName') fullName: string,
     @Query('birthDate') birthDate: string,
-    @Req() req: any,
   ) {
-    const hospitalId = req.user.hospitalId ?? '';
-    const result = await this.service.lookupByName(
-      fullName,
-      birthDate,
-      hospitalId,
-    );
+    const result = await this.service.lookupByName(fullName, birthDate);
     return { success: true, data: result };
   }
 
