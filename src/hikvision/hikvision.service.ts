@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios, { AxiosResponse } from 'axios';
+import sharp from 'sharp';
 import * as crypto from 'crypto';
 import FormData from 'form-data';
 import * as fs from 'fs';
@@ -519,28 +520,29 @@ export class HikvisionService {
     devIndex: string,
     employeeNo: string,
     imageBuffer: Buffer,
-    mimeType = 'image/jpeg',
   ) {
-    if (!devIndex) {
-      throw new Error('Hikvision devIndex is required');
-    }
-
-    if (!employeeNo) {
-      throw new Error('Hikvision employeeNo is required');
-    }
-
-    if (!imageBuffer || imageBuffer.length === 0) {
+    if (!devIndex) throw new Error('Hikvision devIndex is required');
+    if (!employeeNo) throw new Error('Hikvision employeeNo is required');
+    if (!imageBuffer || imageBuffer.length === 0)
       throw new Error('Hikvision face image is empty');
-    }
+
+    // Hikvision Gateway/terminal 1MB dan katta rasmni rad etadi →
+    // har doim 600x600 max, JPEG 80% ga compress qilamiz
+    const compressed = await sharp(imageBuffer)
+      .rotate()
+      .resize(600, 600, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 80, mozjpeg: false })
+      .toBuffer();
+
+    this.logger.log(
+      `Hikvision Face upload: employee=${employeeNo}, devIndex=${devIndex}, ` +
+        `original=${imageBuffer.length}b → compressed=${compressed.length}b`,
+    );
 
     const url = this.buildUrl('/ISAPI/Intelligent/FDLib/FaceDataRecord', {
       format: 'json',
       devIndex,
     });
-
-    this.logger.log(
-      `Hikvision Face upload: employee=${employeeNo}, devIndex=${devIndex}, size=${imageBuffer.length}`,
-    );
 
     const createForm = () => {
       const form = new FormData();
@@ -553,15 +555,13 @@ export class HikvisionService {
             faceLibType: 'blackFD',
           },
         }),
-        {
-          contentType: 'application/json',
-        },
+        { contentType: 'application/json' },
       );
 
-      form.append('FaceImage', imageBuffer, {
+      form.append('FaceImage', compressed, {
         filename: `${employeeNo}.jpg`,
-        contentType: mimeType,
-        knownLength: imageBuffer.length,
+        contentType: 'image/jpeg',
+        knownLength: compressed.length,
       });
 
       return form;
@@ -959,8 +959,7 @@ export class HikvisionService {
               hadFatalError = true;
               tFailed++;
               // Foydalanuvchi ko'radigan xato ro'yxatiga — tarjima qilingan matn
-              const displayMessage =
-                err?.friendlyMessage ?? technicalMessage;
+              const displayMessage = err?.friendlyMessage ?? technicalMessage;
               errors.push({
                 employeeNo: employee.employeeNo,
                 name: employee.fullName,
@@ -992,8 +991,7 @@ export class HikvisionService {
               tFailed++;
               // Foydalanuvchi ko'radigan xato ro'yxatiga — tarjima qilingan matn
               // (masalan: "Yuz rasmi terminal tomonidan tan olinmadi...")
-              const displayMessage =
-                err?.friendlyMessage ?? technicalMessage;
+              const displayMessage = err?.friendlyMessage ?? technicalMessage;
               errors.push({
                 employeeNo: employee.employeeNo,
                 name: employee.fullName,

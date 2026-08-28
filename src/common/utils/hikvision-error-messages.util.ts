@@ -38,11 +38,10 @@ const SUB_STATUS_MESSAGES: Record<string, string> = {
 
   // Bir nechta yuz aniqlangan (guruh surati bo'lishi mumkin)
   MultipleFacesDetected:
-    "Rasmda bir nechta yuz aniqlandi. Faqat bitta odamning yuzi tushirilgan rasm yuklang.",
+    'Rasmda bir nechta yuz aniqlandi. Faqat bitta odamning yuzi tushirilgan rasm yuklang.',
 
   // Rasm format/hajm/o'lcham talablariga mos emas
-  PictureFormatError:
-    "Rasm formati noto'g'ri. JPEG formatidagi rasm yuklang.",
+  PictureFormatError: "Rasm formati noto'g'ri. JPEG formatidagi rasm yuklang.",
   PictureSizeError:
     "Rasm hajmi yoki o'lchami talabga mos emas. Kichikroq (odatda 200KB dan kam) va standart o'lchamdagi rasm yuklang.",
   PictureResolutionError:
@@ -53,8 +52,7 @@ const SUB_STATUS_MESSAGES: Record<string, string> = {
     "Yuz sifati past baholandi (yorug'lik, burchak yoki to'siq sababli). Yaxshi yoritilgan, to'g'ridan tushirilgan rasm bilan qayta urinib ko'ring.",
 
   // Xodim allaqachon terminalda ro'yxatdan o'tgan
-  PersonAlreadyExist:
-    "Bu xodim terminalda allaqachon ro'yxatdan o'tgan.",
+  PersonAlreadyExist: "Bu xodim terminalda allaqachon ro'yxatdan o'tgan.",
 
   // Terminal xotirasi to'lgan
   DeviceStorageFull:
@@ -66,7 +64,7 @@ const STATUS_CODE_MESSAGES: Record<number, string> = {
   1: "So'rov muvaffaqiyatli emas.",
   2: "Terminalda kerakli ma'lumot topilmadi.",
   3: "Terminal band — biroz kutib qayta urinib ko'ring.",
-  4: "Terminalga ruxsat berilmadi. Login/parolni tekshiring.",
+  4: 'Terminalga ruxsat berilmadi. Login/parolni tekshiring.',
   5: "So'rov formati noto'g'ri.",
   6: "Yuborilgan ma'lumot (rasm) terminal talabiga mos emas.",
   7: "Terminal ichki xatoligi. Birozdan so'ng qayta urinib ko'ring.",
