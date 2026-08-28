@@ -559,6 +559,7 @@ export class HikvisionService {
 
     const MAX_RETRIES = 3;
     const RETRY_DELAY_MS = 2000;
+    let lastError: any;
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
@@ -573,6 +574,7 @@ export class HikvisionService {
         );
         return response.data;
       } catch (err: any) {
+        lastError = err;
         const isRetryable = /urlDownloadFail/i.test(err?.message ?? '');
         if (!isRetryable || attempt === MAX_RETRIES) throw err;
         this.logger.warn(
@@ -581,6 +583,7 @@ export class HikvisionService {
         await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
       }
     }
+    throw lastError;
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
