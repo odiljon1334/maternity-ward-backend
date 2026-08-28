@@ -526,8 +526,6 @@ export class HikvisionService {
     if (!imageBuffer || imageBuffer.length === 0)
       throw new Error('Hikvision face image is empty');
 
-    // Hikvision Gateway/terminal 1MB dan katta rasmni rad etadi →
-    // har doim 600x600 max, JPEG 80% ga compress qilamiz
     const compressed = await sharp(imageBuffer)
       .rotate()
       .resize(600, 600, { fit: 'inside', withoutEnlargement: true })
@@ -546,34 +544,43 @@ export class HikvisionService {
 
     const createForm = () => {
       const form = new FormData();
-
       form.append(
         'FaceDataRecord',
-        JSON.stringify({
-          FaceInfo: {
-            employeeNo,
-            faceLibType: 'blackFD',
-          },
-        }),
+        JSON.stringify({ FaceInfo: { employeeNo, faceLibType: 'blackFD' } }),
         { contentType: 'application/json' },
       );
-
       form.append('FaceImage', compressed, {
         filename: `${employeeNo}.jpg`,
         contentType: 'image/jpeg',
         knownLength: compressed.length,
       });
-
       return form;
     };
 
-    const response = await this.digestMultipartRequest('POST', url, createForm);
+    const MAX_RETRIES = 3;
+    const RETRY_DELAY_MS = 2000;
 
-    this.logger.log(
-      `Hikvision Face uploaded successfully: employee=${employeeNo}`,
-    );
-
-    return response.data;
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const response = await this.digestMultipartRequest(
+          'POST',
+          url,
+          createForm,
+        );
+        this.logger.log(
+          `Hikvision Face uploaded successfully: employee=${employeeNo}` +
+            (attempt > 1 ? ` (attempt ${attempt})` : ''),
+        );
+        return response.data;
+      } catch (err: any) {
+        const isRetryable = /urlDownloadFail/i.test(err?.message ?? '');
+        if (!isRetryable || attempt === MAX_RETRIES) throw err;
+        this.logger.warn(
+          `Face upload retry ${attempt}/${MAX_RETRIES}: employee=${employeeNo} — ${err.message}`,
+        );
+        await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+      }
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
