@@ -356,6 +356,7 @@ export class EmployeesService {
     });
   }
 
+  // ─── 2. updatePhoto — terminal sync to'liq qayta yozildi ─────────────────────
   async updatePhoto(id: string, imageBuffer: Buffer, hospitalId: string) {
     await this.findOne(id, hospitalId);
     const emp = await this.prisma.employee.findUnique({ where: { id } });
@@ -390,7 +391,7 @@ export class EmployeesService {
       data: updateData,
     });
 
-    // ─── Terminal sync ────────────────────────────────────────────────────────
+    // ─── Terminal sync ──────────────────────────────────────────────────────
     const employeeNo = updated.employeeNo;
     if (employeeNo) {
       const terminals = await this.prisma.hikTerminal.findMany({
@@ -399,11 +400,28 @@ export class EmployeesService {
 
       for (const terminal of terminals) {
         try {
-          await this.hikvision.addPerson(terminal.devIndex, {
-            employeeNo,
-            name: updated.fullName,
-          });
+          // 1. Eski yuzni o'chirish — yo'q bo'lsa ham davom etamiz
+          try {
+            await this.hikvision.deleteFacePicture(
+              terminal.devIndex,
+              employeeNo,
+            );
+          } catch {
+            // ignore: yuz hali yuklanmagan bo'lishi mumkin
+          }
 
+          // 2. Person qo'shish — allaqachon mavjud bo'lsa skip
+          try {
+            await this.hikvision.addPerson(terminal.devIndex, {
+              employeeNo,
+              name: updated.fullName,
+            });
+          } catch (err: any) {
+            if (!/alreadyexist/i.test(err?.message ?? '')) throw err;
+            // employeeNoAlreadyExist — normal, davom etamiz
+          }
+
+          // 3. Yangi yuzni yuklash (Buffer — URL emas)
           await this.hikvision.addFacePicture(
             terminal.devIndex,
             employeeNo,
@@ -419,8 +437,10 @@ export class EmployeesService {
           );
         }
       }
-      return updated;
     }
+    // ───────────────────────────────────────────────────────────────────────
+
+    return updated; // ← if bloki tashqarisida, har doim qaytadi
   }
 
   /** EMP-XXXXXX formatli eski employee numberlarni raqamli formatga o'tkazish */
@@ -563,11 +583,7 @@ export class EmployeesService {
   // ──────────────────────────────────────────
   // LOOKUP — ism + tug'ilgan sana bo'yicha cross-hospital qidiruv
   // ──────────────────────────────────────────
-  async lookupByName(
-    fullName: string,
-    birthDate?: string,
-    currentHospitalId?: string,
-  ): Promise<any[]> {
+  async lookupByName(fullName: string, birthDate?: string): Promise<any[]> {
     if (!fullName || fullName.trim().length < 3) return [];
 
     const nameParts = fullName
