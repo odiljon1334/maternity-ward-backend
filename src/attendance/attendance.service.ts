@@ -642,7 +642,20 @@ export class AttendanceService {
     return this.getEmployeeAttendance(user.employee.id, month, year);
   }
 
-  async getEmployeeAttendance(employeeId: string, month: number, year: number) {
+  /**
+   * Xodimning oylik davomat tarixi.
+   *
+   * `includePlanned: true` bo'lsa — davomat yozuvi bo'lmagan, lekin GRAFIGI
+   * bor kunlar ham qaytariladi. Busiz "Kelishi kerak / Ketishi kerak"
+   * ustunlari bo'sh qolardi: AttendanceRecord faqat terminal xodimni
+   * tanigandagina yaratiladi, grafik esa undan oldin mavjud bo'ladi.
+   */
+  async getEmployeeAttendance(
+    employeeId: string,
+    month: number,
+    year: number,
+    opts: { includePlanned?: boolean } = {},
+  ) {
     const start = DateUtil.startOfMonth(year, month);
     const end = DateUtil.endOfMonth(year, month);
 
@@ -652,20 +665,105 @@ export class AttendanceService {
       orderBy: { workDate: 'asc' },
     });
 
+    let rows: any[] = records;
+
+    if (opts.includePlanned) {
+      const schedules = await this.prisma.schedule.findMany({
+        where: { employeeId, date: { gte: start, lte: end } },
+        include: { shift: true },
+        orderBy: { date: 'asc' },
+      });
+
+      const recordDays = new Set(
+        records.map((r) => r.workDate.getTime()),
+      );
+      const todayStart = DateUtil.startOfDay(new Date()).getTime();
+
+      const planned = schedules
+        .filter((sch) => !recordDays.has(sch.date.getTime()))
+        .map((sch) => {
+          const isWorking = sch.status === 'WORKING';
+          // Kelmagan deb belgilash faqat o'tgan kunlar uchun.
+          // Bugungi va kelgusi kunlar — hali "reja".
+          const isPast = sch.date.getTime() < todayStart;
+          const status = !isWorking
+            ? this.scheduleStatusToAttendance(sch.status)
+            : isPast
+              ? 'ABSENT'
+              : 'PLANNED';
+
+          return {
+            id: `planned-${sch.id}`,
+            employeeId,
+            scheduleId: sch.id,
+            deviceId: null,
+            rawCheckInTime: null,
+            rawCheckOutTime: null,
+            checkIn: null,
+            checkOut: null,
+            lunchOut: null,
+            lunchIn: null,
+            lunchLateMin: 0,
+            coffeeOut: null,
+            coffeeIn: null,
+            coffeeLateMin: 0,
+            expectedCheckIn:
+              isWorking && sch.shift
+                ? DateUtil.buildDateTime(sch.date, sch.shift.startTime)
+                : null,
+            expectedCheckOut:
+              isWorking && sch.shift
+                ? sch.shift.isOvernight
+                  ? DateUtil.buildDateTime(
+                      dayjs(sch.date).add(1, 'day').toDate(),
+                      sch.shift.endTime,
+                    )
+                  : DateUtil.buildDateTime(sch.date, sch.shift.endTime)
+                : null,
+            status,
+            lateMinutes: 0,
+            earlyLeaveMin: 0,
+            overtimeMinutes: 0,
+            netWorkMin: 0,
+            workDate: sch.date,
+            note: sch.note ?? null,
+            breaks: [],
+            createdAt: sch.date,
+            updatedAt: sch.date,
+            schedule: sch,
+          };
+        });
+
+      rows = [...records, ...planned].sort(
+        (a, b) => a.workDate.getTime() - b.workDate.getTime(),
+      );
+    }
+
+    // Ish kuni deb hisoblanadigan statuslar (dam olish/ta'til/reja kirmaydi)
+    const WORKED = ['PRESENT', 'LATE', 'EARLY_LEAVE', 'LATE_EARLY'];
+    const expected = rows.filter(
+      (r) => WORKED.includes(r.status) || r.status === 'ABSENT',
+    );
+
     const stats = {
-      totalDays: records.length,
-      present: records.filter((r) => r.status === 'PRESENT').length,
-      late: records.filter((r) => ['LATE', 'LATE_EARLY'].includes(r.status))
+      // ⚠️ "Jami kun" = ishlashi kerak bo'lgan kunlar (bugungacha).
+      //    Kelgusi rejadagi kunlar (PLANNED) va dam olish kunlari kirmaydi —
+      //    aks holda foizlar noto'g'ri chiqadi.
+      totalDays: expected.length,
+      present: rows.filter((r) => r.status === 'PRESENT').length,
+      late: rows.filter((r) => ['LATE', 'LATE_EARLY'].includes(r.status))
         .length,
-      absent: records.filter((r) => r.status === 'ABSENT').length,
-      earlyLeave: records.filter((r) =>
+      absent: rows.filter((r) => r.status === 'ABSENT').length,
+      earlyLeave: rows.filter((r) =>
         ['EARLY_LEAVE', 'LATE_EARLY'].includes(r.status),
       ).length,
+      // Kelgusidagi rejalashtirilgan ish kunlari
+      planned: rows.filter((r) => r.status === 'PLANNED').length,
       totalLateMin: records.reduce((s, r) => s + r.lateMinutes, 0),
       totalOvertimeMin: records.reduce((s, r) => s + r.overtimeMinutes, 0),
     };
 
-    return { records, stats };
+    return { records: rows, stats };
   }
 
   // ──────────────────────────────────────────────────────────────────────────────

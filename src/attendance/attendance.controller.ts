@@ -62,6 +62,9 @@ export class AttendanceController {
       id,
       +month || new Date().getMonth() + 1,
       +year || new Date().getFullYear(),
+      // Grafigi bor, lekin hali davomat yozuvi yo'q kunlar ham ko'rsatiladi —
+      // "Kelishi kerak / Ketishi kerak" ustunlari shundan to'ladi
+      { includePlanned: true },
     );
   }
 
