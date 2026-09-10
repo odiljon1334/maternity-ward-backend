@@ -121,11 +121,15 @@ export class AttendanceController {
     @CurrentUser('sub') userId: string,
     @Body('lat') lat: string,
     @Body('lng') lng: string,
+    // Brauzerdan kelgan o'lchov aniqligi (metr). Yuborilmasa tekshirilmaydi —
+    // eski mobil klientlar bilan uzilib qolmaslik uchun
+    @Body('accuracy') accuracy?: string,
   ) {
     return this.service.setEmployeeGps(
       userId,
       parseFloat(lat),
       parseFloat(lng),
+      accuracy !== undefined ? parseFloat(accuracy) : undefined,
     );
   }
 

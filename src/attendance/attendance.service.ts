@@ -42,6 +42,13 @@ const TZ = process.env.TIMEZONE || 'Asia/Tashkent';
  */
 const MIN_CHECKOUT_GAP_MIN = 120;
 
+/**
+ * Xodimning ish joyi koordinatasini saqlash uchun ruxsat etilgan eng past
+ * aniqlik (metr). Bundan yomon o'lchov Wi-Fi/antenna orqali topilgan taxminiy
+ * nuqta bo'ladi va ish joyini noto'g'ri belgilab qo'yadi.
+ */
+const EMPLOYEE_GPS_MAX_ACCURACY_M = 75;
+
 /** Vaqt-based tushlik aniqlash oynasi (±daqiqa) */
 const LUNCH_WINDOW_MIN = 45;
 
@@ -169,6 +176,41 @@ export class AttendanceService {
       attendance,
       deviceId,
     });
+  }
+
+  /**
+   * Dashboarddagi "Real-time keldi/ketdi" kartochkasiga signal yuboradi.
+   * Xatolik bo'lsa davomat yozuvi buzilmasligi uchun yutiladi.
+   */
+  private emitAttendanceEvent(
+    employee: any,
+    action: 'CHECK_IN' | 'CHECK_OUT',
+    attendance: any,
+  ) {
+    try {
+      this.locationGateway.broadcastAttendance(employee.hospitalId ?? null, {
+        id: `${attendance.id}-${action}`,
+        action,
+        at: (action === 'CHECK_IN'
+          ? attendance.checkIn
+          : attendance.checkOut
+        )?.toISOString?.(),
+        employee: {
+          id: employee.id,
+          fullName: employee.fullName,
+          photoUrl: employee.photoUrl ?? null,
+          department: employee.department?.name ?? null,
+          position: employee.position?.name ?? null,
+        },
+        lateMinutes: attendance.lateMinutes ?? 0,
+        earlyLeaveMin: attendance.earlyLeaveMin ?? 0,
+        status: attendance.status,
+      });
+    } catch (e) {
+      this.logger.warn(
+        `attendance:event yuborilmadi: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
   }
 
   // ──────────────────────────────────────────────────────────────────────────────
@@ -301,6 +343,8 @@ export class AttendanceService {
       true,
     ); // isCheckIn=true
 
+    this.emitAttendanceEvent(employee, 'CHECK_IN', attendance);
+
     return {
       employee,
       action: TerminalEventType.CHECK_IN,
@@ -367,6 +411,8 @@ export class AttendanceService {
       earlyLeaveMin,
       overtimeMinutes,
     );
+
+    this.emitAttendanceEvent(employee, 'CHECK_OUT', updated);
 
     return {
       employee,
@@ -1133,7 +1179,25 @@ export class AttendanceService {
     userId: string,
     lat: number,
     lng: number,
+    accuracyM?: number,
   ): Promise<{ saved: boolean; alreadySet: boolean }> {
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      throw new BadRequestException("Joylashuv koordinatalari noto'g'ri");
+    }
+
+    // ⚠️ Telefon birinchi o'lchovni Wi-Fi/uyali antenna orqali beradi —
+    //    aniqlik 500-3000 m bo'lishi mumkin. Bunday qiymat ish joyi sifatida
+    //    saqlansa, xodim ish joyida turgan bo'lsa ham "uzoqda" hisoblanadi.
+    if (
+      accuracyM !== undefined &&
+      Number.isFinite(accuracyM) &&
+      accuracyM > EMPLOYEE_GPS_MAX_ACCURACY_M
+    ) {
+      throw new BadRequestException(
+        `Joylashuv aniqligi yetarli emas (±${Math.round(accuracyM)}m). ` +
+          `Ochiq joyga chiqib qayta urinib ko'ring (±${EMPLOYEE_GPS_MAX_ACCURACY_M}m dan yaxshi bo'lishi kerak).`,
+      );
+    }
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       include: { employee: true },
@@ -1364,6 +1428,8 @@ export class AttendanceService {
         .notifyMobileCheckin(employee, 'CHECK_IN', attendance, selfieBuffer)
         .catch((e) => this.logger.warn(`Telegram notify failed: ${e.message}`));
 
+      this.emitAttendanceEvent(employee, 'CHECK_IN', attendance);
+
       return { action: 'CHECK_IN' as const, attendance };
     }
 
@@ -1454,6 +1520,8 @@ export class AttendanceService {
       this.telegram
         .notifyMobileCheckin(employee, 'CHECK_OUT', attendance, selfieBuffer)
         .catch((e) => this.logger.warn(`Telegram notify failed: ${e.message}`));
+
+      this.emitAttendanceEvent(employee, 'CHECK_OUT', attendance);
 
       return { action: 'CHECK_OUT' as const, attendance };
     }

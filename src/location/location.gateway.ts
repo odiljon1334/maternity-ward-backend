@@ -79,4 +79,19 @@ export class LocationGateway
       .emit('location:remove', { userId });
     this.server.to('super-admins').emit('location:remove', { userId });
   }
+
+  /**
+   * Terminal yoki mobil ilova orqali kelgan/ketgan xodim — dashboarddagi
+   * "Real-time keldi/ketdi" kartochkasi uchun.
+   *
+   * `server` hali ko'tarilmagan bo'lishi mumkin (masalan test muhitida yoki
+   * ishga tushish paytida) — shuning uchun himoyalangan chaqiruv.
+   */
+  broadcastAttendance(hospitalId: string | null, data: object) {
+    if (!this.server) return;
+    if (hospitalId) {
+      this.server.to(`hospital:${hospitalId}`).emit('attendance:event', data);
+    }
+    this.server.to('super-admins').emit('attendance:event', data);
+  }
 }
