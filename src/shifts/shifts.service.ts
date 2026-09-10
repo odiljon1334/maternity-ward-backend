@@ -1,15 +1,35 @@
 import {
   Injectable,
+  BadRequestException,
   ConflictException,
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateShiftDto } from './dto/create-shift.dto';
+import { ResolveShiftDto } from './dto/resolve-shift.dto';
 import { calcAutoLunch } from '../common/utils/shift.util';
 
 @Injectable()
 export class ShiftsService {
   constructor(private readonly prisma: PrismaService) {}
+
+  /**
+   * hospitalId majburiy bo'lgan amallar uchun tekshiruv.
+   *
+   * ⚠️ tsconfig da `strictNullChecks: false` — shuning uchun controller
+   * `resolveHospitalId(...)!` orqali null uzatsa TypeScript ogohlantirmaydi,
+   * va Prisma tushunarsiz 500 xato beradi. Bu yerda tushunarli 400 qaytaramiz.
+   * (SUPER_ADMIN da JWT hospitalId null bo'ladi, UI kasalxona tanlamagan
+   * bo'lsa targetHospitalId ham yuborilmaydi.)
+   */
+  private requireHospitalId(hospitalId: string | null | undefined): string {
+    if (!hospitalId) {
+      throw new BadRequestException(
+        "Kasalxona tanlanmagan. Yuqoridagi ro'yxatdan kasalxonani tanlang.",
+      );
+    }
+    return hospitalId;
+  }
 
   findAll(hospitalId: string | null) {
     return this.prisma.shiftTemplate.findMany({
@@ -27,6 +47,8 @@ export class ShiftsService {
   }
 
   async create(dto: CreateShiftDto, hospitalId: string) {
+    hospitalId = this.requireHospitalId(hospitalId);
+
     const exists = await this.prisma.shiftTemplate.findFirst({
       where: { hospitalId, name: dto.name },
     });
@@ -52,13 +74,30 @@ export class ShiftsService {
    * unique cheklov (hospitalId + name) tufayli 409 Conflict chiqishi mumkin.
    * Bu metod o'sha poyga holatini serverda hal qiladi.
    */
-  async resolve(dto: CreateShiftDto, hospitalId: string) {
+  async resolve(dto: ResolveShiftDto, hospitalId: string | null) {
     const startTime = dto.startTime.slice(0, 5);
     const endTime = dto.endTime.slice(0, 5);
 
+    // employeeId dtodan ajratiladi — u ShiftTemplate maydoni emas
+    const { employeeId, ...shiftData } = dto;
+
+    // 0. Kasalxonani aniqlash.
+    //    JWT dagi hospitalId SUPER_ADMIN uchun null, targetHospitalId esa
+    //    UI da kasalxona tanlanmagan bo'lsa yuborilmaydi. Bunday holatda
+    //    xodimning o'zidan aniqlaymiz — bu eng ishonchli manba.
+    let hospId = hospitalId;
+    if (!hospId && employeeId) {
+      const emp = await this.prisma.employee.findUnique({
+        where: { id: employeeId },
+        select: { hospitalId: true },
+      });
+      hospId = emp?.hospitalId ?? null;
+    }
+    hospId = this.requireHospitalId(hospId);
+
     // 1. Ayni vaqtli smen bormi?
     const existing = await this.prisma.shiftTemplate.findFirst({
-      where: { hospitalId, type: dto.type, startTime, endTime },
+      where: { hospitalId: hospId, type: dto.type, startTime, endTime },
     });
     if (existing) return existing;
 
@@ -75,12 +114,12 @@ export class ShiftsService {
       try {
         return await this.prisma.shiftTemplate.create({
           data: {
-            ...dto,
+            ...shiftData,
             name,
             startTime,
             endTime,
             isOvernight,
-            hospitalId,
+            hospitalId: hospId,
             ...autoLunch,
           },
         });
@@ -105,6 +144,8 @@ export class ShiftsService {
 
   /** Default DAYTIME + NIGHTTIME smenlarini upsert qilish */
   async seed(hospitalId: string) {
+    hospitalId = this.requireHospitalId(hospitalId);
+
     const defaults = [
       {
         name: 'Kunduzgi smen',
