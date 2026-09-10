@@ -62,6 +62,9 @@ export class AttendanceController {
       id,
       +month || new Date().getMonth() + 1,
       +year || new Date().getFullYear(),
+      // Grafigi bor, lekin hali davomat yozuvi yo'q kunlar ham ko'rsatiladi —
+      // "Kelishi kerak / Ketishi kerak" ustunlari shundan to'ladi
+      { includePlanned: true },
     );
   }
 
@@ -118,11 +121,15 @@ export class AttendanceController {
     @CurrentUser('sub') userId: string,
     @Body('lat') lat: string,
     @Body('lng') lng: string,
+    // Brauzerdan kelgan o'lchov aniqligi (metr). Yuborilmasa tekshirilmaydi —
+    // eski mobil klientlar bilan uzilib qolmaslik uchun
+    @Body('accuracy') accuracy?: string,
   ) {
     return this.service.setEmployeeGps(
       userId,
       parseFloat(lat),
       parseFloat(lng),
+      accuracy !== undefined ? parseFloat(accuracy) : undefined,
     );
   }
 

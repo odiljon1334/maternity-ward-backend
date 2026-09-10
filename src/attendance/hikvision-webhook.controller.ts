@@ -71,12 +71,25 @@ export class HikvisionWebhookController {
       const result = await this.attendanceService.processHikvisionEvent(event);
 
       if (result?.notifyTelegram) {
-        await this.telegramService.notifyAttendance(
-          result.employee,
-          result.action,
-          result.attendance,
-          parsed.snapshotBytes,
-        );
+        // ⚠️ Telegram yuborishni KUTMAYMIZ.
+        //
+        // Ilgari `await` qilingan edi: har bir obunachi uchun rasm yuklash
+        // 1-3 soniya olishi mumkin, 5 ta obunachida webhook javobi 15
+        // soniyagacha kechikardi. Terminal esa javobni kutmay qayta
+        // urinadi — natijada xabarlar kech va takror kelardi.
+        // Endi terminalga darhol javob beramiz, xabar fonda ketadi.
+        void this.telegramService
+          .notifyAttendance(
+            result.employee,
+            result.action,
+            result.attendance,
+            parsed.snapshotBytes,
+          )
+          .catch((e) =>
+            this.logger.warn(
+              `Telegram notify failed: ${e instanceof Error ? e.message : String(e)}`,
+            ),
+          );
       }
 
       return { status: 'ok' };

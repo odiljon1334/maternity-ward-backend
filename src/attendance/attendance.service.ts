@@ -4,7 +4,11 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { AttendanceStatus, TerminalEventType } from '@prisma/client';
+import {
+  AttendanceStatus,
+  ScheduleStatus,
+  TerminalEventType,
+} from '@prisma/client';
 import dayjs from 'dayjs';
 import type { Dayjs } from 'dayjs';
 import utc from 'dayjs/plugin/utc';
@@ -37,6 +41,13 @@ const TZ = process.env.TIMEZONE || 'Asia/Tashkent';
  * Bu qiymatdan kam bo'lsa — terminal dublikati sifatida ignore qilinadi.
  */
 const MIN_CHECKOUT_GAP_MIN = 120;
+
+/**
+ * Xodimning ish joyi koordinatasini saqlash uchun ruxsat etilgan eng past
+ * aniqlik (metr). Bundan yomon o'lchov Wi-Fi/antenna orqali topilgan taxminiy
+ * nuqta bo'ladi va ish joyini noto'g'ri belgilab qo'yadi.
+ */
+const EMPLOYEE_GPS_MAX_ACCURACY_M = 75;
 
 /** Vaqt-based tushlik aniqlash oynasi (±daqiqa) */
 const LUNCH_WINDOW_MIN = 45;
@@ -137,9 +148,14 @@ export class AttendanceService {
     const resolvedType =
       terminalEventType ?? this.inferEventType(attendance, eventDate, shift);
 
+    // Diagnostika: terminal YUBORGAN xom vaqt va biz TUSHUNGAN vaqt yonma-yon.
+    // Ikkalasi mos kelmasa (masalan 5 soat farq) — terminal soati yoki
+    // timezone sozlamasi noto'g'ri, va xodim kech kelgan bo'lib ko'rinadi.
     this.logger.log(
       `${employee.fullName} | type=${resolvedType} | ` +
-        `explicit=${terminalEventType ?? 'none'} | time=${eventDate.toISOString()}`,
+        `explicit=${terminalEventType ?? 'none'} | ` +
+        `raw="${eventTime ?? 'yo\'q'}" | ` +
+        `local=${tzDate.format('YYYY-MM-DD HH:mm:ss')} (${TZ})`,
     );
 
     // 6. AttendanceEvent (audit log) — har doim saqlanadi
@@ -165,6 +181,41 @@ export class AttendanceService {
       attendance,
       deviceId,
     });
+  }
+
+  /**
+   * Dashboarddagi "Real-time keldi/ketdi" kartochkasiga signal yuboradi.
+   * Xatolik bo'lsa davomat yozuvi buzilmasligi uchun yutiladi.
+   */
+  private emitAttendanceEvent(
+    employee: any,
+    action: 'CHECK_IN' | 'CHECK_OUT',
+    attendance: any,
+  ) {
+    try {
+      this.locationGateway.broadcastAttendance(employee.hospitalId ?? null, {
+        id: `${attendance.id}-${action}`,
+        action,
+        at: (action === 'CHECK_IN'
+          ? attendance.checkIn
+          : attendance.checkOut
+        )?.toISOString?.(),
+        employee: {
+          id: employee.id,
+          fullName: employee.fullName,
+          photoUrl: employee.photoUrl ?? null,
+          department: employee.department?.name ?? null,
+          position: employee.position?.name ?? null,
+        },
+        lateMinutes: attendance.lateMinutes ?? 0,
+        earlyLeaveMin: attendance.earlyLeaveMin ?? 0,
+        status: attendance.status,
+      });
+    } catch (e) {
+      this.logger.warn(
+        `attendance:event yuborilmadi: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
   }
 
   // ──────────────────────────────────────────────────────────────────────────────
@@ -297,6 +348,8 @@ export class AttendanceService {
       true,
     ); // isCheckIn=true
 
+    this.emitAttendanceEvent(employee, 'CHECK_IN', attendance);
+
     return {
       employee,
       action: TerminalEventType.CHECK_IN,
@@ -363,6 +416,8 @@ export class AttendanceService {
       earlyLeaveMin,
       overtimeMinutes,
     );
+
+    this.emitAttendanceEvent(employee, 'CHECK_OUT', updated);
 
     return {
       employee,
@@ -638,7 +693,20 @@ export class AttendanceService {
     return this.getEmployeeAttendance(user.employee.id, month, year);
   }
 
-  async getEmployeeAttendance(employeeId: string, month: number, year: number) {
+  /**
+   * Xodimning oylik davomat tarixi.
+   *
+   * `includePlanned: true` bo'lsa — davomat yozuvi bo'lmagan, lekin GRAFIGI
+   * bor kunlar ham qaytariladi. Busiz "Kelishi kerak / Ketishi kerak"
+   * ustunlari bo'sh qolardi: AttendanceRecord faqat terminal xodimni
+   * tanigandagina yaratiladi, grafik esa undan oldin mavjud bo'ladi.
+   */
+  async getEmployeeAttendance(
+    employeeId: string,
+    month: number,
+    year: number,
+    opts: { includePlanned?: boolean } = {},
+  ) {
     const start = DateUtil.startOfMonth(year, month);
     const end = DateUtil.endOfMonth(year, month);
 
@@ -648,20 +716,105 @@ export class AttendanceService {
       orderBy: { workDate: 'asc' },
     });
 
+    let rows: any[] = records;
+
+    if (opts.includePlanned) {
+      const schedules = await this.prisma.schedule.findMany({
+        where: { employeeId, date: { gte: start, lte: end } },
+        include: { shift: true },
+        orderBy: { date: 'asc' },
+      });
+
+      const recordDays = new Set(
+        records.map((r) => r.workDate.getTime()),
+      );
+      const todayStart = DateUtil.startOfDay(new Date()).getTime();
+
+      const planned = schedules
+        .filter((sch) => !recordDays.has(sch.date.getTime()))
+        .map((sch) => {
+          const isWorking = sch.status === 'WORKING';
+          // Kelmagan deb belgilash faqat o'tgan kunlar uchun.
+          // Bugungi va kelgusi kunlar — hali "reja".
+          const isPast = sch.date.getTime() < todayStart;
+          const status = !isWorking
+            ? this.scheduleStatusToAttendance(sch.status)
+            : isPast
+              ? 'ABSENT'
+              : 'PLANNED';
+
+          return {
+            id: `planned-${sch.id}`,
+            employeeId,
+            scheduleId: sch.id,
+            deviceId: null,
+            rawCheckInTime: null,
+            rawCheckOutTime: null,
+            checkIn: null,
+            checkOut: null,
+            lunchOut: null,
+            lunchIn: null,
+            lunchLateMin: 0,
+            coffeeOut: null,
+            coffeeIn: null,
+            coffeeLateMin: 0,
+            expectedCheckIn:
+              isWorking && sch.shift
+                ? DateUtil.buildDateTime(sch.date, sch.shift.startTime)
+                : null,
+            expectedCheckOut:
+              isWorking && sch.shift
+                ? sch.shift.isOvernight
+                  ? DateUtil.buildDateTime(
+                      dayjs(sch.date).add(1, 'day').toDate(),
+                      sch.shift.endTime,
+                    )
+                  : DateUtil.buildDateTime(sch.date, sch.shift.endTime)
+                : null,
+            status,
+            lateMinutes: 0,
+            earlyLeaveMin: 0,
+            overtimeMinutes: 0,
+            netWorkMin: 0,
+            workDate: sch.date,
+            note: sch.note ?? null,
+            breaks: [],
+            createdAt: sch.date,
+            updatedAt: sch.date,
+            schedule: sch,
+          };
+        });
+
+      rows = [...records, ...planned].sort(
+        (a, b) => a.workDate.getTime() - b.workDate.getTime(),
+      );
+    }
+
+    // Ish kuni deb hisoblanadigan statuslar (dam olish/ta'til/reja kirmaydi)
+    const WORKED = ['PRESENT', 'LATE', 'EARLY_LEAVE', 'LATE_EARLY'];
+    const expected = rows.filter(
+      (r) => WORKED.includes(r.status) || r.status === 'ABSENT',
+    );
+
     const stats = {
-      totalDays: records.length,
-      present: records.filter((r) => r.status === 'PRESENT').length,
-      late: records.filter((r) => ['LATE', 'LATE_EARLY'].includes(r.status))
+      // ⚠️ "Jami kun" = ishlashi kerak bo'lgan kunlar (bugungacha).
+      //    Kelgusi rejadagi kunlar (PLANNED) va dam olish kunlari kirmaydi —
+      //    aks holda foizlar noto'g'ri chiqadi.
+      totalDays: expected.length,
+      present: rows.filter((r) => r.status === 'PRESENT').length,
+      late: rows.filter((r) => ['LATE', 'LATE_EARLY'].includes(r.status))
         .length,
-      absent: records.filter((r) => r.status === 'ABSENT').length,
-      earlyLeave: records.filter((r) =>
+      absent: rows.filter((r) => r.status === 'ABSENT').length,
+      earlyLeave: rows.filter((r) =>
         ['EARLY_LEAVE', 'LATE_EARLY'].includes(r.status),
       ).length,
+      // Kelgusidagi rejalashtirilgan ish kunlari
+      planned: rows.filter((r) => r.status === 'PLANNED').length,
       totalLateMin: records.reduce((s, r) => s + r.lateMinutes, 0),
       totalOvertimeMin: records.reduce((s, r) => s + r.overtimeMinutes, 0),
     };
 
-    return { records, stats };
+    return { records: rows, stats };
   }
 
   // ──────────────────────────────────────────────────────────────────────────────
@@ -674,8 +827,53 @@ export class AttendanceService {
   }
 
   // ──────────────────────────────────────────────────────────────────────────────
+  // PRIVATE: Grafik statusi → Davomat statusi
+  // ──────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Xodimning o'sha kundagi grafik statusiga qarab davomat statusini aniqlaydi.
+   *
+   * ⚠️ Bu funksiya "Grafik yo'q" bug'ini hal qiladi:
+   * ilgari faqat WORKING yozuvlar hisobga olinardi, shuning uchun
+   * dam olish / ta'til / kasallik kunidagi xodim "Grafik yo'q" bo'lib ko'rinardi.
+   */
+  private scheduleStatusToAttendance(status: ScheduleStatus): string {
+    switch (status) {
+      case 'DAY_OFF':
+        return 'DAY_OFF';
+      case 'VACATION':
+        return 'VACATION';
+      case 'SICK':
+        return 'SICK';
+      case 'HOLIDAY':
+        return 'HOLIDAY';
+      case 'WORKING':
+      default:
+        // Grafik bo'yicha ishlashi kerak edi, lekin davomat yozuvi yo'q
+        return 'ABSENT';
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────────
   // PUBLIC: DAILY ATTENDANCE
   // ──────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Kunlik davomat ro'yxati uchun xodim maydonlari.
+   *
+   * ⚡ Ilgari butun Employee yozuvi (pasport, manzil, maosh, GPS...) qaytarilardi
+   *    — 349 xodim × har 60 soniyada. Frontend esa faqat shu 5 maydonni
+   *    ishlatadi. Javob hajmi bir necha barobar kichrayadi.
+   */
+  private static readonly DAILY_EMPLOYEE_SELECT = {
+    id: true,
+    fullName: true,
+    photoUrl: true,
+    employeeNo: true,
+    departmentId: true,
+    department: { select: { id: true, name: true } },
+    position: { select: { id: true, name: true } },
+  } as const;
 
   async getDailyAttendance(
     date: string,
@@ -683,7 +881,11 @@ export class AttendanceService {
     hospitalId?: string,
   ) {
     const workDate = DateUtil.startOfDay(date);
-    const weekend = this.isWeekend(workDate);
+
+    // ⚠️ Shanba/Yakshanba uchun alohida qoida yo'q — kasalxonada smena
+    //    grafigi yagona haqiqat manbai. Ilgari dam olish kunida grafigi
+    //    WORKING bo'lgan, lekin kelmagan xodimlar ro'yxatdan butunlay
+    //    tushib qolardi.
 
     const empFilter: any = { firedAt: null };
     if (hospitalId) empFilter.hospitalId = hospitalId;
@@ -693,7 +895,7 @@ export class AttendanceService {
     const records = await this.prisma.attendanceRecord.findMany({
       where: { workDate, employee: empFilter },
       include: {
-        employee: { include: { department: true, position: true } },
+        employee: { select: AttendanceService.DAILY_EMPLOYEE_SELECT },
         schedule: { include: { shift: true } },
         breaks: true,
       },
@@ -702,83 +904,34 @@ export class AttendanceService {
 
     const attendedIds = new Set(records.map((r) => r.employeeId));
 
-    // 2. Dam olish kuni bo'lsa — virtual ABSENT yaratmaymiz
-    //    Faqat haqiqiy kelganlarni qaytaramiz
-    if (weekend) {
-      return records.sort((a, b) =>
-        a.employee.fullName.localeCompare(b.employee.fullName),
-      );
-    }
-
-    // 3. Ish kuni — grafigi bor lekin kelmagan xodimlar (virtual ABSENT)
+    // 2. Grafigi bor, lekin davomat yozuvi yo'q xodimlar.
+    //
+    //    ⚠️ MUHIM: bu yerda `status: 'WORKING'` filtri YO'Q.
+    //    Ilgari faqat WORKING yozuvlar olinardi, natijada dam olish (DAY_OFF),
+    //    ta'til (VACATION), kasallik (SICK) va bayram (HOLIDAY) kunidagi xodim
+    //    quyidagi 4-bosqichga tushib "Grafik yo'q" bo'lib ko'rinardi.
+    //    Endi grafik statusi to'g'ridan-to'g'ri davomat statusiga o'giriladi.
     const scheduledMissing = await this.prisma.schedule.findMany({
       where: {
         date: workDate,
-        status: 'WORKING',
         employeeId: { notIn: [...attendedIds] },
         employee: empFilter,
       },
       include: {
         shift: true,
-        employee: { include: { department: true, position: true } },
+        employee: { select: AttendanceService.DAILY_EMPLOYEE_SELECT },
       },
     });
 
-    const absentVirtual = scheduledMissing.map((sch) => ({
-      id: `absent-${sch.employeeId}`,
-      employeeId: sch.employeeId,
-      scheduleId: sch.id,
-      deviceId: null,
-      rawCheckInTime: null,
-      rawCheckOutTime: null,
-      checkIn: null,
-      checkOut: null,
-      lunchOut: null,
-      lunchIn: null,
-      lunchLateMin: 0,
-      coffeeOut: null,
-      coffeeIn: null,
-      coffeeLateMin: 0,
-      expectedCheckIn: sch.shift
-        ? DateUtil.buildDateTime(workDate, sch.shift.startTime)
-        : new Date(workDate.getTime() + 8 * 3600 * 1000),
-      expectedCheckOut: sch.shift
-        ? sch.shift.isOvernight
-          ? DateUtil.buildDateTime(
-              dayjs(workDate).add(1, 'day').toDate(),
-              sch.shift.endTime,
-            )
-          : DateUtil.buildDateTime(workDate, sch.shift.endTime)
-        : new Date(workDate.getTime() + 20 * 3600 * 1000),
-      status: 'ABSENT' as AttendanceStatus,
-      lateMinutes: 0,
-      earlyLeaveMin: 0,
-      overtimeMinutes: 0,
-      workDate,
-      note: null,
-      breaks: [],
-      createdAt: workDate,
-      updatedAt: workDate,
-      employee: sch.employee,
-      schedule: sch,
-    }));
+    const absentVirtual = scheduledMissing.map((sch) => {
+      const isWorking = sch.status === 'WORKING';
+      const virtualStatus = this.scheduleStatusToAttendance(sch.status);
 
-    const allVirtual = [...records, ...absentVirtual];
-
-    // 4. Hech kim yo'q (na davomat, na jadval) — grafik yo'q xodimlar
-    //    Lekin ularni ABSENT emas, "grafik yo'q" deb ko'rsatamiz
-    if (allVirtual.length === 0) {
-      const allEmployees = await this.prisma.employee.findMany({
-        where: empFilter,
-        include: { department: true, position: true },
-        orderBy: { fullName: 'asc' },
-      });
-      if (allEmployees.length === 0) return [];
-
-      return allEmployees.map((emp) => ({
-        id: `noschedule-${emp.id}`,
-        employeeId: emp.id,
-        scheduleId: null,
+      return {
+        // Ishlamaydigan kunlar uchun ham barqaror, lekin farqlanadigan id
+        id: `${virtualStatus.toLowerCase()}-${sch.employeeId}`,
+        employeeId: sch.employeeId,
+        scheduleId: sch.id,
         deviceId: null,
         rawCheckInTime: null,
         rawCheckOutTime: null,
@@ -790,35 +943,53 @@ export class AttendanceService {
         coffeeOut: null,
         coffeeIn: null,
         coffeeLateMin: 0,
-        expectedCheckIn: null,
-        expectedCheckOut: null,
-        // ⚠️ ABSENT EMAS — grafik yo'q xodim "kelmagan" hisoblanmaydi
-        status: 'NO_SCHEDULE' as any,
+        // Ishlamaydigan kunda kutilayotgan vaqt bo'lmaydi
+        expectedCheckIn: !isWorking
+          ? null
+          : sch.shift
+            ? DateUtil.buildDateTime(workDate, sch.shift.startTime)
+            : new Date(workDate.getTime() + 8 * 3600 * 1000),
+        expectedCheckOut: !isWorking
+          ? null
+          : sch.shift
+            ? sch.shift.isOvernight
+              ? DateUtil.buildDateTime(
+                  dayjs(workDate).add(1, 'day').toDate(),
+                  sch.shift.endTime,
+                )
+              : DateUtil.buildDateTime(workDate, sch.shift.endTime)
+            : new Date(workDate.getTime() + 20 * 3600 * 1000),
+        status: virtualStatus as AttendanceStatus,
         lateMinutes: 0,
         earlyLeaveMin: 0,
         overtimeMinutes: 0,
         workDate,
-        note: "Grafik yo'q",
+        note: sch.note ?? null,
         breaks: [],
         createdAt: workDate,
         updatedAt: workDate,
-        employee: emp,
-        schedule: null,
-      }));
-    }
+        employee: sch.employee,
+        schedule: sch,
+      };
+    });
 
-    // 5. Aralash holat: ba'zi xodimlarning grafigi bor (records/absentVirtual),
-    //    ba'zilarining yo'q — ularni ham NO_SCHEDULE sifatida qo'shamiz
+    const allVirtual = [...records, ...absentVirtual];
+
+    // 4. Grafik yozuvi umuman yo'q xodimlar — haqiqiy "Grafik yo'q".
+    //    (Dam olish / ta'til / kasallik yuqoridagi 2-bosqichda hal qilindi)
+    //
+    //    ⚡ Ilgari bu yerda `id: { notIn: [...300+ UUID] }` ishlatilardi —
+    //    Postgres uchun juda og'ir so'rov. Endi barcha xodimlar bir marta
+    //    olinadi va farq xotirada hisoblanadi.
     const allIds = new Set(allVirtual.map((r) => r.employeeId));
 
-    const noScheduleEmployees = await this.prisma.employee.findMany({
-      where: {
-        ...empFilter,
-        id: { notIn: [...allIds] },
-      },
-      include: { department: true, position: true },
+    const allEmployees = await this.prisma.employee.findMany({
+      where: empFilter,
+      select: AttendanceService.DAILY_EMPLOYEE_SELECT,
       orderBy: { fullName: 'asc' },
     });
+
+    const noScheduleEmployees = allEmployees.filter((e) => !allIds.has(e.id));
 
     const noScheduleVirtual = noScheduleEmployees.map((emp) => ({
       id: `noschedule-${emp.id}`,
@@ -1013,7 +1184,25 @@ export class AttendanceService {
     userId: string,
     lat: number,
     lng: number,
+    accuracyM?: number,
   ): Promise<{ saved: boolean; alreadySet: boolean }> {
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      throw new BadRequestException("Joylashuv koordinatalari noto'g'ri");
+    }
+
+    // ⚠️ Telefon birinchi o'lchovni Wi-Fi/uyali antenna orqali beradi —
+    //    aniqlik 500-3000 m bo'lishi mumkin. Bunday qiymat ish joyi sifatida
+    //    saqlansa, xodim ish joyida turgan bo'lsa ham "uzoqda" hisoblanadi.
+    if (
+      accuracyM !== undefined &&
+      Number.isFinite(accuracyM) &&
+      accuracyM > EMPLOYEE_GPS_MAX_ACCURACY_M
+    ) {
+      throw new BadRequestException(
+        `Joylashuv aniqligi yetarli emas (±${Math.round(accuracyM)}m). ` +
+          `Ochiq joyga chiqib qayta urinib ko'ring (±${EMPLOYEE_GPS_MAX_ACCURACY_M}m dan yaxshi bo'lishi kerak).`,
+      );
+    }
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       include: { employee: true },
@@ -1244,6 +1433,8 @@ export class AttendanceService {
         .notifyMobileCheckin(employee, 'CHECK_IN', attendance, selfieBuffer)
         .catch((e) => this.logger.warn(`Telegram notify failed: ${e.message}`));
 
+      this.emitAttendanceEvent(employee, 'CHECK_IN', attendance);
+
       return { action: 'CHECK_IN' as const, attendance };
     }
 
@@ -1334,6 +1525,8 @@ export class AttendanceService {
       this.telegram
         .notifyMobileCheckin(employee, 'CHECK_OUT', attendance, selfieBuffer)
         .catch((e) => this.logger.warn(`Telegram notify failed: ${e.message}`));
+
+      this.emitAttendanceEvent(employee, 'CHECK_OUT', attendance);
 
       return { action: 'CHECK_OUT' as const, attendance };
     }

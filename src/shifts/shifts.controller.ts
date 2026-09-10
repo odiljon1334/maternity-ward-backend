@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { ShiftsService } from './shifts.service';
 import { CreateShiftDto } from './dto/create-shift.dto';
+import { ResolveShiftDto } from './dto/resolve-shift.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -61,6 +62,25 @@ export class ShiftsController {
     return this.service.create(
       dto,
       resolveHospitalId(hospitalId, targetHospitalId)!,
+    );
+  }
+
+  /**
+   * Vaqt oralig'i bo'yicha smenni topadi yoki yaratadi (idempotent).
+   * Grafik yaratishda har kunga har xil vaqt belgilash uchun ishlatiladi.
+   */
+  @Post('resolve')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  resolve(
+    @Body() dto: ResolveShiftDto,
+    @CurrentUser('hospitalId') hospitalId: string | null,
+    @Query('targetHospitalId') targetHospitalId?: string,
+  ) {
+    // ⚠️ `!` ishlatilmaydi — null bo'lishi mumkin va servis uni
+    //    dto.employeeId orqali hal qiladi
+    return this.service.resolve(
+      dto,
+      resolveHospitalId(hospitalId, targetHospitalId),
     );
   }
 
