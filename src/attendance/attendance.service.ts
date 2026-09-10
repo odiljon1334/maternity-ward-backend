@@ -49,6 +49,14 @@ const MIN_CHECKOUT_GAP_MIN = 120;
  */
 const EMPLOYEE_GPS_MAX_ACCURACY_M = 75;
 
+/**
+ * Grafigi yo'q xodim uchun smena TAXMIN qilinadi. Taxmin noto'g'ri chiqsa
+ * absurd kechikish yozilib qolmasligi kerak (masalan 660 daqiqa) — bunday
+ * holatda kechikish qayd etilmaydi va direktorga noto'g'ri xabar ketmaydi.
+ * Haqiqiy grafik bo'lsa bu chegara qo'llanilmaydi.
+ */
+const MAX_GUESSED_LATE_MIN = 240;
+
 /** Vaqt-based tushlik aniqlash oynasi (±daqiqa) */
 const LUNCH_WINDOW_MIN = 45;
 
@@ -312,10 +320,12 @@ export class AttendanceService {
       schedule?.shift?.graceMinutes ??
       fallbackShift?.graceMinutes ??
       LATE_GRACE_MINUTES;
-    const lateMinutes = this.calcLateMinutes(
+    const lateMinutes = this.resolveLateMinutes(
       eventDate,
       expectedCheckIn,
       graceMin,
+      !schedule, // grafik yo'q → smena taxmin qilingan
+      employee.fullName,
     );
     const status: AttendanceStatus = lateMinutes > 0 ? 'LATE' : 'PRESENT';
 
@@ -1369,10 +1379,12 @@ export class AttendanceService {
         schedule?.shift?.graceMinutes ??
         fallbackShift?.graceMinutes ??
         LATE_GRACE_MINUTES;
-      const lateMinutes = this.calcLateMinutes(
+      const lateMinutes = this.resolveLateMinutes(
         eventDate,
         expectedCheckIn,
         graceMin,
+        !schedule, // grafik yo'q → smena taxmin qilingan
+        employee.fullName,
       );
       const status: AttendanceStatus = lateMinutes > 0 ? 'LATE' : 'PRESENT';
 
@@ -1564,6 +1576,20 @@ export class AttendanceService {
     return schedule?.status === 'WORKING' ? schedule : null;
   }
 
+  /**
+   * Grafigi yo'q xodim uchun smenani TAXMIN qiladi.
+   *
+   * ⚠️ Ilgari qo'pol qoida ishlatilardi:
+   *     soat < 10 bo'lsa tungi, aks holda kunduzgi.
+   *   Natijada kechki smenaga 19:00 da kelgan xodimga kunduzgi (08:00)
+   *   smena berilardi va u ~660 daqiqa "kechikkan" bo'lib chiqardi —
+   *   direktorga esa noto'g'ri "kechikdi" xabari ketardi.
+   *   Teskarisi ham: 07:00 da kelgan kunduzgi xodimga tungi smena berilardi.
+   *
+   * Endi kelish vaqtiga eng YAQIN boshlanish vaqtli smena tanlanadi
+   * (sutka aylanasi hisobga olinadi). Smenadan biroz oldin kelish tabiiy,
+   * shuning uchun erta kelishga yumshoqroq baho beriladi.
+   */
   private async findFallbackShift(hospitalId: string | null, eventTz: Dayjs) {
     if (!hospitalId) return null;
     const shifts = await this.prisma.shiftTemplate.findMany({
@@ -1571,12 +1597,34 @@ export class AttendanceService {
     });
     if (!shifts.length) return null;
 
-    const hour = eventTz.hour();
-    if (hour < 10) {
-      const night = shifts.find((s) => s.isOvernight);
-      if (night) return night;
+    const arrivalMin = eventTz.hour() * 60 + eventTz.minute();
+
+    let best: (typeof shifts)[number] | null = null;
+    let bestScore = Number.POSITIVE_INFINITY;
+
+    for (const s of shifts) {
+      const [h, m] = (s.startTime ?? '00:00').split(':').map(Number);
+      if (!Number.isFinite(h) || !Number.isFinite(m)) continue;
+
+      // Kelish va smena boshlanishi orasidagi eng qisqa masofa (±12 soat)
+      let diff = arrivalMin - (h * 60 + m); // musbat = kech, manfiy = erta
+      if (diff > 720) diff -= 1440;
+      if (diff < -720) diff += 1440;
+
+      // Xodim smenadan bir necha SOAT oldin kelmaydi — lekin smena
+      // boshlangandan keyin skanerlash odatiy holat (kech kelish yoki
+      // smena o'rtasida qayta o'tish). Shuning uchun "kech" tomon arzonroq
+      // baholanadi: masalan 02:00 dagi o'tish 20:00 da boshlangan tungi
+      // smenaga tegishli, 08:00 kunduzgiga 6 soat erta kelish emas.
+      const score = diff >= 0 ? diff * 0.5 : Math.abs(diff);
+
+      if (score < bestScore) {
+        bestScore = score;
+        best = s;
+      }
     }
-    return shifts.find((s) => !s.isOvernight) ?? shifts[0];
+
+    return best ?? shifts[0];
   }
 
   // ──────────────────────────────────────────────────────────────────────────────
@@ -1628,6 +1676,32 @@ export class AttendanceService {
       );
     }
     return DateUtil.buildDateTime(workDate, shift.endTime);
+  }
+
+  /**
+   * Kechikishni hisoblaydi. Smena TAXMIN qilingan bo'lsa (grafik yo'q),
+   * haddan tashqari katta natija taxminning xatosi deb qabul qilinadi
+   * va kechikish qayd etilmaydi.
+   */
+  private resolveLateMinutes(
+    checkIn: Date,
+    expected: Date,
+    graceMin: number,
+    isGuessedShift: boolean,
+    employeeName?: string,
+  ): number {
+    const late = this.calcLateMinutes(checkIn, expected, graceMin);
+
+    if (isGuessedShift && late > MAX_GUESSED_LATE_MIN) {
+      this.logger.warn(
+        `${employeeName ?? 'Xodim'}: grafigi yo'q, taxmin qilingan smena ` +
+          `${late} daqiqa kechikish beryapti — taxmin noto'g'ri deb hisoblanib ` +
+          `kechikish yozilmadi. Xodimga grafik biriktiring.`,
+      );
+      return 0;
+    }
+
+    return late;
   }
 
   private calcLateMinutes(
