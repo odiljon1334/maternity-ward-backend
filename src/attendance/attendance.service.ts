@@ -148,9 +148,14 @@ export class AttendanceService {
     const resolvedType =
       terminalEventType ?? this.inferEventType(attendance, eventDate, shift);
 
+    // Diagnostika: terminal YUBORGAN xom vaqt va biz TUSHUNGAN vaqt yonma-yon.
+    // Ikkalasi mos kelmasa (masalan 5 soat farq) — terminal soati yoki
+    // timezone sozlamasi noto'g'ri, va xodim kech kelgan bo'lib ko'rinadi.
     this.logger.log(
       `${employee.fullName} | type=${resolvedType} | ` +
-        `explicit=${terminalEventType ?? 'none'} | time=${eventDate.toISOString()}`,
+        `explicit=${terminalEventType ?? 'none'} | ` +
+        `raw="${eventTime ?? 'yo\'q'}" | ` +
+        `local=${tzDate.format('YYYY-MM-DD HH:mm:ss')} (${TZ})`,
     );
 
     // 6. AttendanceEvent (audit log) — har doim saqlanadi

@@ -781,24 +781,29 @@ export class TelegramService implements OnModuleInit {
         }
       : null;
 
-    for (const sub of subscribers) {
-      try {
-        if (photoSource) {
-          await this.bot.telegram.sendPhoto(sub.chatId, photoSource, {
-            caption,
-            parse_mode: 'HTML',
-          });
-        } else {
-          await this.bot.telegram.sendMessage(sub.chatId, caption, {
-            parse_mode: 'HTML',
-          });
+    // ⚡ Obunachilarga PARALLEL yuboriladi.
+    // Ilgari ketma-ket edi: har bir rasm yuklash 1-3 soniya, 5 obunachida
+    // oxirgisi 15 soniya kech olardi.
+    await Promise.allSettled(
+      subscribers.map(async (sub) => {
+        try {
+          if (photoSource) {
+            await this.bot.telegram.sendPhoto(sub.chatId, photoSource, {
+              caption,
+              parse_mode: 'HTML',
+            });
+          } else {
+            await this.bot.telegram.sendMessage(sub.chatId, caption, {
+              parse_mode: 'HTML',
+            });
+          }
+        } catch (e) {
+          this.logger.warn(
+            `Failed to send to ${sub.chatId}: ${e instanceof Error ? e.message : String(e)}`,
+          );
         }
-      } catch (e) {
-        this.logger.warn(
-          `Failed to send to ${sub.chatId}: ${e instanceof Error ? e.message : String(e)}`,
-        );
-      }
-    }
+      }),
+    );
   }
 
   // ──────────────────────────────────────────
