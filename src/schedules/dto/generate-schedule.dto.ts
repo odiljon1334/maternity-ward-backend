@@ -130,8 +130,21 @@ export class ManualScheduleEntryDto {
 }
 
 export class BulkManualScheduleDto {
+  // Bitta xodim (eski, orqaga moslik uchun saqlanadi)
+  @IsOptional()
   @IsString()
-  employeeId: string;
+  employeeId?: string;
+
+  /**
+   * Bir nechta xodimga BIR XIL grafikni bitta so'rovda qo'llash.
+   *
+   * Ilgari frontend har bir xodim uchun alohida HTTP so'rov yuborardi —
+   * 100 xodim = 100 ta so'rov. Endi bitta so'rov yetarli.
+   */
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  employeeIds?: string[];
 
   @IsArray()
   @ValidateNested({ each: true })

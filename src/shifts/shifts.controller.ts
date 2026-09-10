@@ -64,6 +64,23 @@ export class ShiftsController {
     );
   }
 
+  /**
+   * Vaqt oralig'i bo'yicha smenni topadi yoki yaratadi (idempotent).
+   * Grafik yaratishda har kunga har xil vaqt belgilash uchun ishlatiladi.
+   */
+  @Post('resolve')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  resolve(
+    @Body() dto: CreateShiftDto,
+    @CurrentUser('hospitalId') hospitalId: string | null,
+    @Query('targetHospitalId') targetHospitalId?: string,
+  ) {
+    return this.service.resolve(
+      dto,
+      resolveHospitalId(hospitalId, targetHospitalId)!,
+    );
+  }
+
   @Put(':id')
   @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
   update(

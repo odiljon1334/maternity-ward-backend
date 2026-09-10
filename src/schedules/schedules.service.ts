@@ -133,15 +133,18 @@ export class SchedulesService {
     const activeEmpIds = new Set(activeEmployees.map((e) => e.id));
     const totalEmployees = activeEmpIds.size;
 
-    // 2. Shu oydagi barcha WORKING yozuvlar va ularning shift turlari
+    // 2. Shu oydagi BARCHA grafik yozuvlari (WORKING, DAY_OFF, VACATION, ...)
+    //    ⚠️ Ilgari faqat WORKING olinardi — shuning uchun butun oy ta'tilda
+    //    bo'lgan yoki faqat dam olish kunlari belgilangan xodim "Grafiksiz"
+    //    deb sanalardi. Grafigi bor = kamida bitta yozuvi bor.
     const schedulesInMonth = await this.prisma.schedule.findMany({
       where: {
         date: { gte: start, lte: end },
-        status: 'WORKING',
         employeeId: { in: [...activeEmpIds] }, // Faqat shu kasalxona xodimlari
       },
       select: {
         employeeId: true,
+        status: true,
         shift: { select: { type: true } },
       },
     });
@@ -154,6 +157,8 @@ export class SchedulesService {
     for (const s of schedulesInMonth) {
       uniqueEmployeesWithSchedule.add(s.employeeId);
 
+      // Smena soni faqat haqiqiy ish kunlari bo'yicha
+      if (s.status !== 'WORKING') continue;
       if (s.shift?.type === 'DAYTIME') daytimeCount++;
       if (s.shift?.type === 'NIGHTTIME') nighttimeCount++;
     }
@@ -231,6 +236,108 @@ export class SchedulesService {
         totalPages: Math.ceil(totalCount / limit),
       },
     };
+  }
+
+  // ──────────────────────────────────────────
+  // PRIVATE: bitta xodimning grafik yozuvlarini bulk saqlash
+  // ──────────────────────────────────────────
+
+  /**
+   * Bir xodim uchun grafik yozuvlarini minimal so'rov bilan saqlaydi.
+   *
+   * Ketma-ket `findUnique` + `create`/`update` o'rniga:
+   *   1 ta SELECT  → mavjud yozuvlar
+   *   1 ta createMany → yangilari
+   *   N ta updateMany → bir xil (shiftId, status) juftliklari guruhlanadi
+   *
+   * O'zgarmagan yozuvlarga umuman tegilmaydi.
+   */
+  private async applyScheduleEntries(
+    employeeId: string,
+    entries: Array<{
+      date: Date;
+      shiftId?: string | null;
+      status?: ScheduleStatus;
+      note?: string | null;
+    }>,
+  ): Promise<{ created: number; updated: number }> {
+    if (!entries.length) return { created: 0, updated: 0 };
+
+    const existingList = await this.prisma.schedule.findMany({
+      where: { employeeId, date: { in: entries.map((e) => e.date) } },
+      select: { id: true, date: true, shiftId: true, status: true, note: true },
+    });
+
+    const existingByTime = new Map(
+      existingList.map((s) => [s.date.getTime(), s]),
+    );
+
+    const toCreate: Array<{
+      employeeId: string;
+      date: Date;
+      shiftId?: string | null;
+      status?: ScheduleStatus;
+      note?: string | null;
+    }> = [];
+
+    // Bir xil qiymatga ega yozuvlarni bitta updateMany ga birlashtiramiz
+    const updateGroups = new Map<
+      string,
+      { data: Record<string, unknown>; ids: string[] }
+    >();
+
+    for (const entry of entries) {
+      const existing = existingByTime.get(entry.date.getTime());
+
+      if (!existing) {
+        toCreate.push({
+          employeeId,
+          date: entry.date,
+          ...(entry.shiftId !== undefined && { shiftId: entry.shiftId }),
+          ...(entry.status !== undefined && { status: entry.status }),
+          ...(entry.note !== undefined && { note: entry.note }),
+        });
+        continue;
+      }
+
+      // Faqat haqiqatan o'zgargan maydonlarni yig'amiz
+      const data: Record<string, unknown> = {};
+      if (entry.shiftId !== undefined && entry.shiftId !== existing.shiftId) {
+        data.shiftId = entry.shiftId;
+      }
+      if (entry.status !== undefined && entry.status !== existing.status) {
+        data.status = entry.status;
+      }
+      if (entry.note !== undefined && entry.note !== existing.note) {
+        data.note = entry.note;
+      }
+      if (Object.keys(data).length === 0) continue; // o'zgarish yo'q — DB ga tegmaymiz
+
+      const key = JSON.stringify(data);
+      const group = updateGroups.get(key);
+      if (group) group.ids.push(existing.id);
+      else updateGroups.set(key, { data, ids: [existing.id] });
+    }
+
+    let created = 0;
+    if (toCreate.length) {
+      const res = await this.prisma.schedule.createMany({
+        data: toCreate as any,
+        skipDuplicates: true,
+      });
+      created = res.count;
+    }
+
+    let updated = 0;
+    for (const group of updateGroups.values()) {
+      const res = await this.prisma.schedule.updateMany({
+        where: { id: { in: group.ids } },
+        data: group.data as any,
+      });
+      updated += res.count;
+    }
+
+    return { created, updated };
   }
 
   // ──────────────────────────────────────────
@@ -382,34 +489,18 @@ export class SchedulesService {
       current = current.add(1, 'day');
     }
 
-    // Upsert all schedule entries
-    let created = 0;
-    let updated = 0;
-
-    for (const entry of entries) {
-      const dateStart = DateUtil.startOfDay(entry.date);
-      const existing = await this.prisma.schedule.findUnique({
-        where: { employeeId_date: { employeeId, date: dateStart } },
-      });
-
-      if (existing) {
-        await this.prisma.schedule.update({
-          where: { id: existing.id },
-          data: { shiftId: entry.shiftId, status: entry.status },
-        });
-        updated++;
-      } else {
-        await this.prisma.schedule.create({
-          data: {
-            employeeId,
-            date: dateStart,
-            shiftId: entry.shiftId,
-            status: entry.status,
-          },
-        });
-        created++;
-      }
-    }
+    // ── Bulk upsert ───────────────────────────────────────────────────────────
+    // ⚠️ Ilgari har bir kun uchun alohida findUnique + create/update bajarilardi:
+    //    1 xodim × 30 kun = ~60 ta ketma-ket so'rov, bulk'da 349 xodim = ~20 000.
+    //    Endi: 1 ta SELECT + 1 ta createMany + guruhlangan updateMany.
+    const { created, updated } = await this.applyScheduleEntries(
+      employeeId,
+      entries.map((e) => ({
+        date: DateUtil.startOfDay(e.date),
+        shiftId: e.shiftId,
+        status: e.status,
+      })),
+    );
 
     return {
       message: `Grafik yaratildi: ${created} yangi, ${updated} yangilandi`,
@@ -471,40 +562,56 @@ export class SchedulesService {
   // BULK MANUAL schedule
   // ──────────────────────────────────────────
   async bulkManual(dto: BulkManualScheduleDto) {
-    const { employeeId, entries } = dto;
+    const { employeeId, employeeIds, entries } = dto;
 
-    const emp = await this.prisma.employee.findUnique({
-      where: { id: employeeId },
+    // Bitta xodim ham, ro'yxat ham qabul qilinadi
+    const ids = employeeIds?.length
+      ? Array.from(new Set(employeeIds))
+      : employeeId
+        ? [employeeId]
+        : [];
+
+    if (!ids.length) {
+      throw new BadRequestException('employeeId yoki employeeIds kerak');
+    }
+
+    const found = await this.prisma.employee.findMany({
+      where: { id: { in: ids } },
+      select: { id: true },
     });
-    if (!emp) throw new NotFoundException('Hodim topilmadi');
+    if (!found.length) throw new NotFoundException('Hodim topilmadi');
+    const validIds = new Set(found.map((e) => e.id));
+
+    // Sanalarni bir marta normalizatsiya qilamiz — har xodim uchun qayta emas
+    const normalized = entries.map((entry) => ({
+      date: DateUtil.startOfDay(entry.date),
+      ...(entry.shiftId !== undefined && { shiftId: entry.shiftId }),
+      ...(entry.status !== undefined && {
+        status: entry.status as ScheduleStatus,
+      }),
+      ...(entry.note !== undefined && { note: entry.note }),
+    }));
 
     let created = 0;
     let updated = 0;
+    const skipped: string[] = [];
 
-    for (const entry of entries) {
-      const dateStart = DateUtil.startOfDay(entry.date);
-      const existing = await this.prisma.schedule.findUnique({
-        where: { employeeId_date: { employeeId, date: dateStart } },
-      });
-
-      const data: any = {
-        ...(entry.shiftId && { shiftId: entry.shiftId }),
-        ...(entry.status && { status: entry.status as ScheduleStatus }),
-        ...(entry.note !== undefined && { note: entry.note }),
-      };
-
-      if (existing) {
-        await this.prisma.schedule.update({ where: { id: existing.id }, data });
-        updated++;
-      } else {
-        await this.prisma.schedule.create({
-          data: { employeeId, date: dateStart, ...data },
-        });
-        created++;
+    for (const id of ids) {
+      if (!validIds.has(id)) {
+        skipped.push(id);
+        continue;
       }
+      const res = await this.applyScheduleEntries(id, normalized);
+      created += res.created;
+      updated += res.updated;
     }
 
-    return { created, updated };
+    return {
+      created,
+      updated,
+      employees: ids.length - skipped.length,
+      ...(skipped.length && { skipped }),
+    };
   }
 
   // ──────────────────────────────────────────

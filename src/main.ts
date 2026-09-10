@@ -15,6 +15,7 @@ import helmet from 'helmet';
 import { join } from 'path';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import * as express from 'express';
+import { thumbnailMiddleware } from './common/utils/thumbnail.util';
 
 async function bootstrap() {
   // bodyParser: false — raw body o'qish uchun (Hikvision multipart)
@@ -64,8 +65,21 @@ async function bootstrap() {
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-  // Static files (uploaded photos)
-  app.useStaticAssets(join(process.cwd(), 'uploads'), { prefix: '/uploads' });
+  // ─── Static files (uploaded photos) ────────────────────────────────────────
+  const uploadsPath = join(process.cwd(), 'uploads');
+
+  // Ro'yxatlar uchun kichraytirilgan avatar: /uploads/thumb/<fayl>
+  // Birinchi so'rovda generatsiya qilinadi, keyin diskdan beriladi.
+  // ⚠️ useStaticAssets dan OLDIN turishi shart — aks holda static uni ushlab qoladi.
+  app.use('/uploads/thumb', thumbnailMiddleware(uploadsPath));
+
+  // Fayl nomlari takrorlanmaydi (timestamp + random), rasm yangilanganda
+  // eski fayl o'chirilib yangi nom beriladi → immutable kesh xavfsiz.
+  app.useStaticAssets(uploadsPath, {
+    prefix: '/uploads',
+    maxAge: '30d',
+    immutable: true,
+  });
 
   // Global pipes
   app.useGlobalPipes(

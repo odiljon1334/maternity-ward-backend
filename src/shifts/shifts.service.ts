@@ -44,6 +44,55 @@ export class ShiftsService {
     });
   }
 
+  /**
+   * Berilgan vaqt oralig'i uchun smenni TOPADI, bo'lmasa YARATADI.
+   *
+   * Grafik yaratishda har kunga har xil vaqt belgilash mumkin bo'lgani uchun
+   * kerak: frontend "topib-yaratish" mantiqini o'zi bajarsa, nom bo'yicha
+   * unique cheklov (hospitalId + name) tufayli 409 Conflict chiqishi mumkin.
+   * Bu metod o'sha poyga holatini serverda hal qiladi.
+   */
+  async resolve(dto: CreateShiftDto, hospitalId: string) {
+    const startTime = dto.startTime.slice(0, 5);
+    const endTime = dto.endTime.slice(0, 5);
+
+    // 1. Ayni vaqtli smen bormi?
+    const existing = await this.prisma.shiftTemplate.findFirst({
+      where: { hospitalId, type: dto.type, startTime, endTime },
+    });
+    if (existing) return existing;
+
+    // 2. Yo'q — yaratamiz. Nom band bo'lsa, unikal nom tanlaymiz.
+    const baseName = dto.name?.trim() || `${dto.type} ${startTime}-${endTime}`;
+    const isOvernight = dto.isOvernight ?? false;
+    const autoLunch =
+      !dto.lunchStart && !dto.lunchEnd
+        ? calcAutoLunch(startTime, endTime, isOvernight)
+        : {};
+
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const name = attempt === 0 ? baseName : `${baseName} (${attempt + 1})`;
+      try {
+        return await this.prisma.shiftTemplate.create({
+          data: {
+            ...dto,
+            name,
+            startTime,
+            endTime,
+            isOvernight,
+            hospitalId,
+            ...autoLunch,
+          },
+        });
+      } catch (e: any) {
+        // P2002 = unique constraint (hospitalId + name) — boshqa nom bilan urinamiz
+        if (e?.code !== 'P2002') throw e;
+      }
+    }
+
+    throw new ConflictException("Smen yaratib bo'lmadi — nom band");
+  }
+
   async update(id: string, dto: Partial<CreateShiftDto>, hospitalId: string) {
     await this.findOne(id, hospitalId);
     return this.prisma.shiftTemplate.update({ where: { id }, data: dto });
