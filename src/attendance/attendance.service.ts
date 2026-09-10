@@ -297,8 +297,17 @@ export class AttendanceService {
       ctx;
 
     if (ctx.attendance) {
+      // ⚠️ Yozuv bor, lekin checkIn NULL bo'lishi MUMKIN:
+      //    markAbsentForToday croni (21:00) kelmagan xodimlarga checkIn'siz
+      //    ABSENT yozuvi yaratadi. Xodim keyinroq kelsa, ilgari bu yerda
+      //    `ctx.attendance.checkIn!` null bo'lib TypeError bilan yiqilardi
+      //    va kelgani umuman qayd etilmasdi.
+      if (!ctx.attendance.checkIn) {
+        return this.applyCheckInToExistingRecord(ctx);
+      }
+
       // Allaqachon check-in bor — ignore (duplicate scan)
-      const gap = DateUtil.diffMinutes(eventDate, ctx.attendance.checkIn!);
+      const gap = DateUtil.diffMinutes(eventDate, ctx.attendance.checkIn);
       this.logger.log(
         `${employee.fullName}: duplicate CHECK_IN (gap=${gap}min) — ignore`,
       );
@@ -364,6 +373,66 @@ export class AttendanceService {
       employee,
       action: TerminalEventType.CHECK_IN,
       attendance,
+      notifyTelegram: true,
+    };
+  }
+
+  /**
+   * Kelish vaqti yo'q MAVJUD yozuvni (odatda cron yaratgan ABSENT) yangilaydi.
+   *
+   * Xodim kech bo'lsa ham kelgan — buni yo'qotmaymiz: yozuvga haqiqiy
+   * kelish vaqti yoziladi va status qayta hisoblanadi.
+   */
+  private async applyCheckInToExistingRecord(
+    ctx: EventContext,
+  ): Promise<ProcessResult> {
+    const { employee, eventDate, schedule, fallbackShift, deviceId } = ctx;
+    const rec = ctx.attendance;
+
+    // Kutilgan vaqt yozuvda bor (cron uni grafikdan yozgan), bo'lmasa qayta quramiz
+    const expectedCheckIn =
+      rec.expectedCheckIn ??
+      this.buildExpectedCheckIn(ctx.workDate, schedule, fallbackShift);
+
+    const graceMin =
+      schedule?.shift?.graceMinutes ??
+      fallbackShift?.graceMinutes ??
+      LATE_GRACE_MINUTES;
+
+    const lateMinutes = this.resolveLateMinutes(
+      eventDate,
+      expectedCheckIn,
+      graceMin,
+      !schedule,
+      employee.fullName,
+    );
+
+    const updated = await this.prisma.attendanceRecord.update({
+      where: { id: rec.id },
+      data: {
+        checkIn: eventDate,
+        rawCheckInTime: eventDate,
+        ...(deviceId && { deviceId }),
+        expectedCheckIn,
+        lateMinutes,
+        status: lateMinutes > 0 ? 'LATE' : 'PRESENT',
+      },
+    });
+
+    this.logger.log(
+      `${employee.fullName}: kech kelib qayd etildi — ` +
+        `oldingi status=${rec.status}, kechikish=${lateMinutes} daq`,
+    );
+
+    await this.updateAttendanceEventRecord(employee.id, eventDate, updated.id);
+    await this.updateWeeklyStats(employee.id, eventDate, lateMinutes, 0, 0, true);
+
+    this.emitAttendanceEvent(employee, 'CHECK_IN', updated);
+
+    return {
+      employee,
+      action: TerminalEventType.CHECK_IN,
+      attendance: updated,
       notifyTelegram: true,
     };
   }
