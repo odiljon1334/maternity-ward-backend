@@ -606,17 +606,48 @@ export class TelegramService implements OnModuleInit {
       }
 
       const last9 = digits.slice(-9);
-      const employee = await this.prisma.employee.findFirst({
-        where: { phone: { endsWith: last9 } },
-        include: { hospital: true, user: true },
-      });
 
-      if (!employee) {
+      // ⚠️ Ilgari `phone: { endsWith: last9 }` ishlatilardi — bu faqat
+      //    raqam bazada AYNAN "+998901234567" ko'rinishida saqlangan
+      //    bo'lsagina ishlardi. "+998 90 123-45-67" yoki "90 123-45-67"
+      //    kabi yozilgan bo'lsa mos kelmasdi va direktor "topilmadi"
+      //    xabarini olardi. Endi faqat RAQAMLAR solishtiriladi.
+      const matches = await this.prisma.$queryRaw<Array<{ id: string }>>`
+        SELECT id FROM "Employee"
+        WHERE "firedAt" IS NULL
+          AND phone IS NOT NULL
+          AND right(regexp_replace(phone, '[^0-9]', '', 'g'), 9) = ${last9}
+      `;
+
+      if (!matches.length) {
         await ctx.reply(
           `❌ <b>${text}</b> raqamli hodim tizimda topilmadi.\n\nAdministrator bilan bog\'laning.`,
           { parse_mode: 'HTML' },
         );
         return;
+      }
+
+      const candidates = await this.prisma.employee.findMany({
+        where: { id: { in: matches.map((m) => m.id) } },
+        include: { hospital: true, user: true },
+      });
+
+      // ⚠️ Bir xil raqam bir necha kasalxonada uchrashi mumkin.
+      //    Ilgari findFirst tasodifiy birini olardi va chat NOTO'G'RI
+      //    kasalxonaga ulanib qolishi mumkin edi.
+      //    Endi ruxsati bor (DIRECTOR/ADMIN) xodim afzal ko'riladi.
+      const ALLOWED_ROLES = ['DIRECTOR', 'ADMIN'];
+      const employee =
+        candidates.find(
+          (c) => c.user && ALLOWED_ROLES.includes(c.user.role) && c.hospitalId,
+        ) ?? candidates[0];
+
+      if (candidates.length > 1) {
+        this.logger.warn(
+          `Telegram ulanish: "${text}" raqami ${candidates.length} ta xodimga mos keldi ` +
+            `(${candidates.map((c) => `${c.fullName}/${c.hospital?.name}`).join(', ')}). ` +
+            `Tanlandi: ${employee.fullName}/${employee.hospital?.name}`,
+        );
       }
 
       if (!employee.hospitalId) {
@@ -628,16 +659,25 @@ export class TelegramService implements OnModuleInit {
       }
 
       // DIRECTOR yoki ADMIN roli bo'lgan foydalanuvchilar ulay oladi
-      const ALLOWED_ROLES = ['DIRECTOR', 'ADMIN'];
       if (!employee.user || !ALLOWED_ROLES.includes(employee.user.role)) {
+        // Sabab aniq aytiladi — administrator nimani tuzatishini bilsin
         const roleInfo = employee.user
-          ? `Joriy rol: <b>${employee.user.role}</b>`
-          : 'Tizim hisobi mavjud emas';
+          ? `Joriy roli: <b>${employee.user.role}</b> (kerak: DIRECTOR yoki ADMIN)`
+          : "Bu xodimda tizimga kirish hisobi (login) umuman yo'q";
+
         await ctx.reply(
-          `⛔ <b>Kirish rad etildi</b>\n${roleInfo}\n\n` +
+          `⛔ <b>Kirish rad etildi</b>\n\n` +
+            `👤 Topilgan xodim: <b>${employee.fullName}</b>\n` +
+            `🏥 Kasalxona: <b>${employee.hospital?.name ?? '—'}</b>\n` +
+            `🔑 ${roleInfo}\n\n` +
             'Faqat kasalxona <b>direktori</b> (DIRECTOR yoki ADMIN) Telegram botni ulay oladi.\n\n' +
-            "Tizim administratori bilan bog'laning.",
+            "Administratordan shu xodimga DIRECTOR roli bilan login yaratishini so'rang.",
           { parse_mode: 'HTML' },
+        );
+
+        this.logger.warn(
+          `Telegram ulanish rad etildi: ${employee.fullName} ` +
+            `(${employee.hospital?.name}) — rol: ${employee.user?.role ?? 'login yo\'q'}`,
         );
         return;
       }

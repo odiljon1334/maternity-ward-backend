@@ -203,6 +203,10 @@ export class AttendanceService {
     try {
       this.locationGateway.broadcastAttendance(employee.hospitalId ?? null, {
         id: `${attendance.id}-${action}`,
+        // ⚠️ SUPER_ADMIN 'super-admins' xonasida BARCHA kasalxonalar
+        //    hodisasini oladi. Frontend faqat tanlangan kasalxonanikini
+        //    ko'rsatishi uchun bu maydon SHART.
+        hospitalId: employee.hospitalId ?? null,
         action,
         at: (action === 'CHECK_IN'
           ? attendance.checkIn
