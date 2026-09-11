@@ -908,11 +908,35 @@ export class EmployeesService {
   // ──────────────────────────────────────────
   // CSV IMPORT
   // ──────────────────────────────────────────
+  /**
+   * Ism/lavozim solishtirish uchun normallashtirish.
+   *
+   * "Qo'ziboyeva", "QO\u2019ZIBOYEVA", "qo`ziboyeva" — bularning hammasi
+   * bir xil odam. Apostrof turlari, ortiqcha bo'shliq va harf registri
+   * hisobga olinmaydi.
+   */
+  private normalizeKey(value: string): string {
+    return value
+      .replace(/[\u2018\u2019\u02BC`\u00B4"]/g, "'")
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+  }
+
+  /** Telefonni faqat raqamlarga keltiradi: "+998 90 256-42-81" → "998902564281" */
+  private normalizePhoneKey(value?: string | null): string {
+    const digits = String(value ?? '').replace(/\D/g, '');
+    // Oxirgi 9 raqam — operator kodi bilan raqam (998 prefiksisiz)
+    return digits.length >= 9 ? digits.slice(-9) : '';
+  }
+
   async importCsv(
     buffer: Buffer,
     hospitalId: string,
   ): Promise<{
     imported: number;
+    skipped: number;
+    duplicates: string[];
     created: { departments: string[]; positions: string[] };
     errors: string[];
   }> {
@@ -928,12 +952,29 @@ export class EmployeesService {
 
     let imported = 0;
     const errors: string[] = [];
+    const duplicates: string[] = [];
     const autoCreatedDepts = new Set<string>();
     const autoCreatedPositions = new Set<string>();
 
+    // ── Dublikat tekshiruvi uchun mavjud xodimlar ─────────────────────────
+    //    Ishdan bo'shatilganlar hisobga olinmaydi — ular qayta ishga
+    //    olinayotgan bo'lishi mumkin.
+    const existingEmployees = await this.prisma.employee.findMany({
+      where: { hospitalId, firedAt: null },
+      select: { fullName: true, phone: true },
+    });
+    const seenNames = new Set(
+      existingEmployees.map((e) => this.normalizeKey(e.fullName)),
+    );
+    const seenPhones = new Set(
+      existingEmployees
+        .map((e) => this.normalizePhoneKey(e.phone))
+        .filter(Boolean),
+    );
+
     // Cache to avoid redundant DB calls within one import
     const deptCache = new Map<string, string>(); // code → id
-    const posCache = new Map<string, string>(); // name → id
+    const posCache = new Map<string, string>(); // normalized name → id
 
     const getOrCreateDept = async (code: string): Promise<string> => {
       const cacheKey = code.toUpperCase();
@@ -953,10 +994,14 @@ export class EmployeesService {
     };
 
     const getOrCreatePos = async (name: string): Promise<string> => {
-      if (posCache.has(name)) return posCache.get(name)!;
+      const cacheKey = this.normalizeKey(name);
+      if (posCache.has(cacheKey)) return posCache.get(cacheKey)!;
 
+      // ⚠️ Registrga sezgir bo'lmagan qidiruv: "Feldsher laborant" va
+      //    "feldsher laborant" bitta lavozim. Ilgari aniq moslik
+      //    qidirilardi va har xil yozilgani uchun dublikat yaratilardi.
       let pos = await this.prisma.position.findFirst({
-        where: { hospitalId, name },
+        where: { hospitalId, name: { equals: name, mode: 'insensitive' } },
       });
       if (!pos) {
         pos = await this.prisma.position.create({
@@ -964,7 +1009,7 @@ export class EmployeesService {
         });
         autoCreatedPositions.add(name);
       }
-      posCache.set(name, pos.id);
+      posCache.set(cacheKey, pos.id);
       return pos.id;
     };
 
@@ -982,6 +1027,21 @@ export class EmployeesService {
 
       if (!fullName) {
         errors.push(`Qator o'tkazib yuborildi: ism-familiya bo'sh`);
+        continue;
+      }
+
+      // ── Dublikat tekshiruvi ───────────────────────────────────────────
+      //    Bazadagi xodimlar bilan ham, shu fayl ichidagi oldingi
+      //    qatorlar bilan ham solishtiriladi.
+      const nameKey = this.normalizeKey(fullName);
+      const phoneKey = this.normalizePhoneKey(phone);
+
+      if (seenNames.has(nameKey)) {
+        duplicates.push(`${fullName} — bu ism bilan xodim allaqachon bor`);
+        continue;
+      }
+      if (phoneKey && seenPhones.has(phoneKey)) {
+        duplicates.push(`${fullName} — bu telefon (${phone}) allaqachon band`);
         continue;
       }
 
@@ -1010,6 +1070,11 @@ export class EmployeesService {
             hospitalId,
           },
         });
+
+        // Keyingi qatorlar shu xodimni dublikat deb bilishi uchun
+        seenNames.add(nameKey);
+        if (phoneKey) seenPhones.add(phoneKey);
+
         imported++;
       } catch (e) {
         errors.push(
@@ -1018,8 +1083,14 @@ export class EmployeesService {
       }
     }
 
+    this.logger.log(
+      `importCsv: ${imported} qo'shildi, ${duplicates.length} dublikat o'tkazib yuborildi, ${errors.length} xato`,
+    );
+
     return {
       imported,
+      skipped: duplicates.length,
+      duplicates,
       created: {
         departments: [...autoCreatedDepts],
         positions: [...autoCreatedPositions],
