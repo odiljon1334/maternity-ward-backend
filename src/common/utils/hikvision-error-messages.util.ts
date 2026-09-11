@@ -57,6 +57,17 @@ const SUB_STATUS_MESSAGES: Record<string, string> = {
   // Terminal xotirasi to'lgan
   DeviceStorageFull:
     "Terminal xotirasi to'lgan. Terminalni tekshiring yoki texnik xodimga murojaat qiling.",
+
+  // ─── Terminal bilan aloqa muammolari ──────────────────────────────────────
+  // Bular rasmga emas, TERMINALGA tegishli: rasm bazaga saqlanadi,
+  // terminalga esa keyinroq Sync orqali yuboriladi.
+  theDeviceIsOffline:
+    "Terminal o'chiq yoki tarmoqqa ulanmagan. Rasm saqlandi — terminal yoqilgach Sync orqali yuboriladi.",
+  deviceOffLine:
+    "Terminal o'chiq yoki tarmoqqa ulanmagan. Rasm saqlandi — terminal yoqilgach Sync orqali yuboriladi.",
+  deviceNotExist:
+    "Terminal tizimda topilmadi. Sozlamalar > Terminallar bo'limini tekshiring.",
+  deviceBusy: "Terminal band — birozdan so'ng Sync orqali qayta yuboring.",
 };
 
 // ─── statusCode bo'yicha umumiy xaritalash (subStatusCode aniqlanmasa) ───

@@ -19,7 +19,6 @@ import archiver from 'archiver';
 import * as fs from 'fs';
 import * as path from 'path';
 import { processAndSavePhoto } from '../common/utils/image.util';
-import { describeHikvisionError } from '../hikvision/hikvision-error.util';
 import { UserStatus, Prisma } from '@prisma/client';
 
 // ─── Kirill → Lotin transliteratsiya ────────────────────────────────────────
@@ -394,25 +393,54 @@ export class EmployeesService {
 
     // ─── Terminal sync ──────────────────────────────────────────────────────
     //
-    // ⚠️ Ilgari bu yerdagi xatolar faqat logga yozilib, jim yutilardi va
-    //    metod har doim muvaffaqiyat qaytarardi. Natijada Kadr xodimi
-    //    "Rasm yuklandi" degan xabarni ko'rardi, lekin yuz terminalga
-    //    yetib bormagan bo'lardi — xodim davomat belgilay olmasdi.
-    //    Endi natija qaytariladi va foydalanuvchiga aniq aytiladi.
+    // ⚠️ Bu yerda KUTILMAYDI.
+    //
+    //   Terminal o'chiq bo'lsa har bir so'rov timeout'gacha osilib turardi
+    //   va rasm yuklash butunlay to'xtab qolardi — holbuki rasm allaqachon
+    //   bazaga saqlangan bo'ladi. Ish jarayoni esa shunday: avval hamma
+    //   xodim suratga olinadi, keyin Kasalxonalar sahifasidagi "Sync"
+    //   tugmasi bilan barcha rasmlar terminalga bir yo'la yuboriladi
+    //   (hikvision.syncHospital — mavjudlarini o'tkazib yuboradi).
+    //
+    //   Shuning uchun: terminal onlayn bo'lsa rasm fonda darhol yetib
+    //   boradi, oflayn bo'lsa — Sync kutadi. Ikkala holatda ham
+    //   foydalanuvchi kutmaydi.
     const employeeNo = updated.employeeNo;
-    const synced: string[] = [];
-    const failed: Array<{ terminal: string; reason: string }> = [];
-
     if (employeeNo) {
+      void this.syncFaceToTerminals(
+        hospitalId,
+        employeeNo,
+        updated.fullName,
+        imageBuffer,
+      );
+    }
+    // ───────────────────────────────────────────────────────────────────────
+
+    return updated;
+  }
+
+  /**
+   * Yuzni barcha faol terminallarga yuboradi (fon rejimi).
+   *
+   * HTTP javobini bloklamaydi — xatolar faqat logga yoziladi.
+   * Yetib bormagan rasmlar keyinroq Sync orqali yuboriladi.
+   */
+  private async syncFaceToTerminals(
+    hospitalId: string,
+    employeeNo: string,
+    fullName: string,
+    imageBuffer: Buffer,
+  ): Promise<void> {
+    try {
       const terminals = await this.prisma.hikTerminal.findMany({
         where: { hospitalId, isActive: true },
       });
+      if (!terminals.length) return;
 
-      // Terminallar PARALLEL — bittasi o'chiq bo'lsa qolganlarini kutmaydi
+      // Parallel — bittasi o'chiq bo'lsa qolganlari kutmaydi
       await Promise.all(
         terminals.map(async (terminal) => {
           try {
-            // 1. Eski yuzni o'chirish — yo'q bo'lsa ham davom etamiz
             try {
               await this.hikvision.deleteFacePicture(
                 terminal.devIndex,
@@ -422,50 +450,38 @@ export class EmployeesService {
               // ignore: yuz hali yuklanmagan bo'lishi mumkin
             }
 
-            // 2. Person qo'shish — allaqachon mavjud bo'lsa skip
             try {
               await this.hikvision.addPerson(terminal.devIndex, {
                 employeeNo,
-                name: updated.fullName,
+                name: fullName,
               });
             } catch (err: any) {
               if (!/alreadyexist/i.test(err?.message ?? '')) throw err;
-              // employeeNoAlreadyExist — normal, davom etamiz
             }
 
-            // 3. Yangi yuzni yuklash (Buffer — URL emas)
             await this.hikvision.addFacePicture(
               terminal.devIndex,
               employeeNo,
               imageBuffer,
             );
 
-            synced.push(terminal.name);
             this.logger.log(
               `Face synced to terminal ${terminal.name}: ${employeeNo}`,
             );
           } catch (err: any) {
-            const reason = describeHikvisionError(err);
-            failed.push({ terminal: terminal.name, reason });
-            this.logger.error(
-              `Terminal sync failed [${terminal.name}]: ${err.message}`,
+            // Sync keyinroq qayta urinadi — bu yerda faqat qayd etamiz
+            this.logger.warn(
+              `Terminal sync kutilmoqda [${terminal.name}] ${employeeNo}: ` +
+                `${err?.friendlyMessage ?? err?.message}`,
             );
           }
         }),
       );
+    } catch (err: any) {
+      this.logger.error(
+        `syncFaceToTerminals xatosi (${employeeNo}): ${err?.message}`,
+      );
     }
-    // ───────────────────────────────────────────────────────────────────────
-
-    // Rasm har doim saqlanadi — terminal holati alohida qaytariladi
-    return {
-      ...updated,
-      terminalSync: {
-        synced,
-        failed,
-        /** Hech bo'lmasa bitta terminalga yetib bordimi */
-        ok: failed.length === 0,
-      },
-    };
   }
 
   /** EMP-XXXXXX formatli eski employee numberlarni raqamli formatga o'tkazish */
