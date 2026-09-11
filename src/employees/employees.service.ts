@@ -19,6 +19,7 @@ import archiver from 'archiver';
 import * as fs from 'fs';
 import * as path from 'path';
 import { processAndSavePhoto } from '../common/utils/image.util';
+import { describeHikvisionError } from '../hikvision/hikvision-error.util';
 import { UserStatus, Prisma } from '@prisma/client';
 
 // ─── Kirill → Lotin transliteratsiya ────────────────────────────────────────
@@ -392,55 +393,79 @@ export class EmployeesService {
     });
 
     // ─── Terminal sync ──────────────────────────────────────────────────────
+    //
+    // ⚠️ Ilgari bu yerdagi xatolar faqat logga yozilib, jim yutilardi va
+    //    metod har doim muvaffaqiyat qaytarardi. Natijada Kadr xodimi
+    //    "Rasm yuklandi" degan xabarni ko'rardi, lekin yuz terminalga
+    //    yetib bormagan bo'lardi — xodim davomat belgilay olmasdi.
+    //    Endi natija qaytariladi va foydalanuvchiga aniq aytiladi.
     const employeeNo = updated.employeeNo;
+    const synced: string[] = [];
+    const failed: Array<{ terminal: string; reason: string }> = [];
+
     if (employeeNo) {
       const terminals = await this.prisma.hikTerminal.findMany({
         where: { hospitalId, isActive: true },
       });
 
-      for (const terminal of terminals) {
-        try {
-          // 1. Eski yuzni o'chirish — yo'q bo'lsa ham davom etamiz
+      // Terminallar PARALLEL — bittasi o'chiq bo'lsa qolganlarini kutmaydi
+      await Promise.all(
+        terminals.map(async (terminal) => {
           try {
-            await this.hikvision.deleteFacePicture(
+            // 1. Eski yuzni o'chirish — yo'q bo'lsa ham davom etamiz
+            try {
+              await this.hikvision.deleteFacePicture(
+                terminal.devIndex,
+                employeeNo,
+              );
+            } catch {
+              // ignore: yuz hali yuklanmagan bo'lishi mumkin
+            }
+
+            // 2. Person qo'shish — allaqachon mavjud bo'lsa skip
+            try {
+              await this.hikvision.addPerson(terminal.devIndex, {
+                employeeNo,
+                name: updated.fullName,
+              });
+            } catch (err: any) {
+              if (!/alreadyexist/i.test(err?.message ?? '')) throw err;
+              // employeeNoAlreadyExist — normal, davom etamiz
+            }
+
+            // 3. Yangi yuzni yuklash (Buffer — URL emas)
+            await this.hikvision.addFacePicture(
               terminal.devIndex,
               employeeNo,
+              imageBuffer,
             );
-          } catch {
-            // ignore: yuz hali yuklanmagan bo'lishi mumkin
-          }
 
-          // 2. Person qo'shish — allaqachon mavjud bo'lsa skip
-          try {
-            await this.hikvision.addPerson(terminal.devIndex, {
-              employeeNo,
-              name: updated.fullName,
-            });
+            synced.push(terminal.name);
+            this.logger.log(
+              `Face synced to terminal ${terminal.name}: ${employeeNo}`,
+            );
           } catch (err: any) {
-            if (!/alreadyexist/i.test(err?.message ?? '')) throw err;
-            // employeeNoAlreadyExist — normal, davom etamiz
+            const reason = describeHikvisionError(err);
+            failed.push({ terminal: terminal.name, reason });
+            this.logger.error(
+              `Terminal sync failed [${terminal.name}]: ${err.message}`,
+            );
           }
-
-          // 3. Yangi yuzni yuklash (Buffer — URL emas)
-          await this.hikvision.addFacePicture(
-            terminal.devIndex,
-            employeeNo,
-            imageBuffer,
-          );
-
-          this.logger.log(
-            `Face synced to terminal ${terminal.name}: ${employeeNo}`,
-          );
-        } catch (err: any) {
-          this.logger.error(
-            `Terminal sync failed [${terminal.name}]: ${err.message}`,
-          );
-        }
-      }
+        }),
+      );
     }
     // ───────────────────────────────────────────────────────────────────────
 
-    return updated; // ← if bloki tashqarisida, har doim qaytadi
+    // Rasm har doim saqlanadi — terminal holati alohida qaytariladi
+    return {
+      ...updated,
+      terminalSync: {
+        synced,
+        failed,
+        /** Hech bo'lmasa bitta terminalga yetib bordimi */
+        ok: failed.length === 0,
+      },
+    };
   }
 
   /** EMP-XXXXXX formatli eski employee numberlarni raqamli formatga o'tkazish */
