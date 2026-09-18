@@ -5,9 +5,10 @@ import { HikvisionWebhookController } from './hikvision-webhook.controller';
 import { ScheduleModule as NestScheduleModule } from '@nestjs/schedule';
 import { TelegramModule } from '../telegram/telegram.module';
 import { LocationModule } from '../location/location.module';
+import { FaceMatchModule } from '../face-match/face-match.module';
 
 @Module({
-  imports: [NestScheduleModule.forRoot(), TelegramModule, LocationModule],
+  imports: [NestScheduleModule.forRoot(), TelegramModule, LocationModule, FaceMatchModule],
   controllers: [AttendanceController, HikvisionWebhookController],
   providers: [AttendanceService],
   exports: [AttendanceService],

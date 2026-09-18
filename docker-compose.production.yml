@@ -10,7 +10,12 @@
 # CPU taqsimot:
 #   postgres  2.0  |  backend  2.0  |  frontend  1.0
 #   redis     0.5  |  mediamtx 0.5  |  nginx     0.25
-#   (Limitlar maksimum, bir vaqtda hammasi full charge qilmaydi)
+#   face-match 0.75 (yangi, Qaror 4 — InsightFace)
+#   JAMI LIMIT: 7.0 CPU / 6 CPU server — Limitlar maksimum, bir vaqtda
+#   hammasi full charge qilmaydi (masalan face-match faqat check-in
+#   paytida qisqa muddat CPU ishlatadi). Baribir real yuklamada kuzatib
+#   boring (docker stats) — agar zichlik sezilsa, backend replicas=1 va
+#   face-match limitini 0.5ga tushirish variant.
 # ============================================================
 
 services:
@@ -109,6 +114,10 @@ services:
         postgresql://${POSTGRES_USER:-maternity_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-maternity_ward_db}?connection_limit=20&pool_timeout=30
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      FACE_MATCH_SERVICE_URL: http://face-match:8000
+      FACE_MATCH_ENABLED: ${FACE_MATCH_ENABLED:-true}
+      FACE_MATCH_MODE: ${FACE_MATCH_MODE:-lenient}
+      FACE_MATCH_THRESHOLD: ${FACE_MATCH_THRESHOLD:-0.36}
     volumes:
       - uploads_data:/app/uploads
     depends_on:
@@ -191,6 +200,34 @@ services:
           memory: 384M
           cpus: '0.5'
 
+  # ── Face Match (InsightFace, self-hosted — Qaror 4) ─────────
+  # Check-in selfie'sini xodim profil rasmi bilan solishtiradi.
+  # Ixtiyoriy qatlam: o'chsa ham backend fail-open siyosati bilan
+  # check-in'ni bloklamaydi (FACE_MATCH_MODE=lenient, standart).
+  face-match:
+    build:
+      context: ./face-match-service
+      dockerfile: Dockerfile
+    container_name: maternity_face_match
+    restart: always
+    volumes:
+      - insightface_models:/root/.insightface
+    networks:
+      - maternity_net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    deploy:
+      resources:
+        limits:
+          memory: 1.5G
+          cpus: '0.75'
+        reservations:
+          memory: 256M
+
   # ── Nginx (reverse proxy + SSL) ────────────────────────────
   nginx:
     image: nginx:alpine
@@ -222,4 +259,5 @@ volumes:
   postgres_data:
   redis_data:
   uploads_data:
+  insightface_models:
   certbot_webroot:

@@ -315,6 +315,50 @@ export class PushService {
   }
 
   /** Ish vaqti tugagan, lekin check-out qilinmagan xodimga eslatma */
+  /** Xodim ish vaqtida geofence (ruxsat etilgan hudud)dan tashqariga chiqsa —
+   *  directorga real-time xabar. `lastAlertCooldownMin` ichida bir marta
+   *  yuboriladi (spam bo'lmasligi uchun). */
+  async notifyGeofenceViolation(
+    hospitalId: string,
+    employeeId: string,
+    employeeName: string,
+    distanceMeters: number,
+  ): Promise<boolean> {
+    const COOLDOWN_MIN = 20;
+    const recent = await this.prisma.notification.findFirst({
+      where: {
+        type: NotificationType.GEOFENCE_ALERT,
+        metadata: { path: ['employeeId'], equals: employeeId },
+        createdAt: { gte: new Date(Date.now() - COOLDOWN_MIN * 60_000) },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (recent) return false; // so'nggi COOLDOWN_MIN daqiqada allaqachon ogohlantirilgan
+
+    const title = 'Xodim ish joyini tark etdi ⚠️';
+    const body = `${employeeName} ish joyidan ${Math.round(distanceMeters)}m uzoqlashdi`;
+    const url = '/dashboard/live-map';
+
+    const recipientIds = await this.sendToHospital(
+      hospitalId,
+      { title, body, url, tag: `geofence-${employeeId}` },
+      ['DIRECTOR', 'ADMIN', 'SUPER_ADMIN'],
+    );
+
+    await this.notifications
+      .createForUsers(recipientIds, {
+        type: NotificationType.GEOFENCE_ALERT,
+        title,
+        message: body,
+        metadata: { kind: 'geofence-alert', hospitalId, employeeId },
+      })
+      .catch((e) =>
+        this.logger.warn(`Notification persist failed: ${e?.message ?? e}`),
+      );
+
+    return true;
+  }
+
   async notifyCheckoutReminder(userId: string, recordId: string) {
     const title = 'Check-out eslatmasi ⏰';
     const body = 'Ish vaqtingiz tugadi. Iltimos, check-out qilishni unutmang!';

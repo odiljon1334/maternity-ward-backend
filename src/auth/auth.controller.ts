@@ -13,6 +13,11 @@ import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { RegisterDto } from './dto/register.dto';
+import { UpdateEmailDto } from './dto/update-email.dto';
+import { VerifyEmailOtpDto } from './dto/verify-email-otp.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
+import { VerifyResetOtpDto } from './dto/verify-reset-otp.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -71,5 +76,62 @@ export class AuthController {
     @Req() req: Request,
   ) {
     return this.authService.changePassword(userId, dto, getIp(req));
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // Email tasdiqlash (login qilingan foydalanuvchi uchun)
+  // ─────────────────────────────────────────────────────────
+
+  @UseGuards(JwtAuthGuard)
+  @Put('email')
+  updateEmail(
+    @CurrentUser('sub') userId: string,
+    @Body() dto: UpdateEmailDto,
+  ) {
+    return this.authService.updateEmail(userId, dto);
+  }
+
+  @UseGuards(JwtAuthGuard, ThrottlerGuard)
+  @Throttle({ login: { ttl: 900_000, limit: 5 } })
+  @Post('email/resend-otp')
+  resendEmailOtp(@CurrentUser('sub') userId: string) {
+    return this.authService.resendEmailOtp(userId);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('email/verify-otp')
+  verifyEmailOtp(
+    @CurrentUser('sub') userId: string,
+    @Body() dto: VerifyEmailOtpDto,
+  ) {
+    return this.authService.verifyEmailOtp(userId, dto);
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // Parolni tiklash (login qilinmagan holatda, ochiq endpointlar)
+  // ─────────────────────────────────────────────────────────
+
+  /** Brute-force himoya: 15 daqiqada max 5 urinish */
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ login: { ttl: 900_000, limit: 5 } })
+  @Post('forgot-password')
+  forgotPassword(@Body() dto: ForgotPasswordDto) {
+    return this.authService.forgotPassword(dto);
+  }
+
+  /** Email havolasidagi token bilan yangi parol qo'yish */
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ login: { ttl: 900_000, limit: 10 } })
+  @Post('reset-password')
+  resetPassword(@Body() dto: ResetPasswordDto) {
+    return this.authService.resetPassword(dto);
+  }
+
+  /** Telegram/SMS orqali kelgan OTP kod bilan yangi parol qo'yish */
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ login: { ttl: 900_000, limit: 10 } })
+  @Post('reset-password/otp')
+  verifyResetOtp(@Body() dto: VerifyResetOtpDto) {
+    return this.authService.verifyResetOtp(dto);
   }
 }

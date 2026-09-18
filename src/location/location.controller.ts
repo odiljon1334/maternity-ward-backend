@@ -8,6 +8,9 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { PushService } from '../push/push.service';
+import { TelegramService } from '../telegram/telegram.service';
+import { DateUtil } from '../common/utils/date.util';
 
 @Controller('location')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -16,6 +19,8 @@ export class LocationController {
     private readonly locationService: LocationService,
     private readonly locationGateway: LocationGateway,
     private readonly prisma: PrismaService,
+    private readonly pushService: PushService,
+    private readonly telegramService: TelegramService,
   ) {}
 
   @Post('live')
@@ -24,43 +29,78 @@ export class LocationController {
     @CurrentUser() user: { sub: string; hospitalId: string },
     @Body() dto: UpdateLiveLocationDto,
   ) {
-    const saved = await this.locationService.saveLiveLocation(user.sub, dto);
-
-    const employee = await this.prisma.user.findUnique({
+    const userWithEmployee = await this.prisma.user.findUnique({
       where: { id: user.sub },
       select: {
         employee: {
           select: {
+            id: true,
             fullName: true,
             photoUrl: true,
+            hospitalId: true,
             gpsLat: true,
             gpsLng: true,
             gpsRadius: true,
+            department: { select: { name: true } },
             position: {
-              select: { gpsLat: true, gpsLng: true, gpsRadius: true },
+              select: { name: true, gpsLat: true, gpsLng: true, gpsRadius: true },
             },
             hospital: {
-              select: { gpsLat: true, gpsLng: true, gpsRadius: true },
+              select: { name: true, gpsLat: true, gpsLng: true, gpsRadius: true },
             },
           },
         },
       },
     });
 
-    const geoLat =
-      employee?.employee?.gpsLat ??
-      employee?.employee?.position?.gpsLat ??
-      employee?.employee?.hospital?.gpsLat ??
-      null;
+    const employee = userWithEmployee?.employee;
+    if (!employee) return { ok: false };
 
-    const geoLng =
-      employee?.employee?.gpsLng ??
-      employee?.employee?.position?.gpsLng ??
-      employee?.employee?.hospital?.gpsLng ??
+    // ── 1. Ish vaqti tugagan/check-out qilingan bo'lsa — kuzatishni to'xtatish ──
+    // Xodim check-out qilishni unutgan taqdirda ham GPS tracking abadiy davom
+    // etmasligi kerak (production muammosi: xodim ketgach ham GPS saqlanaverar edi).
+    const today = DateUtil.startOfDay(new Date());
+    const attendance = await this.prisma.attendanceRecord.findFirst({
+      where: { employeeId: employee.id, workDate: today },
+      select: { checkOut: true, expectedCheckOut: true },
+    });
+
+    const workEnded =
+      !!attendance?.checkOut ||
+      (!!attendance?.expectedCheckOut &&
+        new Date() > attendance.expectedCheckOut);
+
+    if (workEnded) {
+      this.locationGateway.broadcastLocationRemoved(user.hospitalId, user.sub);
+      return {
+        ok: false,
+        stopTracking: true,
+        reason: attendance?.checkOut
+          ? 'Check-out qilingan'
+          : 'Ish vaqti tugagan',
+      };
+    }
+
+    // ── 2. Geofence tekshiruvi ──
+    const geoLat =
+      employee.gpsLat ??
+      employee.position?.gpsLat ??
+      employee.hospital?.gpsLat ??
       null;
+    const geoLng =
+      employee.gpsLng ??
+      employee.position?.gpsLng ??
+      employee.hospital?.gpsLng ??
+      null;
+    const geoRadius =
+      employee.gpsRadius ??
+      employee.position?.gpsRadius ??
+      employee.hospital?.gpsRadius ??
+      200;
 
     let distance: number | null = null;
-    if (geoLat && geoLng) {
+    let isOutside = false;
+    if (geoLat != null && geoLng != null) {
       distance = Math.round(
         this.locationService.getDistance(
           geoLat,
@@ -69,18 +109,53 @@ export class LocationController {
           dto.longitude,
         ),
       );
+      isOutside = distance > geoRadius;
+    }
+
+    // Yangi nuqta saqlanishidan OLDIN — oldingi nuqtani olib qo'yamiz
+    // (ketma-ket 2 marta tashqarida bo'lsa — bu tasodifiy GPS sakrash emas).
+    const previous = await this.locationService.getPreviousLocation(user.sub);
+
+    const saved = await this.locationService.saveLiveLocation(
+      user.sub,
+      dto,
+      isOutside,
+    );
+
+    if (isOutside && previous?.isOutside && distance != null) {
+      this.pushService
+        .notifyGeofenceViolation(
+          user.hospitalId,
+          employee.id,
+          employee.fullName ?? 'Xodim',
+          distance,
+        )
+        .then((sent) => {
+          if (sent) {
+            this.telegramService
+              .notifyGeofenceAlert(
+                { ...employee, hospitalId: user.hospitalId },
+                distance,
+                dto.latitude,
+                dto.longitude,
+              )
+              .catch(() => {});
+          }
+        })
+        .catch(() => {});
     }
 
     this.locationGateway.broadcastLocation(user.hospitalId, {
       userId: user.sub,
-      name: employee?.employee?.fullName,
-      photo: employee?.employee?.photoUrl,
+      name: employee.fullName,
+      photo: employee.photoUrl,
       latitude: dto.latitude,
       longitude: dto.longitude,
       accuracy: dto.accuracy,
       speed: dto.speed,
       battery: dto.battery,
       distance,
+      isOutside,
       timestamp: saved.createdAt,
     });
 

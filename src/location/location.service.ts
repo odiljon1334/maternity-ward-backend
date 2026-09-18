@@ -47,7 +47,11 @@ export class LocationService {
     return distance <= radius;
   }
 
-  async saveLiveLocation(userId: string, dto: UpdateLiveLocationDto) {
+  async saveLiveLocation(
+    userId: string,
+    dto: UpdateLiveLocationDto,
+    isOutside?: boolean,
+  ) {
     return this.prisma.liveLocation.create({
       data: {
         userId,
@@ -56,7 +60,17 @@ export class LocationService {
         accuracy: dto.accuracy,
         speed: dto.speed,
         battery: dto.battery,
+        isOutside: isOutside ?? null,
       },
+    });
+  }
+
+  /** Shu foydalanuvchining oxirgi (yangisidan oldingi) GPS nuqtasi — ketma-ket
+   *  "geofence tashqarisida" holatini aniqlash uchun ishlatiladi. */
+  async getPreviousLocation(userId: string) {
+    return this.prisma.liveLocation.findFirst({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
     });
   }
 

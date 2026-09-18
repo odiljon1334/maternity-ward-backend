@@ -71,6 +71,7 @@ enum NotificationType {
   PAYMENT
   SYSTEM
   ALERT
+  GEOFENCE_ALERT
 }
 
 enum LeaveType {
@@ -204,6 +205,10 @@ model User {
   status       UserStatus @default(ACTIVE)
   lang         Lang       @default(uz)
 
+  // Email — ixtiyoriy, tasdiqlangach parolni tiklash va OTP uchun ishlatiladi
+  email           String?    @unique
+  emailVerifiedAt DateTime?
+
   // SUPER_ADMIN uchun null, boshqalari uchun majburiy
   hospitalId   String?
   hospital     Hospital?  @relation(fields: [hospitalId], references: [id])
@@ -212,9 +217,50 @@ model User {
   pushSubscriptions PushSubscription[]
   liveLocations LiveLocation[]
   notifications     Notification[]
+  emailOtpTokens      EmailOtpToken[]
+  passwordResetTokens PasswordResetToken[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+enum OtpPurpose {
+  EMAIL_VERIFY
+}
+
+enum ResetChannel {
+  EMAIL
+  TELEGRAM
+  SMS
+}
+
+model EmailOtpToken {
+  id         String     @id @default(uuid())
+  userId     String
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  codeHash   String
+  purpose    OtpPurpose @default(EMAIL_VERIFY)
+  attempts   Int        @default(0)
+  expiresAt  DateTime
+  consumedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, purpose])
+}
+
+model PasswordResetToken {
+  id         String       @id @default(uuid())
+  userId     String
+  user       User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash  String       @unique
+  channel    ResetChannel
+  expiresAt  DateTime
+  consumedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
 }
 
 // ─────────────────────────────────────────────
@@ -753,6 +799,7 @@ model LiveLocation {
   accuracy  Float
   speed     Float?
   battery   Int?
+  isOutside Boolean? // Geofence tashqarisidami — direktor ogohlantirishi uchun
   createdAt DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id])

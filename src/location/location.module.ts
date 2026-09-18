@@ -4,10 +4,12 @@ import { LocationController } from './location.controller';
 import { LocationService } from './location.service';
 import { LocationGateway } from './location.gateway';
 import { PrismaModule } from '../prisma/prisma.module';
+import { TelegramModule } from '../telegram/telegram.module';
 
 @Module({
   imports: [
     PrismaModule,
+    TelegramModule,
     JwtModule.register({
       secret: process.env.JWT_SECRET,
     }),

@@ -15,9 +15,12 @@ import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
 import isoWeek from 'dayjs/plugin/isoWeek';
 import * as path from 'path';
+import * as fs from 'fs';
 
 import { PrismaService } from '../prisma/prisma.service';
 import { TelegramService } from '../telegram/telegram.service';
+import { FaceMatchService } from '../face-match/face-match.service';
+import { AuditLogService } from '../audit-log/audit-log.service';
 import { DateUtil } from '../common/utils/date.util';
 import { isHospitalBlocked } from '../common/utils/payment.util';
 import { calcNetWorkMin } from '../common/utils/shift.util';
@@ -95,6 +98,8 @@ export class AttendanceService {
     private readonly prisma: PrismaService,
     private readonly telegram: TelegramService,
     private readonly locationGateway: LocationGateway,
+    private readonly faceMatch: FaceMatchService,
+    private readonly auditLog: AuditLogService,
   ) {}
 
   // ──────────────────────────────────────────────────────────────────────────────
@@ -1415,7 +1420,56 @@ export class AttendanceService {
       ? await this.findFallbackShift(employee.hospitalId, tzDate)
       : null;
 
-    // 4. Selfie saqlash (ish joyi isboti sifatida)
+    // 4. Mavjud davomat yozuvi (CHECK-IN/CHECK-OUT'ni aniqlash uchun oldindan kerak)
+    const existing = await this.prisma.attendanceRecord.findFirst({
+      where: { employeeId: employee.id, workDate },
+    });
+    const isCheckIn = !existing || !existing.checkIn;
+
+    // 4a. Yuz tekshiruvi (Qaror 4) — FAQAT check-in uchun (GPS kuzatish
+    // yuz tasdiqlangandan keyingina boshlanishi kerak). Fail-open siyosati
+    // FaceMatchService.verify() ichida hujjatlashtirilgan — bu YANGI,
+    // ixtiyoriy qatlam production check-in oqimini to'xtatmasligi kerak,
+    // ANIQ MOS KELMASLIKdan tashqari.
+    if (isCheckIn && selfieBuffer?.length) {
+      let referenceBuffer: Buffer | null = null;
+      if (employee.photoUrl) {
+        try {
+          const refPath = path.join(
+            process.env.UPLOAD_DIR || './uploads',
+            employee.photoUrl.replace(/^\/uploads\//, ''),
+          );
+          if (fs.existsSync(refPath)) {
+            referenceBuffer = fs.readFileSync(refPath);
+          }
+        } catch (e: any) {
+          this.logger.warn(`Profil rasmini o'qib bo'lmadi: ${e?.message ?? e}`);
+        }
+      }
+
+      const faceResult = await this.faceMatch.verify(referenceBuffer, selfieBuffer);
+
+      this.auditLog.log({
+        userId,
+        hospitalId: employee.hospitalId,
+        action: faceResult.mismatch
+          ? 'FACE_MATCH_REJECTED'
+          : faceResult.skipped
+            ? 'FACE_MATCH_SKIPPED'
+            : 'FACE_MATCH_OK',
+        entity: 'AttendanceRecord',
+        entityId: employee.id,
+        details: { reason: faceResult.reason, similarity: faceResult.similarity },
+      });
+
+      if (faceResult.mismatch) {
+        throw new BadRequestException(
+          "Yuz tasdiqlanmadi — check-in rad etildi. Iltimos, yaxshi yorug'likda, kamerani to'g'ridan qarab qaytadan urinib ko'ring.",
+        );
+      }
+    }
+
+    // 5. Selfie saqlash (ish joyi isboti sifatida)
     let selfieUrl: string | undefined;
     if (selfieBuffer?.length) {
       const uploadDir = path.join(
@@ -1431,13 +1485,8 @@ export class AttendanceService {
       selfieUrl = `/uploads/selfies/${filename}`;
     }
 
-    // 5. Mavjud davomat yozuvi
-    const existing = await this.prisma.attendanceRecord.findFirst({
-      where: { employeeId: employee.id, workDate },
-    });
-
     // ── CHECK-IN ───────────────────────────────────────────────────────────────
-    if (!existing || !existing.checkIn) {
+    if (isCheckIn) {
       const expectedCheckIn = this.buildExpectedCheckIn(
         workDate,
         schedule,

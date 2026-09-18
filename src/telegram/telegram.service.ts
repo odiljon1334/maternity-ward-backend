@@ -1428,6 +1428,73 @@ export class TelegramService implements OnModuleInit {
   }
 
   // ──────────────────────────────────────────
+  // NOTIFY: xodim ish vaqtida geofence tashqarisiga chiqdi
+  // ──────────────────────────────────────────
+
+  /**
+   * Xodim ish vaqtida (check-in qilgan, check-out qilmagan) ruxsat etilgan
+   * hududdan tashqariga chiqsa — directorga darhol xabar (statik xarita bilan).
+   * Chaqiruvchi (`PushService.notifyGeofenceViolation`) allaqachon cooldown
+   * (20 daqiqa) tekshirgan — bu yerda faqat yuborish mantig'i.
+   */
+  async notifyGeofenceAlert(
+    employee: any,
+    distanceMeters: number,
+    lat: number,
+    lng: number,
+  ): Promise<void> {
+    if (!this.bot) return;
+
+    const subscribers = await this.prisma.telegramSubscription.findMany({
+      where: { isActive: true, hospitalId: employee.hospitalId },
+    });
+    if (!subscribers.length) return;
+
+    const dist =
+      distanceMeters < 1000
+        ? `${Math.round(distanceMeters)} m`
+        : `${(distanceMeters / 1000).toFixed(1)} km`;
+
+    const timeStr = new Date().toLocaleTimeString('uz-UZ', {
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: TZ,
+    });
+
+    const caption =
+      `🔴 <b>${employee.fullName}</b> ish joyini tark etdi!\n` +
+      `📏 Ish joyidan: <b>${dist}</b> uzoqlikda\n` +
+      `🕐 Vaqt: <b>${timeStr}</b>\n` +
+      `🏢 Bo'lim: ${employee.department?.name || '—'}\n` +
+      `💼 Lavozim: ${employee.position?.name || '—'}\n` +
+      `🗺 <a href="${yandexMapLink(lat, lng)}">Joylashuvni ko'rish</a>`;
+
+    const mapUrl = yandexStaticMapUrl(lat, lng, 'rd');
+
+    await Promise.allSettled(
+      subscribers.map(async (sub) => {
+        try {
+          await this.bot.telegram.sendPhoto(sub.chatId, mapUrl, {
+            caption,
+            parse_mode: 'HTML',
+          });
+        } catch (e) {
+          // Statik xarita yuklanmasa — hech bo'lmasa matnli xabar boradi
+          try {
+            await this.bot.telegram.sendMessage(sub.chatId, caption, {
+              parse_mode: 'HTML',
+            });
+          } catch (e2) {
+            this.logger.warn(
+              `Geofence alert failed for ${sub.chatId}: ${e2 instanceof Error ? e2.message : String(e2)}`,
+            );
+          }
+        }
+      }),
+    );
+  }
+
+  // ──────────────────────────────────────────
   // LEAVE REQUEST NOTIFICATIONS
   // ──────────────────────────────────────────
 
