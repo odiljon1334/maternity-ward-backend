@@ -15,21 +15,18 @@ export interface FaceMatchResult {
  * Check-in selfie'sini xodimning profil rasmi bilan solishtiradi
  * (o'z serverimizdagi InsightFace mikroservisi orqali — Qaror 4).
  *
- * FAIL-OPEN siyosati (standart, FACE_MATCH_MODE=lenient):
- *   Bu YANGI, IXTIYORIY qatlam — production check-in oqimini
- *   to'xtatmasligi kerak. Shuning uchun quyidagi hollarda check-in
- *   BLOKLANMAYDI (faqat log yoziladi):
+ * FAIL-CLOSED siyosati (standart, FACE_MATCH_MODE=strict):
+ *   Qaror 4'ning butun maqsadi — yuz tasdiqlanmasa davomat qayd etilmasin.
+ *   Shuning uchun quyidagi HAMMA holatlarda check-in BLOKLANADI:
  *     - Xodimning profil rasmi mavjud emas (solishtirish uchun narsa yo'q)
  *     - Face-match mikroservisi ishlamayapti / javob bermadi / xato qaytardi
- *     - Rasmlardan birida yuz aniqlanmadi (yomon burchak/yorug'lik bo'lishi mumkin)
+ *     - Rasmlardan birida yuz aniqlanmadi (qorong'u joy, yomon burchak va h.k.)
+ *     - Aniq mos kelmaslik (ikkala rasmda ham yuz topilgan, lekin bir xil odam emas)
  *
- * FACE_MATCH_MODE=strict bo'lsa — yuqoridagi "yuz aniqlanmadi" va
- * "xizmat ishlamadi" holatlari ham bloklaydi.
- *
- * ANIQ MOS KELMASLIK (ikkala rasmda ham yuz topilgan, lekin bir xil
- * odam emas) — MODE'dan qat'iy nazar HAR DOIM bloklaydi. Bu qatlamning
- * butun maqsadi shu — fail-open faqat "aniqlab bo'lmadi" holatlariga tegishli,
- * "aniq mos kelmaydi" holatiga emas.
+ * FACE_MATCH_MODE=lenient qo'yilsa (faqat maxsus holatlar uchun, masalan
+ * face-match xizmati hali sozlanmagan bosqichda) — yuqoridagi birinchi uchta
+ * "aniqlab bo'lmadi" holati check-in'ni BLOKLAMAYDI, faqat log yoziladi.
+ * DIQQAT: lenient rejimda ham ANIQ MOS KELMASLIK har doim bloklaydi.
  */
 @Injectable()
 export class FaceMatchService {
@@ -41,7 +38,7 @@ export class FaceMatchService {
     return process.env.FACE_MATCH_ENABLED !== 'false'; // standart: yoqilgan
   }
   private get mode(): 'lenient' | 'strict' {
-    return (process.env.FACE_MATCH_MODE || 'lenient') as 'lenient' | 'strict';
+    return (process.env.FACE_MATCH_MODE || 'strict') as 'lenient' | 'strict';
   }
   private get serviceUrl(): string {
     return process.env.FACE_MATCH_SERVICE_URL || 'http://face-match:8000';
@@ -60,11 +57,17 @@ export class FaceMatchService {
     if (!this.enabled) {
       return { skipped: true, mismatch: false, reason: 'DISABLED' };
     }
+    const MODE = this.mode;
     if (!referenceBuffer) {
+      if (MODE === 'strict') {
+        this.logger.warn(
+          "Face-match: xodimning profil rasmi yo'q (NO_REFERENCE_PHOTO) — strict rejim, check-in bloklandi",
+        );
+        return { skipped: false, mismatch: true, reason: 'NO_REFERENCE_PHOTO' };
+      }
       return { skipped: true, mismatch: false, reason: 'NO_REFERENCE_PHOTO' };
     }
 
-    const MODE = this.mode;
     const SERVICE_URL = this.serviceUrl;
 
     let data: any;

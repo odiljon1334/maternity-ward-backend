@@ -1463,8 +1463,21 @@ export class AttendanceService {
       });
 
       if (faceResult.mismatch) {
+        const FACE_MATCH_MESSAGES: Record<string, string> = {
+          FACE_MISMATCH:
+            "Yuz tasdiqlanmadi — check-in rad etildi. Iltimos, yaxshi yorug'likda, kamerani to'g'ridan qarab qaytadan urinib ko'ring.",
+          LIVE_FACE_NOT_FOUND:
+            "Suratda yuzingiz aniqlanmadi — check-in rad etildi. Iltimos, yorug'roq joyda, yuzingizni kameraga to'g'ridan qaratib qaytadan urinib ko'ring.",
+          REFERENCE_FACE_NOT_FOUND:
+            "Profil rasmingizda yuz aniqlanmadi — check-in rad etildi. Iltimos, administratorga murojaat qiling.",
+          NO_REFERENCE_PHOTO:
+            "Profilingizda rasm mavjud emas — yuz tasdiqlash uchun avval profilga rasm yuklashingiz kerak. Administratorga murojaat qiling.",
+          SERVICE_ERROR:
+            "Yuz tekshirish xizmati vaqtincha ishlamayapti — check-in rad etildi. Birozdan so'ng qaytadan urinib ko'ring yoki administratorga murojaat qiling.",
+        };
         throw new BadRequestException(
-          "Yuz tasdiqlanmadi — check-in rad etildi. Iltimos, yaxshi yorug'likda, kamerani to'g'ridan qarab qaytadan urinib ko'ring.",
+          FACE_MATCH_MESSAGES[faceResult.reason ?? ''] ??
+            "Yuz tasdiqlanmadi — check-in rad etildi. Iltimos, yaxshi yorug'likda, kamerani to'g'ridan qarab qaytadan urinib ko'ring.",
         );
       }
     }

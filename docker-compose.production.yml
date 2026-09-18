@@ -116,7 +116,7 @@ services:
       REDIS_PORT: 6379
       FACE_MATCH_SERVICE_URL: http://face-match:8000
       FACE_MATCH_ENABLED: ${FACE_MATCH_ENABLED:-true}
-      FACE_MATCH_MODE: ${FACE_MATCH_MODE:-lenient}
+      FACE_MATCH_MODE: ${FACE_MATCH_MODE:-strict}
       FACE_MATCH_THRESHOLD: ${FACE_MATCH_THRESHOLD:-0.36}
     volumes:
       - uploads_data:/app/uploads
@@ -202,8 +202,8 @@ services:
 
   # ── Face Match (InsightFace, self-hosted — Qaror 4) ─────────
   # Check-in selfie'sini xodim profil rasmi bilan solishtiradi.
-  # Ixtiyoriy qatlam: o'chsa ham backend fail-open siyosati bilan
-  # check-in'ni bloklamaydi (FACE_MATCH_MODE=lenient, standart).
+  # Standart holatda FAIL-CLOSED: yuz tasdiqlanmasa yoki xizmat
+  # ishlamasa ham check-in BLOKLANADI (FACE_MATCH_MODE=strict, standart).
   face-match:
     build:
       context: ./face-match-service

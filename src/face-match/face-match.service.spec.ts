@@ -35,7 +35,8 @@ describe('FaceMatchService.verify — Qaror 4 (yuz tekshiruvi)', () => {
     expect(mockedAxios.post).not.toHaveBeenCalled();
   });
 
-  it("xodimning profil rasmi yo'q bo'lsa — skip qiladi (solishtirish uchun narsa yo'q)", async () => {
+  it("xodimning profil rasmi yo'q bo'lsa — LENIENT rejimda skip qiladi", async () => {
+    process.env.FACE_MATCH_MODE = 'lenient';
     const res = await svc.verify(null, live);
     expect(res).toEqual({
       skipped: true,
@@ -43,6 +44,24 @@ describe('FaceMatchService.verify — Qaror 4 (yuz tekshiruvi)', () => {
       reason: 'NO_REFERENCE_PHOTO',
     });
     expect(mockedAxios.post).not.toHaveBeenCalled();
+  });
+
+  it("xodimning profil rasmi yo'q bo'lsa — STRICT (standart) rejimda bloklaydi", async () => {
+    const res = await svc.verify(null, live);
+    expect(res).toEqual({
+      skipped: false,
+      mismatch: true,
+      reason: 'NO_REFERENCE_PHOTO',
+    });
+    expect(mockedAxios.post).not.toHaveBeenCalled();
+  });
+
+  it('FACE_MATCH_MODE ENV berilmasa — standart rejim STRICT bo\'ladi', async () => {
+    mockedAxios.post.mockRejectedValue(new Error('ECONNREFUSED'));
+    const res = await svc.verify(ref, live);
+    expect(res.skipped).toBe(false);
+    expect(res.mismatch).toBe(true);
+    expect(res.reason).toBe('SERVICE_ERROR');
   });
 
   it('yuzlar mos kelsa — mismatch:false qaytaradi', async () => {

@@ -126,7 +126,7 @@ describe('AttendanceService.selfCheckIn — Qaror 4 yuz tekshiruvi gate', () => 
     );
   });
 
-  it("xizmat ishlamadi (skipped:true, fail-open) — check-in BLOKLANMAYDI, davom etadi", async () => {
+  it("FaceMatchService skipped:true qaytarsa (masalan LENIENT rejimda) — AttendanceService check-in'ni BLOKLAMAYDI", async () => {
     faceMatch.verify.mockResolvedValue({
       mismatch: false,
       skipped: true,
