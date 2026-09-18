@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { SentryModule } from '@sentry/nestjs/setup';
 import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
@@ -31,6 +32,10 @@ import { LocationModule } from './location/location.module';
 
 @Module({
   imports: [
+    // Sentry — instrument.ts'da SENTRY_DSN bo'lsa ishga tushadi (Faza 3).
+    // Bu HAR DOIM birinchi bo'lib ro'yxatga olinishi tavsiya etiladi.
+    SentryModule.forRoot(),
+
     // Config — .env loading
     ConfigModule.forRoot({ isGlobal: true }),
 

@@ -1,4 +1,6 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
+import './instrument'; // Sentry — ENG BIRINCHI import bo'lishi shart
+
 // Node.js 18 da global.crypto yo'q — @nestjs/schedule v6 uchun polyfill
 if (!global.crypto) {
   (global as any).crypto = require('crypto').webcrypto;

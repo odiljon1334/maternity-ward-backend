@@ -7,6 +7,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
+import * as Sentry from '@sentry/nestjs';
 
 @Catch()
 export class AllExceptionsFilter implements ExceptionFilter {
@@ -33,6 +34,11 @@ export class AllExceptionsFilter implements ExceptionFilter {
         `${request.method} ${request.url} - ${status}`,
         exception instanceof Error ? exception.stack : '',
       );
+      // Faqat kutilmagan server xatolari (5xx) Sentry'ga yuboriladi —
+      // 4xx (validatsiya, ruxsat, biznes-mantiq rad etishlari kabi
+      // kutilgan holatlar) Sentry'ni keraksiz shovqin bilan to'ldirmasligi
+      // uchun bu yerga kiritilmagan.
+      Sentry.captureException(exception);
     } else {
       const msg =
         typeof message === 'object' ? (message as any).message : message;

@@ -118,6 +118,9 @@ services:
       FACE_MATCH_ENABLED: ${FACE_MATCH_ENABLED:-true}
       FACE_MATCH_MODE: ${FACE_MATCH_MODE:-strict}
       FACE_MATCH_THRESHOLD: ${FACE_MATCH_THRESHOLD:-0.36}
+      # Sentry — SENTRY_DSN bo'lmasa (standart) hech narsa ishga tushmaydi
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0}
     volumes:
       - uploads_data:/app/uploads
     depends_on:
@@ -157,6 +160,12 @@ services:
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
         NEXT_PUBLIC_MAPBOX_TOKEN: ${NEXT_PUBLIC_MAPBOX_TOKEN}
+        # Sentry (Faza 3) — NEXT_PUBLIC_* build vaqtida bundle'ga
+        # yozilishi kerak, shuning uchun args'da ham bo'lishi shart
+        NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-}
+        SENTRY_ORG: ${SENTRY_ORG:-}
+        SENTRY_PROJECT: ${SENTRY_PROJECT:-}
+        SENTRY_AUTH_TOKEN: ${SENTRY_AUTH_TOKEN:-}
     container_name: maternity_frontend
     restart: always
     environment:
@@ -165,6 +174,8 @@ services:
       NEXT_PUBLIC_CONTACT_EMAIL: ${NEXT_PUBLIC_CONTACT_EMAIL:-info@maternity.uz}
       NEXT_PUBLIC_CONTACT_PHONE: ${NEXT_PUBLIC_CONTACT_PHONE:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-}
+      NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE: ${NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE:-0}
     depends_on:
       backend:
         condition: service_healthy

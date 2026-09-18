@@ -43,6 +43,7 @@
     "@nestjs/throttler": "^6.5.0",
     "@nestjs/websockets": "^10.4.22",
     "@prisma/client": "^6.19.2",
+    "@sentry/nestjs": "^10.75.0",
     "archiver": "^7.0.1",
     "axios": "^1.13.6",
     "axios-digest": "^0.3.0",
