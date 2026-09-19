@@ -17,6 +17,7 @@ import { UserRole } from '@prisma/client';
 import { QueryUsersDto } from './dto/query-users.dto';
 import { UpdateUserStatusDto } from './dto/update-user-status.dto';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
+import { SetPermissionOverrideDto } from './dto/set-permission-override.dto';
 
 const SUPER = UserRole.SUPER_ADMIN;
 const ASST = UserRole.ASSISTANT_ADMIN;
@@ -101,6 +102,46 @@ export class UsersController {
       entity: 'User',
       entityId: id,
       details: { role: dto.role },
+    });
+    return result;
+  }
+
+  /** Granular ruxsatlar (FAZA 5, 7-bosqich) — standart + override + effektiv ro'yxat. */
+  @Get(':id/permissions')
+  @Roles(SUPER, ASST, ADMIN, DIR)
+  getPermissions(
+    @Param('id') id: string,
+    @CurrentUser('hospitalId') hospitalId: string | null,
+    @Query('targetHospitalId') targetHospitalId?: string,
+  ) {
+    return this.service.getPermissions(
+      id,
+      resolveHospitalId(hospitalId, targetHospitalId),
+    );
+  }
+
+  @Patch(':id/permissions')
+  @Roles(SUPER, ASST, ADMIN, DIR)
+  async setPermission(
+    @Param('id') id: string,
+    @Body() dto: SetPermissionOverrideDto,
+    @CurrentUser('sub') actorId: string,
+    @CurrentUser('hospitalId') hospitalId: string | null,
+    @Query('targetHospitalId') targetHospitalId?: string,
+  ) {
+    const result = await this.service.setPermissionOverride(
+      id,
+      resolveHospitalId(hospitalId, targetHospitalId),
+      dto.permission,
+      dto.granted,
+    );
+    this.auditLog.log({
+      userId: actorId,
+      hospitalId: hospitalId ?? undefined,
+      action: 'UPDATE',
+      entity: 'User',
+      entityId: id,
+      details: { permission: dto.permission, granted: dto.granted ?? null },
     });
     return result;
   }

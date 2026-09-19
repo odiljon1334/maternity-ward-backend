@@ -6,6 +6,10 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { QueryUsersDto } from './dto/query-users.dto';
 import { UserRole, UserStatus } from '@prisma/client';
+import {
+  ROLE_DEFAULT_PERMISSIONS,
+  computeEffectivePermissions,
+} from '../common/permissions';
 
 // Platforma darajasidagi rollar — shu umumiy panel orqali tayinlanmaydi/olib
 // tashlanmaydi (alohida, ataylab qilinadigan jarayon talab qiladi).
@@ -126,5 +130,68 @@ export class UsersService {
         select: { id: true, username: true, role: true },
       });
     });
+  }
+
+  /**
+   * Foydalanuvchining standart (rol bo'yicha) va effektiv (override'lar
+   * bilan) ruxsatlarini, hamda saqlangan override yozuvlarini qaytaradi —
+   * frontend "Ruxsatlar" panelida shu asosida toggle ko'rsatiladi.
+   */
+  async getPermissions(id: string, hospitalId: string | null) {
+    const user = await this.findOneOrThrow(id, hospitalId);
+
+    if (PLATFORM_ROLES.includes(user.role)) {
+      throw new BadRequestException(
+        'Platforma darajasidagi foydalanuvchi uchun ruxsatlar shu yerdan boshqarilmaydi',
+      );
+    }
+
+    const overrides = await this.prisma.userPermissionOverride.findMany({
+      where: { userId: id },
+      orderBy: { permission: 'asc' },
+      select: { permission: true, granted: true, updatedAt: true },
+    });
+
+    return {
+      userId: user.id,
+      role: user.role,
+      defaults: ROLE_DEFAULT_PERMISSIONS[user.role] ?? [],
+      overrides,
+      effective: computeEffectivePermissions(user.role, overrides),
+    };
+  }
+
+  /**
+   * `granted: true/false` — standartdan chetga chiquvchi override
+   * yozadi/yangilaydi. `granted: null/undefined` — override'ni o'chirib,
+   * foydalanuvchini standart rol-ruxsatlariga qaytaradi.
+   */
+  async setPermissionOverride(
+    id: string,
+    hospitalId: string | null,
+    permission: string,
+    granted: boolean | null | undefined,
+  ) {
+    const user = await this.findOneOrThrow(id, hospitalId);
+
+    if (PLATFORM_ROLES.includes(user.role)) {
+      throw new BadRequestException(
+        'Platforma darajasidagi foydalanuvchi uchun ruxsatlar shu yerdan boshqarilmaydi',
+      );
+    }
+
+    if (granted === null || granted === undefined) {
+      await this.prisma.userPermissionOverride.deleteMany({
+        where: { userId: id, permission },
+      });
+    } else {
+      await this.prisma.userPermissionOverride.upsert({
+        where: { userId_permission: { userId: id, permission } },
+        update: { granted },
+        create: { userId: id, permission, granted },
+      });
+    }
+
+    return this.getPermissions(id, hospitalId);
   }
 }

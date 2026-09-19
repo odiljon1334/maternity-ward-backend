@@ -11,9 +11,44 @@ import { PrismaService } from '../prisma/prisma.service';
 
 function makeFakePrisma() {
   const users: any[] = [];
+  const permissionOverrides: any[] = [];
 
   return {
-    __state: { users },
+    __state: { users, permissionOverrides },
+
+    userPermissionOverride: {
+      findMany: jest.fn(async ({ where }: any) => {
+        return permissionOverrides
+          .filter((o) => o.userId === where.userId)
+          .sort((a, b) => a.permission.localeCompare(b.permission));
+      }),
+      upsert: jest.fn(async ({ where, update, create }: any) => {
+        const existing = permissionOverrides.find(
+          (o) =>
+            o.userId === where.userId_permission.userId &&
+            o.permission === where.userId_permission.permission,
+        );
+        if (existing) {
+          Object.assign(existing, update);
+          return existing;
+        }
+        const created = { ...create, updatedAt: new Date() };
+        permissionOverrides.push(created);
+        return created;
+      }),
+      deleteMany: jest.fn(async ({ where }: any) => {
+        const before = permissionOverrides.length;
+        for (let i = permissionOverrides.length - 1; i >= 0; i--) {
+          if (
+            permissionOverrides[i].userId === where.userId &&
+            permissionOverrides[i].permission === where.permission
+          ) {
+            permissionOverrides.splice(i, 1);
+          }
+        }
+        return { count: before - permissionOverrides.length };
+      }),
+    },
 
     user: {
       findMany: jest.fn(async ({ where, skip = 0, take = 20 }: any) => {
@@ -213,6 +248,120 @@ describe('UsersService', () => {
       expect(updated.role).toBe('DIRECTOR');
       const oldDir = prisma.__state.users.find((u) => u.id === 'old-dir');
       expect(oldDir.role).toBe('EMPLOYEE');
+    });
+  });
+
+  describe('getPermissions', () => {
+    it('SUPER_ADMIN/MINISTRY uchun BadRequestException tashlaydi', async () => {
+      prisma.__state.users.push({
+        id: 'u1',
+        hospitalId: null,
+        role: 'SUPER_ADMIN',
+        status: 'ACTIVE',
+        username: 'root',
+      });
+
+      await expect(service.getPermissions('u1', null)).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it("override yo'q bo'lsa, effektiv ruxsatlar aynan rol standartiga teng", async () => {
+      prisma.__state.users.push({
+        id: 'u1',
+        hospitalId: 'h1',
+        role: 'DIRECTOR',
+        status: 'ACTIVE',
+        username: 'dir',
+      });
+
+      const result = await service.getPermissions('u1', 'h1');
+
+      expect(result.overrides).toEqual([]);
+      expect(result.effective.sort()).toEqual([...result.defaults].sort());
+    });
+
+    it("saqlangan override effektiv ro'yxatga ta'sir qiladi", async () => {
+      prisma.__state.users.push({
+        id: 'u1',
+        hospitalId: 'h1',
+        role: 'DIRECTOR',
+        status: 'ACTIVE',
+        username: 'dir',
+      });
+      prisma.__state.permissionOverrides.push({
+        userId: 'u1',
+        permission: 'payroll.approve',
+        granted: false,
+        updatedAt: new Date(),
+      });
+
+      const result = await service.getPermissions('u1', 'h1');
+
+      expect(result.effective).not.toContain('payroll.approve');
+      expect(result.overrides).toHaveLength(1);
+    });
+  });
+
+  describe('setPermissionOverride', () => {
+    it('SUPER_ADMIN uchun BadRequestException tashlaydi', async () => {
+      prisma.__state.users.push({
+        id: 'u1',
+        hospitalId: null,
+        role: 'SUPER_ADMIN',
+        status: 'ACTIVE',
+        username: 'root',
+      });
+
+      await expect(
+        service.setPermissionOverride('u1', null, 'payroll.view', false),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('granted:false bilan yangi override yaratadi', async () => {
+      prisma.__state.users.push({
+        id: 'u1',
+        hospitalId: 'h1',
+        role: 'DIRECTOR',
+        status: 'ACTIVE',
+        username: 'dir',
+      });
+
+      const result = await service.setPermissionOverride(
+        'u1',
+        'h1',
+        'payroll.approve',
+        false,
+      );
+
+      expect(result.effective).not.toContain('payroll.approve');
+      expect(prisma.__state.permissionOverrides).toHaveLength(1);
+    });
+
+    it("granted:null bilan mavjud override'ni o'chirib, standartga qaytaradi", async () => {
+      prisma.__state.users.push({
+        id: 'u1',
+        hospitalId: 'h1',
+        role: 'DIRECTOR',
+        status: 'ACTIVE',
+        username: 'dir',
+      });
+      prisma.__state.permissionOverrides.push({
+        userId: 'u1',
+        permission: 'payroll.approve',
+        granted: false,
+        updatedAt: new Date(),
+      });
+
+      const result = await service.setPermissionOverride(
+        'u1',
+        'h1',
+        'payroll.approve',
+        null,
+      );
+
+      expect(result.overrides).toEqual([]);
+      expect(result.effective).toContain('payroll.approve');
     });
   });
 });

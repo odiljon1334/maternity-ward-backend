@@ -14,12 +14,14 @@ import { PayrollService } from './payroll.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
+import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequirePermission } from '../common/decorators/require-permission.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
 import { Response } from 'express';
 
 @Controller('payroll')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 export class PayrollController {
   constructor(private readonly service: PayrollService) {}
 
@@ -65,6 +67,7 @@ export class PayrollController {
     UserRole.DIRECTOR,
     UserRole.ASSISTANT_ADMIN,
   )
+  @RequirePermission('payroll.view')
   findAll(
     @CurrentUser('hospitalId') jwtHospitalId: string | null,
     @Query('month') month: string,
@@ -110,6 +113,7 @@ export class PayrollController {
     UserRole.DIRECTOR,
     UserRole.ASSISTANT_ADMIN,
   )
+  @RequirePermission('payroll.view')
   async exportExcel(
     @CurrentUser('hospitalId') jwtHospitalId: string | null,
     @Query('month') month: string,
@@ -162,6 +166,7 @@ export class PayrollController {
 
   @Put('approve/:id')
   @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  @RequirePermission('payroll.approve')
   approve(@Param('id') id: string) {
     return this.service.approve(id);
   }
@@ -175,6 +180,7 @@ export class PayrollController {
     UserRole.DIRECTOR,
     UserRole.ASSISTANT_ADMIN,
   )
+  @RequirePermission('payroll.view')
   preview(
     @Param('employeeId') employeeId: string,
     @Query('month') month: string,
@@ -221,6 +227,7 @@ export class PayrollController {
     UserRole.DIRECTOR,
     UserRole.ASSISTANT_ADMIN,
   )
+  @RequirePermission('payroll.view')
   findOne(
     @Param('employeeId') employeeId: string,
     @Query('month') month: string,

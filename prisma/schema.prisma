@@ -246,6 +246,7 @@ model User {
   emailOtpTokens      EmailOtpToken[]
   passwordResetTokens PasswordResetToken[]
   assignedHospitals   HospitalAssistant[]
+  permissionOverrides UserPermissionOverride[]
 
   lastLoginAt DateTime? // Oxirgi muvaffaqiyatli login vaqti (auth.service.ts login()da yangilanadi)
 
@@ -834,4 +835,26 @@ model LiveLocation {
   user User @relation(fields: [userId], references: [id])
 
   @@index([userId, createdAt])
+}
+
+// ─────────────────────────────────────────────
+// GRANULAR RUXSATLAR (FAZA 5, 7-bosqich, 2026-09-19)
+// Mavjud rol (@Roles) tizimini almashtirmaydi — ustiga qo'shimcha qatlam.
+// Bo'sh bo'lsa (hech qanday override yo'q) — hamma narsa rol standarti
+// bo'yicha ishlaydi (bugungidek). Faqat standart holatdan FARQ qiladigan
+// yozuvlar shu yerda saqlanadi (masalan "bitta Director uchun
+// payroll.approve = false").
+// ─────────────────────────────────────────────
+model UserPermissionOverride {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permission String // masalan "payroll.view", "payments.edit" — src/common/permissions.ts dagi katalogga mos
+  granted    Boolean // true = standartdan tashqari ruxsat berilgan, false = standartdan tortib olingan
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, permission])
+  @@index([userId])
 }
