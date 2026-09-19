@@ -151,6 +151,11 @@ model Hospital {
   gpsLng    Float?                     // Kasalxona uzunligi
   gpsRadius Int?   @default(200)       // Ruxsat etilgan radius (metr)
 
+  // Avtomatik to'lov eslatmasi (FAZA 5, 2-bosqich, 2026-09-19) — oyiga bir
+  // marta yuboriladi, shu ikkita maydon spam bo'lmasligi uchun nazorat qiladi
+  lastPaymentReminderAt     DateTime?
+  lastPaymentReminderPeriod String?    // "YYYY-MM" — shu oy uchun eslatma yuborilganmi
+
   users         User[]
   employees     Employee[]
   departments   Department[]

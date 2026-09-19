@@ -5,7 +5,7 @@ import { UpdatePaymentDto } from './dto/update-payment.dto';
 
 const PRICE_PER_EMPLOYEE = 20_000;
 
-function currentPeriod(): string {
+export function currentPeriod(): string {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
@@ -239,6 +239,22 @@ export class PaymentsService {
         b.consecutiveUnpaidMonths - a.consecutiveUnpaidMonths ||
         b.totalDebt - a.totalDebt,
     );
+  }
+
+  /**
+   * Shu oy uchun to'lov eslatmasi yuborilganini belgilaydi (FAZA 5, 2-bosqich)
+   * — `CronService.paymentReminderCron()` oyiga bir marta chaqiradi, takroriy
+   * spam bo'lmasligi uchun.
+   */
+  async markPaymentReminderSent(hospitalId: string, period: string) {
+    return this.prisma.hospital.update({
+      where: { id: hospitalId },
+      data: {
+        lastPaymentReminderAt: new Date(),
+        lastPaymentReminderPeriod: period,
+      },
+      select: { id: true },
+    });
   }
 
   // ─── Update payment amount (SUPER_ADMIN only) ────────────────────────────────

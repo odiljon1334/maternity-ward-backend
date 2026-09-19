@@ -7,6 +7,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { DateUtil } from '../common/utils/date.util';
 import { LeaveService } from '../leave/leave.service';
 import { PushService } from '../push/push.service';
+import { PaymentsService, currentPeriod } from '../payments/payments.service';
 import dayjs from 'dayjs';
 import timezone from 'dayjs/plugin/timezone';
 import utc from 'dayjs/plugin/utc';
@@ -25,6 +26,7 @@ export class CronService {
     private readonly prisma: PrismaService,
     private readonly leaveService: LeaveService,
     private readonly pushService: PushService,
+    private readonly paymentsService: PaymentsService,
   ) {}
 
   /**
@@ -299,6 +301,42 @@ export class CronService {
       }
     } catch (err) {
       this.logger.error('checkoutReminderCron failed:', err);
+    }
+  }
+
+  /**
+   * Har oyning 25-sanasida, ertalab 09:00'da — qarzdor shifoxonalarning
+   * direktorlariga Telegram orqali to'lov eslatmasi (FAZA 5, 2-bosqich,
+   * 2026-09-19). Oyiga faqat BIR MARTA yuboriladi — `Hospital.
+   * lastPaymentReminderPeriod` joriy oyga teng bo'lsa, o'sha shifoxona
+   * o'tkazib yuboriladi (qayta ishga tushirilsa ham spam bo'lmaydi).
+   */
+  @Cron('0 9 25 * *', { timeZone: TZ })
+  async paymentReminderCron() {
+    try {
+      const period = currentPeriod();
+      const debtors = await this.paymentsService.getDebtorsReport(6);
+      const overdue = debtors.filter((d) => d.consecutiveUnpaidMonths > 0);
+
+      for (const hospital of overdue) {
+        const alreadyReminded = await this.prisma.hospital.findUnique({
+          where: { id: hospital.id },
+          select: { lastPaymentReminderPeriod: true },
+        });
+        if (alreadyReminded?.lastPaymentReminderPeriod === period) continue;
+
+        await this.telegramService.notifyPaymentReminder(hospital, {
+          consecutiveUnpaidMonths: hospital.consecutiveUnpaidMonths,
+          totalDebt: hospital.totalDebt,
+        });
+        await this.paymentsService.markPaymentReminderSent(hospital.id, period);
+
+        this.logger.log(
+          `Payment reminder sent to: ${hospital.name} (${hospital.consecutiveUnpaidMonths} oy, ${hospital.totalDebt} so'm)`,
+        );
+      }
+    } catch (err) {
+      this.logger.error('paymentReminderCron failed:', err);
     }
   }
 

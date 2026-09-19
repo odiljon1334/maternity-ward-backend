@@ -1495,6 +1495,51 @@ export class TelegramService implements OnModuleInit {
   }
 
   // ──────────────────────────────────────────
+  // NOTIFY: oylik to'lov qarzdorligi eslatmasi (FAZA 5, 2-bosqich, 2026-09-19)
+  // ──────────────────────────────────────────
+
+  /**
+   * Shifoxona qarzdor bo'lsa (consecutiveUnpaidMonths > 0) — direktorga
+   * oyiga bir marta Telegram orqali eslatma. Takroriy yuborilmasligini
+   * chaqiruvchi (`CronService.paymentReminderCron`) `Hospital.lastPaymentReminderPeriod`
+   * orqali nazorat qiladi — bu metod faqat yuborish mantig'i.
+   */
+  async notifyPaymentReminder(
+    hospital: { id: string; name: string },
+    debtInfo: { consecutiveUnpaidMonths: number; totalDebt: number },
+  ): Promise<void> {
+    if (!this.bot) return;
+
+    const subscribers = await this.prisma.telegramSubscription.findMany({
+      where: { isActive: true, hospitalId: hospital.id, role: 'DIRECTOR' },
+    });
+    if (!subscribers.length) return;
+
+    const debtStr = debtInfo.totalDebt.toLocaleString('uz-UZ') + " so'm";
+
+    const message =
+      `💳 <b>To'lov eslatmasi</b>\n\n` +
+      `Hurmatli direktor, <b>${hospital.name}</b> uchun to'lov muddati o'tgan.\n\n` +
+      `📅 Uzluksiz to'lanmagan oylar: <b>${debtInfo.consecutiveUnpaidMonths} oy</b>\n` +
+      `💰 Jami qarz: <b>${debtStr}</b>\n\n` +
+      `Iltimos, to'lovni imkon qadar tezroq amalga oshiring.`;
+
+    await Promise.allSettled(
+      subscribers.map(async (sub) => {
+        try {
+          await this.bot.telegram.sendMessage(sub.chatId, message, {
+            parse_mode: 'HTML',
+          });
+        } catch (e) {
+          this.logger.warn(
+            `Payment reminder failed for ${sub.chatId}: ${e instanceof Error ? e.message : String(e)}`,
+          );
+        }
+      }),
+    );
+  }
+
+  // ──────────────────────────────────────────
   // LEAVE REQUEST NOTIFICATIONS
   // ──────────────────────────────────────────
 

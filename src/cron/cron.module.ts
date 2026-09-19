@@ -5,6 +5,7 @@ import { TelegramModule } from '../telegram/telegram.module';
 import { SchedulesModule } from '../schedules/schedules.module';
 import { LeaveModule } from '../leave/leave.module';
 import { PushModule } from '../push/push.module';
+import { PaymentsModule } from '../payments/payments.module';
 
 @Module({
   imports: [
@@ -13,6 +14,7 @@ import { PushModule } from '../push/push.module';
     SchedulesModule,
     LeaveModule,
     PushModule,
+    PaymentsModule,
   ],
   providers: [CronService],
 })
