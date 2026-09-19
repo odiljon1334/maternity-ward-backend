@@ -25,10 +25,11 @@ function currentPeriod(): string {
 function makeFakePrisma() {
   const hospitals: any[] = [];
   const payments: any[] = [];
+  const users: any[] = [];
   let idCounter = 1;
 
   return {
-    __state: { hospitals, payments },
+    __state: { hospitals, payments, users },
 
     hospital: {
       findMany: jest.fn(async ({ where }: any) => {
@@ -38,6 +39,7 @@ function makeFakePrisma() {
             id: h.id,
             name: h.name,
             code: h.code,
+            isActive: h.isActive,
             _count: {
               employees: h.employees.filter((e: any) => !e.firedAt).length,
             },
@@ -50,6 +52,33 @@ function makeFakePrisma() {
       findUnique: jest.fn(async ({ where }: any) => {
         const h = hospitals.find((x) => x.id === where.id);
         return h ? { id: h.id } : null;
+      }),
+    },
+
+    user: {
+      count: jest.fn(async ({ where }: any) => {
+        return users.filter((u) => {
+          if (where?.lastLoginAt?.gte) {
+            return u.lastLoginAt && u.lastLoginAt >= where.lastLoginAt.gte;
+          }
+          return true;
+        }).length;
+      }),
+      groupBy: jest.fn(async ({ by }: any) => {
+        const map = new Map<string, number>();
+        for (const u of users) {
+          const key = by.map((k: string) => u[k]).join('|');
+          map.set(key, (map.get(key) ?? 0) + 1);
+        }
+        return Array.from(map.entries()).map(([key, count]) => {
+          const parts = key.split('|');
+          const result: any = {};
+          by.forEach((k: string, i: number) => {
+            result[k] = parts[i];
+          });
+          result._count = { _all: count };
+          return result;
+        });
       }),
     },
 
@@ -356,6 +385,182 @@ describe('PaymentsService', () => {
 
       const [report] = await service.getDebtorsReport(100);
       expect(report.monthly).toHaveLength(24);
+    });
+  });
+
+  describe('getPlatformStats', () => {
+    function periodsAgo(n: number): string {
+      const now = new Date();
+      const d = new Date(now.getFullYear(), now.getMonth() - n, 1);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    }
+
+    it("joriy oy uchun MRR'ni to'g'ri hisoblaydi va ARR = MRR*12", async () => {
+      prisma.__state.hospitals.push({
+        id: 'h1',
+        name: 'K1',
+        code: 'K1',
+        isActive: true,
+        employees: [],
+      });
+      prisma.__state.payments.push(
+        {
+          id: 'p1',
+          hospitalId: 'h1',
+          period: currentPeriod(),
+          amount: 100_000,
+          createdAt: 1,
+        },
+        {
+          id: 'p2',
+          hospitalId: 'h1',
+          period: currentPeriod(),
+          amount: 50_000,
+          createdAt: 2,
+        },
+      );
+
+      const stats = await service.getPlatformStats(3);
+
+      expect(stats.mrr).toBe(150_000);
+      expect(stats.arr).toBe(150_000 * 12);
+      expect(stats.trend).toHaveLength(3);
+      expect(stats.trend[stats.trend.length - 1].period).toBe(currentPeriod());
+    });
+
+    it("to'lov holati taqsimotini to'g'ri sanaydi", async () => {
+      prisma.__state.hospitals.push(
+        {
+          id: 'h-paid',
+          name: 'To‘langan',
+          code: 'TL',
+          isActive: true,
+          employees: [{ firedAt: null }],
+        },
+        {
+          id: 'h-pending',
+          name: 'Kutilmoqda',
+          code: 'KT',
+          isActive: true,
+          employees: [{ firedAt: null }],
+        },
+      );
+      prisma.__state.payments.push({
+        id: 'p1',
+        hospitalId: 'h-paid',
+        period: currentPeriod(),
+        amount: PRICE_PER_EMPLOYEE,
+        createdAt: 1,
+      });
+
+      const stats = await service.getPlatformStats(3);
+
+      expect(stats.paymentStatusCounts.PAID).toBe(1);
+      expect(stats.paymentStatusCounts.PENDING).toBe(1);
+      expect(stats.paymentStatusCounts.OVERDUE).toBe(0);
+    });
+
+    it("faol foydalanuvchilarni oxirgi 7 kun bo'yicha sanaydi", async () => {
+      const now = Date.now();
+      prisma.__state.users.push(
+        {
+          id: 'u1',
+          role: 'DIRECTOR',
+          lastLoginAt: new Date(now - 2 * 24 * 60 * 60 * 1000),
+        }, // 2 kun oldin — faol
+        {
+          id: 'u2',
+          role: 'EMPLOYEE',
+          lastLoginAt: new Date(now - 30 * 24 * 60 * 60 * 1000),
+        }, // 30 kun oldin — nofaol
+        { id: 'u3', role: 'EMPLOYEE', lastLoginAt: null },
+      );
+
+      const stats = await service.getPlatformStats(3);
+
+      expect(stats.activeUsersCount).toBe(1);
+    });
+
+    it("rollar taqsimotini to'g'ri guruhlaydi", async () => {
+      prisma.__state.users.push(
+        { id: 'u1', role: 'EMPLOYEE' },
+        { id: 'u2', role: 'EMPLOYEE' },
+        { id: 'u3', role: 'DIRECTOR' },
+      );
+
+      const stats = await service.getPlatformStats(3);
+
+      const employeeRow = stats.roleDistribution.find(
+        (r) => r.role === 'EMPLOYEE',
+      );
+      const directorRow = stats.roleDistribution.find(
+        (r) => r.role === 'DIRECTOR',
+      );
+      expect(employeeRow?.count).toBe(2);
+      expect(directorRow?.count).toBe(1);
+    });
+
+    it("nofaol (isActive:false) shifoxonani churn ro'yxatiga qo'shadi", async () => {
+      prisma.__state.hospitals.push({
+        id: 'h1',
+        name: 'Yopilgan',
+        code: 'YP',
+        isActive: false,
+        employees: [],
+      });
+
+      const stats = await service.getPlatformStats(3);
+
+      expect(
+        stats.churn.some((c) => c.id === 'h1' && c.reason === 'INACTIVE'),
+      ).toBe(true);
+    });
+
+    it("faol lekin oxirgi 2 oyda to'lov qilmagan shifoxonani churn ro'yxatiga qo'shadi", async () => {
+      prisma.__state.hospitals.push({
+        id: 'h1',
+        name: 'To‘lamayotgan',
+        code: 'TM',
+        isActive: true,
+        employees: [{ firedAt: null }],
+      });
+      // Faqat 3 oy oldin to'lagan — oxirgi 2 oyda hech narsa yo'q
+      prisma.__state.payments.push({
+        id: 'p1',
+        hospitalId: 'h1',
+        period: periodsAgo(3),
+        amount: PRICE_PER_EMPLOYEE,
+        createdAt: 1,
+      });
+
+      const stats = await service.getPlatformStats(6);
+
+      expect(
+        stats.churn.some(
+          (c) => c.id === 'h1' && c.reason === 'NO_RECENT_PAYMENT',
+        ),
+      ).toBe(true);
+    });
+
+    it("oxirgi 2 oyda to'lagan faol shifoxona churn ro'yxatiga kirmaydi", async () => {
+      prisma.__state.hospitals.push({
+        id: 'h1',
+        name: 'Yaxshi',
+        code: 'YX',
+        isActive: true,
+        employees: [{ firedAt: null }],
+      });
+      prisma.__state.payments.push({
+        id: 'p1',
+        hospitalId: 'h1',
+        period: periodsAgo(1),
+        amount: PRICE_PER_EMPLOYEE,
+        createdAt: 1,
+      });
+
+      const stats = await service.getPlatformStats(6);
+
+      expect(stats.churn.some((c) => c.id === 'h1')).toBe(false);
     });
   });
 

@@ -36,6 +36,13 @@ export class PaymentsController {
     return this.service.getDebtorsReport(months ? Number(months) : 6);
   }
 
+  /** MRR/ARR va churn ko'rinishi (FAZA 5, 3-bosqich) — ?months=8 (standart), 2-24 oralig'ida */
+  @Get('platform-stats')
+  @Roles(...ALLOWED)
+  getPlatformStats(@Query('months') months?: string) {
+    return this.service.getPlatformStats(months ? Number(months) : 8);
+  }
+
   @Get()
   @Roles(...ALLOWED)
   findAll(

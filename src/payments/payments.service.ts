@@ -257,6 +257,109 @@ export class PaymentsService {
     });
   }
 
+  // ─── MRR/ARR va churn ko'rinishi (FAZA 5, 3-bosqich, 2026-09-19) ────────────
+  //
+  // Platforma darajasidagi umumiy ko'rsatkichlar — /panel "Umumiy ko'rinish"
+  // sahifasi shu metoddan foydalanadi (avval mock-data.ts'da bo'lgan
+  // qiymatlarning o'rnini bosadi).
+  async getPlatformStats(months = 8) {
+    const clampedMonths = Math.min(24, Math.max(2, months));
+    const periods = lastNPeriods(clampedMonths);
+    const period = currentPeriod();
+
+    // MRR trendi — har bir davr uchun HAQIQIY to'langan jami summa
+    // (barcha shifoxonalar bo'yicha, kutilgan emas — bu haqiqiy daromad).
+    const periodSums = await this.prisma.payment.groupBy({
+      by: ['period'],
+      where: { period: { in: periods } },
+      _sum: { amount: true },
+    });
+    const sumsMap = new Map(
+      periodSums.map((r) => [r.period, Number(r._sum.amount ?? 0)]),
+    );
+    const trend = periods.map((p) => ({
+      period: p,
+      amount: sumsMap.get(p) ?? 0,
+    }));
+
+    const mrr = sumsMap.get(period) ?? 0;
+    const arr = mrr * 12;
+
+    // To'lov holati taqsimoti (joriy oy) — mavjud getOverview()'ni qayta ishlatamiz.
+    const overview = await this.getOverview();
+    const paymentStatusCounts = { PAID: 0, PENDING: 0, OVERDUE: 0 };
+    let currentMonthOutstanding = 0;
+    for (const h of overview) {
+      paymentStatusCounts[h.status]++;
+      if (h.status !== 'PAID') currentMonthOutstanding += h.remainingAmount;
+    }
+
+    // Faol foydalanuvchilar — oxirgi 7 kun ichida kirganlar
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const activeUsersCount = await this.prisma.user.count({
+      where: { lastLoginAt: { gte: sevenDaysAgo } },
+    });
+
+    // Rollar taqsimoti
+    const roleGroups = await this.prisma.user.groupBy({
+      by: ['role'],
+      _count: { _all: true },
+    });
+    const roleDistribution = roleGroups.map((r) => ({
+      role: r.role,
+      count: r._count._all,
+    }));
+
+    // Churn — bloklanmagan lekin FAOLSIZ (isActive:false) YOKI oxirgi 2 oyda
+    // hech qanday to'lov qilmagan faol shifoxonalar.
+    const allHospitals = await this.prisma.hospital.findMany({
+      select: { id: true, name: true, code: true, isActive: true },
+    });
+    const activeIds = allHospitals.filter((h) => h.isActive).map((h) => h.id);
+    const last2Periods = lastNPeriods(2);
+    const recentPayments = activeIds.length
+      ? await this.prisma.payment.groupBy({
+          by: ['hospitalId'],
+          where: {
+            hospitalId: { in: activeIds },
+            period: { in: last2Periods },
+          },
+          _sum: { amount: true },
+        })
+      : [];
+    const paidRecentSet = new Set(
+      recentPayments
+        .filter((r) => Number(r._sum.amount ?? 0) > 0)
+        .map((r) => r.hospitalId),
+    );
+    const churn = allHospitals
+      .filter(
+        (h) =>
+          !h.isActive || (activeIds.includes(h.id) && !paidRecentSet.has(h.id)),
+      )
+      .map((h) => ({
+        id: h.id,
+        name: h.name,
+        code: h.code,
+        reason: !h.isActive
+          ? ('INACTIVE' as const)
+          : ('NO_RECENT_PAYMENT' as const),
+      }));
+
+    return {
+      period,
+      mrr,
+      arr,
+      trend,
+      paymentStatusCounts,
+      currentMonthOutstanding,
+      activeUsersCount,
+      roleDistribution,
+      churn,
+      churnCount: churn.length,
+    };
+  }
+
   // ─── Update payment amount (SUPER_ADMIN only) ────────────────────────────────
   async update(id: string, dto: UpdatePaymentDto) {
     const payment = await this.prisma.payment.findUnique({ where: { id } });
