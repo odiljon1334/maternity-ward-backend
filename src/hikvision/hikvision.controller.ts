@@ -10,14 +10,27 @@ import {
   UseInterceptors,
   UploadedFile,
   UseGuards,
+  ForbiddenException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { HikvisionService } from './hikvision.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
 import { AddPersonDto } from './hikvision.dto';
+
+const TERMINAL_ROLES = [
+  UserRole.SUPER_ADMIN,
+  UserRole.ASSISTANT_ADMIN,
+  UserRole.DIRECTOR,
+  UserRole.ADMIN,
+];
+
+function isSuperLike(role: UserRole): boolean {
+  return role === UserRole.SUPER_ADMIN || role === UserRole.ASSISTANT_ADMIN;
+}
 
 @UseGuards(JwtAuthGuard)
 @Controller('hikvision')
@@ -63,15 +76,38 @@ export class HikvisionController {
     return this.hikvision.deleteFacePicture(devIndex, employeeNo);
   }
 
+  // ─────────────────────────────────────────────────────────
+  // Terminallar — DIQQAT: DIRECTOR/ADMIN uchun hospitalId HAR DOIM
+  // JWT'dan olinadi (mijoz yuborgan qiymatga ishonilmaydi). Faqat
+  // SUPER_ADMIN/ASSISTANT_ADMIN so'rovda ko'rsatilgan hospitalId'dan
+  // (yoki "all"dan) foydalanishi mumkin. Bu — boshqa shifoxonaning
+  // terminaliga aralashish imkoniyatini yopadi (avval hech qanday
+  // tekshiruv yo'q edi).
+  // ─────────────────────────────────────────────────────────
+
   @Get('terminals')
-  getTerminals(@Query('hospitalId') hospitalId: string) {
-    if (hospitalId === 'all') {
-      return this.hikvision.getAllTerminalsWithStatus();
+  @UseGuards(RolesGuard)
+  @Roles(...TERMINAL_ROLES)
+  getTerminals(
+    @Query('hospitalId') hospitalId: string,
+    @CurrentUser('role') role: UserRole,
+    @CurrentUser('hospitalId') jwtHospitalId: string | null,
+  ) {
+    if (isSuperLike(role)) {
+      if (hospitalId === 'all') {
+        return this.hikvision.getAllTerminalsWithStatus();
+      }
+      return this.hikvision.getTerminalsWithStatus(hospitalId);
     }
-    return this.hikvision.getTerminalsWithStatus(hospitalId);
+    if (!jwtHospitalId) {
+      throw new ForbiddenException("Shifoxona aniqlanmadi");
+    }
+    return this.hikvision.getTerminalsWithStatus(jwtHospitalId);
   }
 
   @Post('terminals')
+  @UseGuards(RolesGuard)
+  @Roles(...TERMINAL_ROLES)
   addTerminal(
     @Body()
     body: {
@@ -80,8 +116,14 @@ export class HikvisionController {
       devIndex: string;
       password?: string;
     },
+    @CurrentUser('role') role: UserRole,
+    @CurrentUser('hospitalId') jwtHospitalId: string | null,
   ) {
-    return this.hikvision.addTerminal(body.hospitalId, {
+    const hospitalId = isSuperLike(role) ? body.hospitalId : jwtHospitalId;
+    if (!hospitalId) {
+      throw new ForbiddenException("Shifoxona aniqlanmadi");
+    }
+    return this.hikvision.addTerminal(hospitalId, {
       name: body.name,
       devIndex: body.devIndex,
       password: body.password,
@@ -89,24 +131,49 @@ export class HikvisionController {
   }
 
   @Delete('terminals/:id')
+  @UseGuards(RolesGuard)
+  @Roles(...TERMINAL_ROLES)
   deleteTerminal(
     @Param('id') id: string,
     @Query('hospitalId') hospitalId: string,
+    @CurrentUser('role') role: UserRole,
+    @CurrentUser('hospitalId') jwtHospitalId: string | null,
   ) {
-    return this.hikvision.removeTerminal(id, hospitalId);
+    const scopedHospitalId = isSuperLike(role) ? hospitalId : jwtHospitalId;
+    if (!scopedHospitalId) {
+      throw new ForbiddenException("Shifoxona aniqlanmadi");
+    }
+    return this.hikvision.removeTerminal(id, scopedHospitalId);
   }
 
   @Patch('terminals/:id')
+  @UseGuards(RolesGuard)
+  @Roles(...TERMINAL_ROLES)
   toggleTerminal(
     @Param('id') id: string,
     @Body() body: { isActive: boolean; hospitalId: string },
+    @CurrentUser('role') role: UserRole,
+    @CurrentUser('hospitalId') jwtHospitalId: string | null,
   ) {
-    return this.hikvision.toggleTerminal(id, body.hospitalId, body.isActive);
+    const hospitalId = isSuperLike(role) ? body.hospitalId : jwtHospitalId;
+    if (!hospitalId) {
+      throw new ForbiddenException("Shifoxona aniqlanmadi");
+    }
+    return this.hikvision.toggleTerminal(id, hospitalId, body.isActive);
   }
 
   // Bulk sync
   @Post('sync/:hospitalId')
-  syncHospital(@Param('hospitalId') hospitalId: string) {
+  @UseGuards(RolesGuard)
+  @Roles(...TERMINAL_ROLES)
+  syncHospital(
+    @Param('hospitalId') hospitalId: string,
+    @CurrentUser('role') role: UserRole,
+    @CurrentUser('hospitalId') jwtHospitalId: string | null,
+  ) {
+    if (!isSuperLike(role) && hospitalId !== jwtHospitalId) {
+      throw new ForbiddenException("Bu shifoxonaga ruxsatingiz yo'q");
+    }
     return this.hikvision.syncHospital(hospitalId);
   }
 
