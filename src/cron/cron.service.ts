@@ -6,7 +6,7 @@ import { SchedulesService } from '../schedules/schedules.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { DateUtil } from '../common/utils/date.util';
 import { LeaveService } from '../leave/leave.service';
-import { PushService } from 'src/push/push.service';
+import { PushService } from '../push/push.service';
 import dayjs from 'dayjs';
 import timezone from 'dayjs/plugin/timezone';
 import utc from 'dayjs/plugin/utc';
