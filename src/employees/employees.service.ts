@@ -307,6 +307,22 @@ export class EmployeesService {
           where: { id },
           select: { userId: true },
         });
+
+        if (username) {
+          // Boshqa foydalanuvchida shu username borligini tekshiramiz
+          const existingUser = await tx.user.findFirst({
+            where: {
+              username,
+              ...(emp?.userId ? { id: { not: emp.userId } } : {}),
+            },
+          });
+          if (existingUser) {
+            throw new BadRequestException(
+              'Bu username band, iltimos boshqasini kiriting.',
+            );
+          }
+        }
+
         if (emp?.userId) {
           // Mavjud user ni yangilash
           const updateData: any = {};
