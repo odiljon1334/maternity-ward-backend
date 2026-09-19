@@ -35,3 +35,6 @@ nginx/certs/
 
 # Prisma migrations COMMIT QILINADI — deploy uchun kerak!
 # (prisma migrate deploy server da ishlashi uchun)
+
+# Lokal DB backup fayllari (S3'ga yuklanadi, git'ga kerak emas)
+backups/
