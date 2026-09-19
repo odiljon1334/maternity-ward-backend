@@ -29,6 +29,7 @@ import { PushModule } from './push/push.module';
 import { BirthdayModule } from './birthday/birthday.module';
 import { HikvisionModule } from './hikvision/hikvision.module';
 import { LocationModule } from './location/location.module';
+import { UsersModule } from './users/users.module';
 
 @Module({
   imports: [
@@ -76,6 +77,7 @@ import { LocationModule } from './location/location.module';
     PushModule,
     BirthdayModule,
     LocationModule,
+    UsersModule,
   ],
   providers: [],
 })

@@ -9,8 +9,36 @@ import { PrismaService } from '../prisma/prisma.service';
 export class HospitalsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async findAll() {
+  /**
+   * ASSISTANT_ADMIN uchun ruxsat etilgan shifoxona ID'lari.
+   * Odiljon so'rovi (2026-09-19): "Assistant admin faqat o'ziga biriktirilgan
+   * korxona/poliklinikalarni ko'rishi tahrirlashi kerak".
+   *
+   * - SUPER_ADMIN (va boshqa rollar) — null qaytaradi (cheklovsiz).
+   * - ASSISTANT_ADMIN, kamida 1 ta biriktirilgan shifoxonasi bo'lsa —
+   *   faqat o'sha ID'lar massivi.
+   * - ASSISTANT_ADMIN, hali bironta ham biriktirilmagan bo'lsa — null
+   *   (o'tish davri uchun eski xatti-harakat: hammasini ko'radi, Odiljon
+   *   bilan kelishilgan — 2026-09-19).
+   */
+  async resolveAllowedHospitalIds(
+    role: string,
+    userId: string,
+  ): Promise<string[] | null> {
+    if (role !== 'ASSISTANT_ADMIN') return null;
+    const rows = await this.prisma.hospitalAssistant.findMany({
+      where: { userId },
+      select: { hospitalId: true },
+    });
+    if (rows.length === 0) return null;
+    return rows.map((r) => r.hospitalId);
+  }
+
+  async findAll(allowedHospitalIds?: string[] | null) {
     const hospitals = await this.prisma.hospital.findMany({
+      where: allowedHospitalIds
+        ? { id: { in: allowedHospitalIds } }
+        : undefined,
       include: {
         _count: {
           select: {
@@ -287,5 +315,48 @@ export class HospitalsService {
           ? `${count} ta Telegram obuna o'chirildi. Yangi direktor /start orqali qayta ulana oladi.`
           : 'Faol Telegram obuna topilmadi.',
     };
+  }
+
+  // ── Assistant Admin biriktirish (SUPER_ADMIN, /panel/hospitals) ────────
+
+  /** Shu shifoxonaga biriktirilgan barcha ASSISTANT_ADMIN'lar ro'yxati */
+  async listAssistants(hospitalId: string) {
+    await this.findOne(hospitalId);
+    const rows = await this.prisma.hospitalAssistant.findMany({
+      where: { hospitalId },
+      include: {
+        user: { select: { id: true, username: true, status: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+    return rows.map((r) => ({ assignmentId: r.id, ...r.user }));
+  }
+
+  /** Bitta ASSISTANT_ADMIN'ni shifoxonaga biriktirish (SUPER_ADMIN) */
+  async assignAssistant(hospitalId: string, userId: string) {
+    await this.findOne(hospitalId);
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new NotFoundException('Foydalanuvchi topilmadi');
+    if (user.role !== 'ASSISTANT_ADMIN') {
+      throw new ConflictException(
+        'Faqat ASSISTANT_ADMIN roli shifoxonaga biriktirilishi mumkin',
+      );
+    }
+
+    return this.prisma.hospitalAssistant.upsert({
+      where: { userId_hospitalId: { userId, hospitalId } },
+      create: { userId, hospitalId },
+      update: {},
+    });
+  }
+
+  /** Biriktirishni bekor qilish (SUPER_ADMIN) */
+  async unassignAssistant(hospitalId: string, userId: string) {
+    await this.prisma.hospitalAssistant
+      .delete({ where: { userId_hospitalId: { userId, hospitalId } } })
+      .catch(() => {
+        /* yozuv topilmasa ham — natija bir xil (biriktirilmagan holat) */
+      });
+    return { success: true };
   }
 }

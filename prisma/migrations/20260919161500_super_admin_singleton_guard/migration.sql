@@ -1,0 +1,12 @@
+-- Bazada bir vaqtning o'zida faqat BITTA SUPER_ADMIN bo'lishini DB darajasida
+-- kafolatlaydi (Odiljon so'rovi, 2026-09-19). Ilova darajasida ham ikkinchi
+-- SUPER_ADMIN yaratishning hech qanday yo'li yo'q (RegisterDto faqat
+-- MINISTRY/ASSISTANT_ADMIN'ga ruxsat beradi, UsersService.updateRole()
+-- SUPER_ADMIN'ni butunlay rad etadi) — bu shunchaki qo'shimcha,
+-- oxirgi chegara (masalan xato seed skripti yoki qo'lda SQL'dan himoya).
+--
+-- ESLATMA: bu qisman (partial) unique index Prisma schema.prisma'da
+-- ifodalanmaydi (Prisma DSL buni to'g'ridan-to'g'ri qo'llab-quvvatlamaydi) —
+-- shuning uchun bu jadvalga hech qachon `prisma db push` ishlatilmasin
+-- (faqat `migrate dev`/`migrate deploy`, bu loyihada allaqachon shunday).
+CREATE UNIQUE INDEX "User_single_super_admin" ON "User" ("role") WHERE ("role" = 'SUPER_ADMIN');

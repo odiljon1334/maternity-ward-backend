@@ -126,6 +126,15 @@ export class AuthService {
     };
     const token = this.jwt.sign(payload);
 
+    // Oxirgi kirish vaqtini yangilash — panel'dagi "faol foydalanuvchilar"
+    // ro'yxati shu maydonga tayanadi (fire-and-forget, login jarayonini
+    // sekinlashtirmaydi)
+    this.prisma.user
+      .update({ where: { id: user.id }, data: { lastLoginAt: new Date() } })
+      .catch(() => {
+        /* silent */
+      });
+
     // Muvaffaqiyatli kirish
     this.auditLog.log({
       userId: user.id,

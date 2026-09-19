@@ -8,11 +8,13 @@ import {
   Param,
   Body,
   UseGuards,
+  ForbiddenException,
 } from '@nestjs/common';
 import { HospitalsService } from './hospitals.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
 
 const SUPER = UserRole.SUPER_ADMIN;
@@ -26,13 +28,27 @@ export class HospitalsController {
 
   @Get()
   @Roles(SUPER, ASST)
-  findAll() {
-    return this.svc.findAll();
+  async findAll(
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('role') role: string,
+  ) {
+    const allowed = await this.svc.resolveAllowedHospitalIds(role, userId);
+    return this.svc.findAll(allowed);
   }
 
   @Get(':id')
   @Roles(SUPER, ASST)
-  findOne(@Param('id') id: string) {
+  async findOne(
+    @Param('id') id: string,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('role') role: string,
+  ) {
+    const allowed = await this.svc.resolveAllowedHospitalIds(role, userId);
+    if (allowed && !allowed.includes(id)) {
+      throw new ForbiddenException(
+        'Sizga bu shifoxonaga kirish huquqi berilmagan',
+      );
+    }
     return this.svc.findOne(id);
   }
 
@@ -50,9 +66,16 @@ export class HospitalsController {
     return this.svc.create(body);
   }
 
+  /**
+   * SUPER_ADMIN — barcha maydonlarni o'zgartira oladi.
+   * ASSISTANT_ADMIN — faqat o'ziga biriktirilgan shifoxonaning nomi/manzil/
+   * telefonini o'zgartira oladi (Odiljon so'rovi, 2026-09-19: "ko'rishi
+   * tahrirlashi"); isActive/GPS kabi operatsion maydonlarga tegmaydi
+   * (GPS uchun alohida gps-radius/gps-reset endpointlari bor).
+   */
   @Put(':id')
-  @Roles(SUPER)
-  update(
+  @Roles(SUPER, ASST)
+  async update(
     @Param('id') id: string,
     @Body()
     body: {
@@ -64,7 +87,19 @@ export class HospitalsController {
       gpsLng?: number;
       gpsRadius?: number;
     },
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('role') role: string,
   ) {
+    if (role === ASST) {
+      const allowed = await this.svc.resolveAllowedHospitalIds(role, userId);
+      if (allowed && !allowed.includes(id)) {
+        throw new ForbiddenException(
+          'Sizga bu shifoxonani tahrirlash huquqi berilmagan',
+        );
+      }
+      const { name, address, phone } = body;
+      return this.svc.update(id, { name, address, phone });
+    }
     return this.svc.update(id, body);
   }
 
@@ -129,5 +164,26 @@ export class HospitalsController {
   @Roles(SUPER, ASST)
   resetTelegramSubs(@Param('id') id: string) {
     return this.svc.resetTelegramSubs(id);
+  }
+
+  /** SUPER_ADMIN: shifoxonaga biriktirilgan Assistant Admin'lar ro'yxati */
+  @Get(':id/assistants')
+  @Roles(SUPER)
+  listAssistants(@Param('id') id: string) {
+    return this.svc.listAssistants(id);
+  }
+
+  /** SUPER_ADMIN: bitta Assistant Admin'ni shifoxonaga biriktirish */
+  @Post(':id/assistants')
+  @Roles(SUPER)
+  assignAssistant(@Param('id') id: string, @Body('userId') userId: string) {
+    return this.svc.assignAssistant(id, userId);
+  }
+
+  /** SUPER_ADMIN: biriktirishni bekor qilish */
+  @Delete(':id/assistants/:userId')
+  @Roles(SUPER)
+  unassignAssistant(@Param('id') id: string, @Param('userId') userId: string) {
+    return this.svc.unassignAssistant(id, userId);
   }
 }

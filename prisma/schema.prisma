@@ -162,9 +162,30 @@ model Hospital {
   cameras       Camera[]
   hikTerminals  HikTerminal[]
   leaveRequests LeaveRequest[]
+  assistantAdmins HospitalAssistant[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+// ─────────────────────────────────────────────
+// HOSPITAL ASSISTANT (ASSISTANT_ADMIN'ga biriktirilgan shifoxonalar)
+// ─────────────────────────────────────────────
+// Odiljon so'rovi (2026-09-19): "Assistant admin faqat o'ziga biriktirilgan
+// korxona/poliklinikalarni ko'rishi tahrirlashi kerak". SUPER_ADMIN har bir
+// ASSISTANT_ADMIN uchun qaysi shifoxonalarga ruxsat berilganini shu jadval
+// orqali boshqaradi (/panel/hospitals). Agar bir ASSISTANT_ADMIN uchun
+// bironta ham yozuv bo'lmasa — eski xatti-harakat saqlanadi (hammasini
+// ko'radi, o'tish davri uchun, Odiljon bilan kelishilgan).
+model HospitalAssistant {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  hospitalId String
+  hospital   Hospital @relation(fields: [hospitalId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@unique([userId, hospitalId])
 }
 
 // ─────────────────────────────────────────────
@@ -219,6 +240,9 @@ model User {
   notifications     Notification[]
   emailOtpTokens      EmailOtpToken[]
   passwordResetTokens PasswordResetToken[]
+  assignedHospitals   HospitalAssistant[]
+
+  lastLoginAt DateTime? // Oxirgi muvaffaqiyatli login vaqti (auth.service.ts login()da yangilanadi)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
