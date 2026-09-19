@@ -4,6 +4,11 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { processAndSaveLogo } from '../common/utils/image.util';
+import * as path from 'path';
+import * as fs from 'fs';
+
+const UPLOAD_DIR = process.env.UPLOAD_DIR || './uploads';
 
 @Injectable()
 export class HospitalsService {
@@ -119,10 +124,62 @@ export class HospitalsService {
       gpsLat?: number;
       gpsLng?: number;
       gpsRadius?: number;
+      logoUrl?: string;
     },
   ) {
     await this.findOne(id);
     return this.prisma.hospital.update({ where: { id }, data });
+  }
+
+  /**
+   * Tenant self-service branding (2026-09-19, Odiljon so'rovi): DIRECTOR/ADMIN
+   * o'z shifoxonasining logotipini yuklaydi. `hospitalId` chaqiruvchi
+   * controller'da HAR DOIM JWT'dan olinadi (hikvision tuzatishidagi bilan bir
+   * xil naqsh) — bu yerga kelguncha allaqachon tekshirilgan deb hisoblanadi.
+   */
+  async updateOwnLogo(hospitalId: string, imageBuffer: Buffer) {
+    const hospital = await this.findOne(hospitalId);
+
+    const filenameBase = `logo-${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+    const { filename } = await processAndSaveLogo(
+      imageBuffer,
+      UPLOAD_DIR,
+      filenameBase,
+    );
+    const logoUrl = `/uploads/${filename}`;
+
+    if (hospital.logoUrl) {
+      const oldFile = path.join(
+        UPLOAD_DIR,
+        hospital.logoUrl.replace(/^\/uploads\//, ''),
+      );
+      if (fs.existsSync(oldFile)) fs.unlinkSync(oldFile);
+    }
+
+    return this.prisma.hospital.update({
+      where: { id: hospitalId },
+      data: { logoUrl },
+      select: { id: true, name: true, logoUrl: true },
+    });
+  }
+
+  /**
+   * Tenant self-service: DIRECTOR/ADMIN o'z shifoxonasi nomini o'zgartiradi.
+   * `hospitalId` HAR DOIM JWT'dan (controller'da tekshirilgan).
+   */
+  async updateOwnInfo(hospitalId: string, data: { name?: string }) {
+    await this.findOne(hospitalId);
+    return this.prisma.hospital.update({
+      where: { id: hospitalId },
+      data,
+      select: {
+        id: true,
+        name: true,
+        logoUrl: true,
+        address: true,
+        phone: true,
+      },
+    });
   }
 
   async remove(id: string) {

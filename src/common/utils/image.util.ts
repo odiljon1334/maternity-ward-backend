@@ -34,3 +34,37 @@ export async function processAndSavePhoto(
   const stat = fs.statSync(outputPath);
   return { filename, sizeKb: Math.round(stat.size / 1024) };
 }
+
+/**
+ * Shifoxona logotipini qayta ishlaydi va saqlaydi (tenant branding self-service,
+ * 2026-09-19). Xodim rasmidan (`processAndSavePhoto`) farqi — logotiplar ko'pincha
+ * shaffof fonli (PNG) bo'ladi, shuning uchun JPEG'ga MAJBURAN aylantirilmaydi
+ * (shaffoflik yo'qolmasligi uchun), aksincha har doim PNG sifatida saqlanadi
+ * (kirish formati JPG bo'lsa ham — muammosiz, faqat biroz kattaroq fayl bo'lishi
+ * mumkin, lekin logotip hajmi juda kichik bo'lgani uchun bu ahamiyatsiz).
+ * Maksimal 512x512 (nisbatni saqlab, kattalashtirmasdan).
+ */
+export async function processAndSaveLogo(
+  buffer: Buffer,
+  uploadDir: string,
+  filenameWithoutExt: string,
+): Promise<{ filename: string; sizeKb: number }> {
+  if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir, { recursive: true });
+  }
+
+  const filename = `${filenameWithoutExt}.png`;
+  const outputPath = path.join(uploadDir, filename);
+
+  await sharp(buffer)
+    .rotate()
+    .resize(512, 512, {
+      fit: 'inside',
+      withoutEnlargement: true,
+    })
+    .png({ quality: 90 })
+    .toFile(outputPath);
+
+  const stat = fs.statSync(outputPath);
+  return { filename, sizeKb: Math.round(stat.size / 1024) };
+}

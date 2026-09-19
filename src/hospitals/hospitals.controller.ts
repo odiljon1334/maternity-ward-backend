@@ -8,8 +8,13 @@ import {
   Param,
   Body,
   UseGuards,
+  UseInterceptors,
+  UploadedFile,
+  BadRequestException,
   ForbiddenException,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import { HospitalsService } from './hospitals.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -20,6 +25,7 @@ import { UserRole } from '@prisma/client';
 const SUPER = UserRole.SUPER_ADMIN;
 const ASST = UserRole.ASSISTANT_ADMIN;
 const DIR = UserRole.DIRECTOR;
+const ADMIN = UserRole.ADMIN;
 
 @Controller('hospitals')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -185,5 +191,45 @@ export class HospitalsController {
   @Roles(SUPER)
   unassignAssistant(@Param('id') id: string, @Param('userId') userId: string) {
     return this.svc.unassignAssistant(id, userId);
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // Tenant self-service branding (2026-09-19, Odiljon so'rovi):
+  // DIRECTOR/ADMIN o'z shifoxonasining nomi/logotipini o'zi sozlaydi.
+  // DIQQAT: hospitalId HAR DOIM JWT'dan olinadi (mijoz yuborgan qiymatga
+  // ishonilmaydi) — hikvision tuzatishidagi bilan bir xil naqsh.
+  // ─────────────────────────────────────────────────────────
+
+  @Patch('me')
+  @Roles(DIR, ADMIN)
+  updateOwnInfo(
+    @Body('name') name: string,
+    @CurrentUser('hospitalId') hospitalId: string,
+  ) {
+    if (!hospitalId) {
+      throw new ForbiddenException('Shifoxona aniqlanmadi');
+    }
+    if (!name || !name.trim()) {
+      throw new BadRequestException(
+        "Shifoxona nomi bo'sh bo'lishi mumkin emas",
+      );
+    }
+    return this.svc.updateOwnInfo(hospitalId, { name: name.trim() });
+  }
+
+  @Post('me/logo')
+  @Roles(DIR, ADMIN)
+  @UseInterceptors(FileInterceptor('logo', { storage: memoryStorage() }))
+  updateOwnLogo(
+    @UploadedFile() file: Express.Multer.File,
+    @CurrentUser('hospitalId') hospitalId: string,
+  ) {
+    if (!hospitalId) {
+      throw new ForbiddenException('Shifoxona aniqlanmadi');
+    }
+    if (!file) {
+      throw new BadRequestException('Logotip fayli yuklanmadi');
+    }
+    return this.svc.updateOwnLogo(hospitalId, file.buffer);
   }
 }

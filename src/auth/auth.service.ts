@@ -233,6 +233,12 @@ export class AuthService {
         employee: {
           include: { department: true, position: true },
         },
+        // Tenant branding (2026-09-19): sidebar/topbar'da shifoxonaning
+        // o'z logotipi/nomi ko'rsatilishi uchun — additive, mavjud
+        // maydonlarga ta'sir qilmaydi.
+        hospital: {
+          select: { id: true, name: true, logoUrl: true },
+        },
       },
     });
   }
