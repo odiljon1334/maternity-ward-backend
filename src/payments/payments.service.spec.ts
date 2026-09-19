@@ -54,16 +54,59 @@ function makeFakePrisma() {
     },
 
     payment: {
-      groupBy: jest.fn(async ({ where }: any) => {
-        const map = new Map<string, number>();
+      // Umumiy groupBy — getOverview() (by:['hospitalId']) VA
+      // getDebtorsReport() (by:['hospitalId','period'], `in` filtrlar,
+      // `_max`) ikkalasini ham qamrab oladi.
+      groupBy: jest.fn(async ({ where, by, _sum, _max }: any) => {
+        const matches = (p: any) => {
+          if (
+            where?.period &&
+            typeof where.period === 'string' &&
+            p.period !== where.period
+          )
+            return false;
+          if (where?.period?.in && !where.period.in.includes(p.period))
+            return false;
+          if (
+            where?.hospitalId?.in &&
+            !where.hospitalId.in.includes(p.hospitalId)
+          )
+            return false;
+          return true;
+        };
+        const groups = new Map<string, any[]>();
         for (const p of payments) {
-          if (where?.period && p.period !== where.period) continue;
-          map.set(p.hospitalId, (map.get(p.hospitalId) ?? 0) + p.amount);
+          if (!matches(p)) continue;
+          const key = by.map((k: string) => p[k]).join('|');
+          if (!groups.has(key)) groups.set(key, []);
+          groups.get(key)!.push(p);
         }
-        return Array.from(map.entries()).map(([hospitalId, sum]) => ({
-          hospitalId,
-          _sum: { amount: sum },
-        }));
+        return Array.from(groups.entries()).map(([key, rows]) => {
+          const keyParts = key.split('|');
+          const result: any = {};
+          by.forEach((k: string, i: number) => {
+            result[k] = keyParts[i];
+          });
+          if (_sum) {
+            result._sum = {};
+            for (const field of Object.keys(_sum)) {
+              result._sum[field] = rows.reduce(
+                (s, r) => s + (r[field] ?? 0),
+                0,
+              );
+            }
+          }
+          if (_max) {
+            result._max = {};
+            for (const field of Object.keys(_max)) {
+              result._max[field] = rows.reduce(
+                (max, r) => (!max || r[field] > max ? r[field] : max),
+                null,
+              );
+            }
+          }
+          return result;
+        });
       }),
       findMany: jest.fn(async ({ where, take }: any) => {
         return payments
@@ -80,8 +123,9 @@ function makeFakePrisma() {
         payments.push(p);
         return p;
       }),
-      findUnique: jest.fn(async ({ where }: any) =>
-        payments.find((p) => p.id === where.id) ?? null,
+      findUnique: jest.fn(
+        async ({ where }: any) =>
+          payments.find((p) => p.id === where.id) ?? null,
       ),
       update: jest.fn(async ({ where, data }: any) => {
         const p = payments.find((x) => x.id === where.id);
@@ -100,7 +144,10 @@ describe('PaymentsService', () => {
     prisma = makeFakePrisma();
 
     const module: TestingModule = await Test.createTestingModule({
-      providers: [PaymentsService, { provide: PrismaService, useValue: prisma }],
+      providers: [
+        PaymentsService,
+        { provide: PrismaService, useValue: prisma },
+      ],
     }).compile();
 
     service = module.get(PaymentsService);
@@ -179,15 +226,169 @@ describe('PaymentsService', () => {
     });
   });
 
+  describe('getDebtorsReport', () => {
+    function periodsAgo(n: number): string {
+      const now = new Date();
+      const d = new Date(now.getFullYear(), now.getMonth() - n, 1);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    }
+
+    it("hech qachon to'lamagan shifoxona uchun barcha oylar (joriy oy ham) qarzdorlikka kiradi", async () => {
+      prisma.__state.hospitals.push({
+        id: 'h1',
+        name: 'Qarzdor klinika',
+        code: 'QK',
+        isActive: true,
+        employees: [{ firedAt: null }],
+      });
+
+      const [report] = await service.getDebtorsReport(3);
+
+      expect(report.employeeCount).toBe(1);
+      expect(report.monthly).toHaveLength(3);
+      // Joriy oy hali muddatida — PENDING, o'tganlar — OVERDUE
+      expect(report.monthly[2].status).toBe('PENDING');
+      expect(report.monthly[0].status).toBe('OVERDUE');
+      expect(report.monthly[1].status).toBe('OVERDUE');
+      // Uzluksiz to'lanmagan oylar: joriy oy ham hisobga kiradi
+      expect(report.consecutiveUnpaidMonths).toBe(3);
+      // Jami qarz — faqat MUDDATI O'TGAN (OVERDUE) 2 oy bo'yicha, joriy oy kirmaydi
+      expect(report.totalDebt).toBe(2 * PRICE_PER_EMPLOYEE);
+    });
+
+    it("o'tgan oylarni to'lagan, joriy oyni hali to'lamagan shifoxona uchun uzluksiz seriya faqat joriy oy bilan chegaralanadi", async () => {
+      prisma.__state.hospitals.push({
+        id: 'h1',
+        name: 'Yaxshi to‘lovchi',
+        code: 'YT',
+        isActive: true,
+        employees: [{ firedAt: null }],
+      });
+      prisma.__state.payments.push(
+        {
+          id: 'p1',
+          hospitalId: 'h1',
+          period: periodsAgo(2),
+          amount: PRICE_PER_EMPLOYEE,
+          createdAt: 1,
+        },
+        {
+          id: 'p2',
+          hospitalId: 'h1',
+          period: periodsAgo(1),
+          amount: PRICE_PER_EMPLOYEE,
+          createdAt: 2,
+        },
+      );
+
+      const [report] = await service.getDebtorsReport(3);
+
+      expect(report.consecutiveUnpaidMonths).toBe(1); // faqat joriy oy
+      expect(report.totalDebt).toBe(0); // hech qanday OVERDUE oy yo'q
+    });
+
+    it("to'liq to'lagan shifoxona uchun qarzdorlik 0 bo'ladi", async () => {
+      prisma.__state.hospitals.push({
+        id: 'h1',
+        name: 'Namunali klinika',
+        code: 'NK',
+        isActive: true,
+        employees: [{ firedAt: null }],
+      });
+      for (let i = 0; i < 3; i++) {
+        prisma.__state.payments.push({
+          id: `pay-${i}`,
+          hospitalId: 'h1',
+          period: periodsAgo(i),
+          amount: PRICE_PER_EMPLOYEE,
+          createdAt: i,
+        });
+      }
+
+      const [report] = await service.getDebtorsReport(3);
+
+      expect(report.consecutiveUnpaidMonths).toBe(0);
+      expect(report.totalDebt).toBe(0);
+      expect(report.monthly.every((m) => m.status === 'PAID')).toBe(true);
+    });
+
+    it('eng ko‘p qarzdor shifoxonalar ro‘yxat boshida chiqadi', async () => {
+      prisma.__state.hospitals.push(
+        {
+          id: 'h-debt',
+          name: 'Qarzdor',
+          code: 'QD',
+          isActive: true,
+          employees: [{ firedAt: null }],
+        },
+        {
+          id: 'h-clean',
+          name: 'Toza',
+          code: 'TZ',
+          isActive: true,
+          employees: [{ firedAt: null }],
+        },
+      );
+      for (let i = 0; i < 3; i++) {
+        prisma.__state.payments.push({
+          id: `clean-${i}`,
+          hospitalId: 'h-clean',
+          period: periodsAgo(i),
+          amount: PRICE_PER_EMPLOYEE,
+          createdAt: i,
+        });
+      }
+
+      const report = await service.getDebtorsReport(3);
+
+      expect(report[0].id).toBe('h-debt');
+      expect(report[1].id).toBe('h-clean');
+    });
+
+    it('months parametri 1-24 oralig‘ida cheklanadi (masalan 100 -> 24)', async () => {
+      prisma.__state.hospitals.push({
+        id: 'h1',
+        name: 'Klinika',
+        code: 'K1',
+        isActive: true,
+        employees: [],
+      });
+
+      const [report] = await service.getDebtorsReport(100);
+      expect(report.monthly).toHaveLength(24);
+    });
+  });
+
   describe('findAll', () => {
     it('hospitalId va period bo‘yicha filtrlaydi', async () => {
       prisma.__state.payments.push(
-        { id: 'p1', hospitalId: 'h1', period: '2026-09', amount: 1, createdAt: 1 },
-        { id: 'p2', hospitalId: 'h2', period: '2026-09', amount: 1, createdAt: 2 },
-        { id: 'p3', hospitalId: 'h1', period: '2026-08', amount: 1, createdAt: 3 },
+        {
+          id: 'p1',
+          hospitalId: 'h1',
+          period: '2026-09',
+          amount: 1,
+          createdAt: 1,
+        },
+        {
+          id: 'p2',
+          hospitalId: 'h2',
+          period: '2026-09',
+          amount: 1,
+          createdAt: 2,
+        },
+        {
+          id: 'p3',
+          hospitalId: 'h1',
+          period: '2026-08',
+          amount: 1,
+          createdAt: 3,
+        },
       );
 
-      const result = await service.findAll({ hospitalId: 'h1', period: '2026-09' });
+      const result = await service.findAll({
+        hospitalId: 'h1',
+        period: '2026-09',
+      });
 
       expect(result).toHaveLength(1);
       expect(result[0].id).toBe('p1');

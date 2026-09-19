@@ -23,6 +23,17 @@ function getPeriodStatus(
   return new Date() <= periodEnd ? 'PENDING' : 'OVERDUE';
 }
 
+/** Oxirgi N oy davri ("YYYY-MM"), eskisidan yangisiga qarab tartiblangan — joriy oy ham kiradi. */
+function lastNPeriods(n: number): string[] {
+  const out: string[] = [];
+  const now = new Date();
+  for (let i = n - 1; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    out.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+  }
+  return out;
+}
+
 @Injectable()
 export class PaymentsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -125,6 +136,109 @@ export class PaymentsService {
       },
       include: { hospital: { select: { id: true, name: true, code: true } } },
     });
+  }
+
+  // ─── Ko'p oylik qarzdorlik hisoboti (FAZA 5, 1-bosqich, 2026-09-19) ─────────
+  //
+  // Soddalashtirilgan yondashuv (Reja.md'da kelishilganidek): har oy uchun
+  // "kutilayotgan summa" JORIY xodimlar sonidan hisoblanadi (tarixiy xodimlar
+  // sonini oy-oy kuzatish uchun alohida snapshot jadvali kerak bo'lardi —
+  // hozircha bu Faza 5'ning qamroviga kirmaydi). Demak agar bir shifoxonada
+  // xodimlar soni oxirgi oylarda sezilarli o'zgargan bo'lsa, o'tgan oylar uchun
+  // "kutilgan summa" biroz noaniq bo'lishi mumkin — amalda buning ta'siri kam,
+  // chunki maqsad aniq buxgalteriya emas, balki "qaysi shifoxona qancha vaqtdan
+  // beri to'lamayapti" degan boshqaruv ko'rinishini berish.
+  async getDebtorsReport(months = 6) {
+    const clampedMonths = Math.min(24, Math.max(1, months));
+    const periods = lastNPeriods(clampedMonths);
+
+    const hospitals = await this.prisma.hospital.findMany({
+      where: { isActive: true },
+      select: {
+        id: true,
+        name: true,
+        code: true,
+        _count: { select: { employees: { where: { firedAt: null } } } },
+      },
+      orderBy: { name: 'asc' },
+    });
+    const hospitalIds = hospitals.map((h) => h.id);
+
+    const periodTotals = await this.prisma.payment.groupBy({
+      by: ['hospitalId', 'period'],
+      where: { hospitalId: { in: hospitalIds }, period: { in: periods } },
+      _sum: { amount: true },
+    });
+    const paidMap = new Map<string, number>();
+    for (const row of periodTotals) {
+      paidMap.set(
+        `${row.hospitalId}|${row.period}`,
+        Number(row._sum.amount ?? 0),
+      );
+    }
+
+    const lastPayments = await this.prisma.payment.groupBy({
+      by: ['hospitalId'],
+      where: { hospitalId: { in: hospitalIds } },
+      _max: { paidAt: true },
+    });
+    const lastPaidMap = new Map(
+      lastPayments.map((r) => [r.hospitalId, r._max.paidAt]),
+    );
+
+    const report = hospitals.map((h) => {
+      const expectedAmountPerMonth = h._count.employees * PRICE_PER_EMPLOYEE;
+
+      const monthly = periods.map((period) => {
+        const paidAmount = paidMap.get(`${h.id}|${period}`) ?? 0;
+        const status = getPeriodStatus(
+          paidAmount,
+          expectedAmountPerMonth,
+          period,
+        );
+        return {
+          period,
+          expectedAmount: expectedAmountPerMonth,
+          paidAmount,
+          remainingAmount: Math.max(0, expectedAmountPerMonth - paidAmount),
+          status,
+        };
+      });
+
+      // Eng so'nggi oydan orqaga qarab, uzluksiz TO'LANMAGAN (PENDING yoki
+      // OVERDUE) oylar soni — joriy oy ham hisobga kiradi (hali muddati
+      // o'tmagan bo'lsa ham, "hozircha to'lamagan" degani).
+      let consecutiveUnpaidMonths = 0;
+      for (let i = monthly.length - 1; i >= 0; i--) {
+        if (monthly[i].status !== 'PAID') consecutiveUnpaidMonths++;
+        else break;
+      }
+
+      // Jami qarz — FAQAT muddati o'tib ketgan (OVERDUE) oylar bo'yicha;
+      // joriy PENDING oy hali muddatida bo'lgani uchun "qarz" hisoblanmaydi.
+      const totalDebt = monthly
+        .filter((m) => m.status === 'OVERDUE')
+        .reduce((sum, m) => sum + m.remainingAmount, 0);
+
+      return {
+        id: h.id,
+        name: h.name,
+        code: h.code,
+        employeeCount: h._count.employees,
+        expectedAmountPerMonth,
+        consecutiveUnpaidMonths,
+        totalDebt,
+        lastPaymentAt: lastPaidMap.get(h.id) ?? null,
+        monthly,
+      };
+    });
+
+    // Eng ko'p qarzdorlar birinchi bo'lib chiqadi.
+    return report.sort(
+      (a, b) =>
+        b.consecutiveUnpaidMonths - a.consecutiveUnpaidMonths ||
+        b.totalDebt - a.totalDebt,
+    );
   }
 
   // ─── Update payment amount (SUPER_ADMIN only) ────────────────────────────────

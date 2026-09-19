@@ -29,6 +29,13 @@ export class PaymentsController {
     return this.service.getOverview();
   }
 
+  /** Ko'p oylik qarzdorlik hisoboti (FAZA 5, 1-bosqich) — ?months=6 (standart), 1-24 oralig'ida */
+  @Get('debtors')
+  @Roles(...ALLOWED)
+  getDebtors(@Query('months') months?: string) {
+    return this.service.getDebtorsReport(months ? Number(months) : 6);
+  }
+
   @Get()
   @Roles(...ALLOWED)
   findAll(
