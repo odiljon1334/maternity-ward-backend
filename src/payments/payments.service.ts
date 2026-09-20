@@ -2,8 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { UpdatePaymentDto } from './dto/update-payment.dto';
-
-const PRICE_PER_EMPLOYEE = 20_000;
+import { getMonthlyExpectedAmount } from '../common/utils/pricing.util';
 
 export function currentPeriod(): string {
   const d = new Date();
@@ -78,7 +77,7 @@ export class PaymentsService {
 
     return hospitals.map((h) => {
       const employeeCount = h._count.employees;
-      const expectedAmount = employeeCount * PRICE_PER_EMPLOYEE;
+      const expectedAmount = getMonthlyExpectedAmount(employeeCount);
       const paidAmount = totalsMap.get(h.id) ?? 0;
       const status = getPeriodStatus(paidAmount, expectedAmount, period);
 
@@ -187,7 +186,9 @@ export class PaymentsService {
     );
 
     const report = hospitals.map((h) => {
-      const expectedAmountPerMonth = h._count.employees * PRICE_PER_EMPLOYEE;
+      const expectedAmountPerMonth = getMonthlyExpectedAmount(
+        h._count.employees,
+      );
 
       const monthly = periods.map((period) => {
         const paidAmount = paidMap.get(`${h.id}|${period}`) ?? 0;

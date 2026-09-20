@@ -6,6 +6,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as https from 'https';
 import { formatMinutes, isHospitalBlocked } from '../common/utils/payment.util';
+import { getStaffPricing } from '../common/utils/pricing.util';
 
 const TZ = process.env.TIMEZONE || 'Asia/Tashkent';
 
@@ -351,25 +352,47 @@ export class TelegramService implements OnModuleInit {
         orderBy: { validUntil: 'desc' },
       });
 
-      const MONTHLY_PER_EMP = 12_000;
-      const ANNUAL_PER_EMP = 100_000;
-      const monthlyTotal = empCount * MONTHLY_PER_EMP;
-      const annualTotal = empCount * ANNUAL_PER_EMP;
-      const saving = monthlyTotal * 12 - annualTotal;
+      const pricing = getStaffPricing(empCount);
 
       const subLine = activeSub
         ? `✅ <b>Faol obuna:</b> ${activeSub.type === 'MONTHLY' ? 'Oylik' : 'Yillik'}\n` +
           `📅 Tugash sanasi: <b>${activeSub.validUntil!.toLocaleDateString('uz-UZ', { timeZone: 'Asia/Tashkent' })}</b>`
         : `❌ <b>Faol obuna yo'q</b>`;
 
+      if (pricing.negotiated) {
+        await ctx.reply(
+          `💳 <b>Obuna boshqaruvi</b>\n\n` +
+            `🏥 ${linked.name}\n` +
+            `👥 Faol xodimlar: <b>${empCount} nafar</b>\n\n` +
+            `${subLine}\n\n` +
+            `📌 <b>Tarif:</b> 500 nafardan ortiq xodim uchun narx individual ` +
+            `kelishiladi. Iltimos, operator bilan bog'laning: +998 95 577 54 54`,
+          {
+            parse_mode: 'HTML',
+            ...Markup.inlineKeyboard([
+              [Markup.button.callback('⬅️ Orqaga', 'cmd_back')],
+            ]),
+          },
+        );
+        return;
+      }
+
+      const monthlyTotal = pricing.monthlyTotal!;
+      const annualTotal = pricing.annualTotal!;
+      const saving = monthlyTotal * 12 - annualTotal;
+      const breakdownLine = pricing.isFlat
+        ? `📅 Oylik: <b>${monthlyTotal.toLocaleString()} so'm</b> (FIKS narx)\n` +
+          `📆 Yillik: <b>${annualTotal.toLocaleString()} so'm</b>\n`
+        : `📅 Oylik: ${empCount} × ${pricing.perEmployeeMonthly!.toLocaleString()} = <b>${monthlyTotal.toLocaleString()} so'm</b>\n` +
+          `📆 Yillik: ${empCount} × ${pricing.perEmployeeAnnual!.toLocaleString()} = <b>${annualTotal.toLocaleString()} so'm</b>\n`;
+
       await ctx.reply(
         `💳 <b>Obuna boshqaruvi</b>\n\n` +
           `🏥 ${linked.name}\n` +
           `👥 Faol xodimlar: <b>${empCount} nafar</b>\n\n` +
           `${subLine}\n\n` +
-          `📌 <b>Tariflar:</b>\n` +
-          `📅 Oylik: ${empCount} × 12,000 = <b>${monthlyTotal.toLocaleString()} so'm</b>\n` +
-          `📆 Yillik: ${empCount} × 100,000 = <b>${annualTotal.toLocaleString()} so'm</b>\n` +
+          `📌 <b>Tarif (${pricing.planLabel}):</b>\n` +
+          breakdownLine +
           `   <i>(${saving.toLocaleString()} so'm tejaysiz)</i>`,
         {
           parse_mode: 'HTML',
@@ -413,19 +436,39 @@ export class TelegramService implements OnModuleInit {
         where: { hospitalId, firedAt: null },
       });
 
+      const pricing = getStaffPricing(empCount);
+      if (pricing.negotiated) {
+        return ctx.reply(
+          '⚠️ 500 nafardan ortiq xodim uchun narx individual kelishiladi. ' +
+            "Iltimos, operator bilan bog'laning: +998 95 577 54 54",
+        );
+      }
+
       const isMonthly = type === 'MONTHLY';
-      const pricePerEmp = isMonthly ? 12_000 : 100_000;
-      const totalSom = empCount * pricePerEmp;
+      const totalSom = isMonthly ? pricing.monthlyTotal! : pricing.annualTotal!;
       const title = isMonthly ? '📅 Oylik obuna' : '📆 Yillik obuna';
       const period = isMonthly ? '1 oy' : '1 yil';
+      const perUnitLabel = isMonthly
+        ? pricing.perEmployeeMonthly
+        : pricing.perEmployeeAnnual;
+      const descriptionLine = pricing.isFlat
+        ? `${hospital.name} uchun ${period}lik obuna\n📦 ${pricing.planLabel} — FIKS narx`
+        : `${hospital.name} uchun ${period}lik obuna\n👥 ${empCount} nafar xodim × ${perUnitLabel!.toLocaleString()} so'm`;
 
       await ctx.replyWithInvoice(
         title,
-        `${hospital.name} uchun ${period}lik obuna\n👥 ${empCount} nafar xodim × ${pricePerEmp.toLocaleString()} so'm`,
+        descriptionLine,
         `${type}:${hospitalId}`, // payload
         paymentToken,
         'UZS',
-        [{ label: `${empCount} xodim (${period})`, amount: totalSom }],
+        [
+          {
+            label: pricing.isFlat
+              ? `${pricing.planLabel} (${period})`
+              : `${empCount} xodim (${period})`,
+            amount: totalSom,
+          },
+        ],
         {
           photo_url: 'https://clinicuk24.com/icons/icon-192x192.png',
           need_name: false,

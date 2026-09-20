@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { NotFoundException } from '@nestjs/common';
 import { PaymentsService } from './payments.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { getMonthlyExpectedAmount } from '../common/utils/pricing.util';
 
 /**
  * PaymentsService uchun servis-darajasidagi (unit) testlar — Faza 3.4
@@ -14,8 +15,6 @@ import { PrismaService } from '../prisma/prisma.service';
  * ishlashini tekshirish — bular to'g'ridan-to'g'ri moliyaviy hisobotga
  * ta'sir qiladi.
  */
-
-const PRICE_PER_EMPLOYEE = 20_000;
 
 function currentPeriod(): string {
   const d = new Date();
@@ -195,9 +194,9 @@ describe('PaymentsService', () => {
       const [overview] = await service.getOverview();
 
       expect(overview.employeeCount).toBe(3);
-      expect(overview.expectedAmount).toBe(3 * PRICE_PER_EMPLOYEE);
+      expect(overview.expectedAmount).toBe(getMonthlyExpectedAmount(3));
       expect(overview.paidAmount).toBe(0);
-      expect(overview.remainingAmount).toBe(3 * PRICE_PER_EMPLOYEE);
+      expect(overview.remainingAmount).toBe(getMonthlyExpectedAmount(3));
       expect(overview.status).toBe('PENDING');
     });
 
@@ -213,7 +212,7 @@ describe('PaymentsService', () => {
       const [overview] = await service.getOverview();
 
       expect(overview.employeeCount).toBe(1);
-      expect(overview.expectedAmount).toBe(PRICE_PER_EMPLOYEE);
+      expect(overview.expectedAmount).toBe(getMonthlyExpectedAmount(1));
     });
 
     it("to'liq to'langan bo'lsa status PAID bo'ladi va remainingAmount 0'da to'xtaydi", async () => {
@@ -227,14 +226,14 @@ describe('PaymentsService', () => {
       prisma.__state.payments.push({
         id: 'pay-existing',
         hospitalId: 'h1',
-        amount: 100_000, // 2 * 20_000 dan ko'p to'langan
+        amount: getMonthlyExpectedAmount(2), // to'liq (Start tarifi bo'yicha kutilgan summa)
         period: currentPeriod(),
         createdAt: Date.now(),
       });
 
       const [overview] = await service.getOverview();
 
-      expect(overview.paidAmount).toBe(100_000);
+      expect(overview.paidAmount).toBe(getMonthlyExpectedAmount(2));
       expect(overview.status).toBe('PAID');
       expect(overview.remainingAmount).toBe(0);
     });
@@ -282,7 +281,7 @@ describe('PaymentsService', () => {
       // Uzluksiz to'lanmagan oylar: joriy oy ham hisobga kiradi
       expect(report.consecutiveUnpaidMonths).toBe(3);
       // Jami qarz — faqat MUDDATI O'TGAN (OVERDUE) 2 oy bo'yicha, joriy oy kirmaydi
-      expect(report.totalDebt).toBe(2 * PRICE_PER_EMPLOYEE);
+      expect(report.totalDebt).toBe(2 * getMonthlyExpectedAmount(1));
     });
 
     it("o'tgan oylarni to'lagan, joriy oyni hali to'lamagan shifoxona uchun uzluksiz seriya faqat joriy oy bilan chegaralanadi", async () => {
@@ -298,14 +297,14 @@ describe('PaymentsService', () => {
           id: 'p1',
           hospitalId: 'h1',
           period: periodsAgo(2),
-          amount: PRICE_PER_EMPLOYEE,
+          amount: getMonthlyExpectedAmount(1),
           createdAt: 1,
         },
         {
           id: 'p2',
           hospitalId: 'h1',
           period: periodsAgo(1),
-          amount: PRICE_PER_EMPLOYEE,
+          amount: getMonthlyExpectedAmount(1),
           createdAt: 2,
         },
       );
@@ -329,7 +328,7 @@ describe('PaymentsService', () => {
           id: `pay-${i}`,
           hospitalId: 'h1',
           period: periodsAgo(i),
-          amount: PRICE_PER_EMPLOYEE,
+          amount: getMonthlyExpectedAmount(1),
           createdAt: i,
         });
       }
@@ -363,7 +362,7 @@ describe('PaymentsService', () => {
           id: `clean-${i}`,
           hospitalId: 'h-clean',
           period: periodsAgo(i),
-          amount: PRICE_PER_EMPLOYEE,
+          amount: getMonthlyExpectedAmount(1),
           createdAt: i,
         });
       }
@@ -449,7 +448,7 @@ describe('PaymentsService', () => {
         id: 'p1',
         hospitalId: 'h-paid',
         period: currentPeriod(),
-        amount: PRICE_PER_EMPLOYEE,
+        amount: getMonthlyExpectedAmount(1),
         createdAt: 1,
       });
 
@@ -529,7 +528,7 @@ describe('PaymentsService', () => {
         id: 'p1',
         hospitalId: 'h1',
         period: periodsAgo(3),
-        amount: PRICE_PER_EMPLOYEE,
+        amount: getMonthlyExpectedAmount(1),
         createdAt: 1,
       });
 
@@ -554,7 +553,7 @@ describe('PaymentsService', () => {
         id: 'p1',
         hospitalId: 'h1',
         period: periodsAgo(1),
-        amount: PRICE_PER_EMPLOYEE,
+        amount: getMonthlyExpectedAmount(1),
         createdAt: 1,
       });
 

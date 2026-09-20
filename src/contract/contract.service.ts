@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import PDFDocument from 'pdfkit';
+import { getStaffPricing, formatSom } from '../common/utils/pricing.util';
 
 export interface TrialContractData {
   fullName: string;
@@ -12,10 +13,36 @@ export interface TrialContractData {
 }
 
 const PLAN_LABELS: Record<string, string> = {
-  start: 'Start (1 – 15 xodim)',
-  biznes: 'Biznes (16 – 100 xodim)',
-  korporativ: 'Korporativ (100+ xodim)',
+  start: "Start (1 – 14 xodim, 599 000 so'm/oy FIKS)",
+  biznes: "Biznes (15 – 199 xodim, 15 000 so'm/xodim/oy)",
+  korporativ:
+    "Korporativ (200 – 500 xodim, 12 000 so'm/xodim/oy; 500+ kelishiladi)",
 };
+
+/**
+ * Xodimlar soniga qarab narx tavsifini shakllantiradi (yagona manba:
+ * src/common/utils/pricing.util.ts). Agar xodimlar soni hali noma'lum
+ * bo'lsa — barcha bosqichlar qisqacha sanab o'tiladi.
+ */
+function priceDescription(staffCount?: number | null): string {
+  if (staffCount == null) {
+    return (
+      "1\u201314 xodim: 599 000 so'm/oy (FIKS) \u00b7 15\u2013199: 15 000 so'm/xodim/oy \u00b7 " +
+      "200\u2013500: 12 000 so'm/xodim/oy \u00b7 500+: kelishiladi"
+    );
+  }
+  const pricing = getStaffPricing(staffCount);
+  if (pricing.negotiated) {
+    return `${staffCount} xodim uchun kelishiladi (individual muzokara)`;
+  }
+  if (pricing.isFlat && pricing.flatMonthly != null) {
+    return `${formatSom(pricing.flatMonthly)} so'm / oy (FIKS narx, ${staffCount} xodimgacha)`;
+  }
+  if (pricing.perEmployeeMonthly != null && pricing.perEmployeeAnnual != null) {
+    return `${formatSom(pricing.perEmployeeMonthly)} so'm / xodim / oy (yoki ${formatSom(pricing.perEmployeeAnnual)} so'm / xodim / yil)`;
+  }
+  return 'Kelishiladi';
+}
 
 const COLORS = {
   headerBg: '#4f46e5',
@@ -133,10 +160,7 @@ export class ContractService {
         'Tanlangan tarif:',
         data.plan ? PLAN_LABELS[data.plan] || data.plan : 'Kelishiladi',
       );
-      row(
-        'Narx:',
-        "12 000 so'm / xodim / oy (yoki 100 000 so'm / xodim / yil)",
-      );
+      row('Narx:', priceDescription(data.staffCount));
       row(
         'Sinov muddati:',
         `${fmtDate(now)} — ${fmtDate(endDate)} (14 kun, bepul)`,
