@@ -7,7 +7,7 @@ import { SUPPORT_BOT_SYSTEM_PROMPT } from './faq-prompt';
 
 const TZ = 'Asia/Tashkent';
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const DEFAULT_MODEL = 'nousresearch/hermes-3-llama-3.1-405b:free';
+const DEFAULT_MODEL = 'qwen/qwen3.8-27b:free';
 const MAX_HISTORY = 6; // oxirgi N ta xabar (user+assistant juftlashib)
 const HISTORY_TTL_MS = 30 * 60 * 1000; // 30 daqiqa harakatsizlikdan keyin unutiladi
 const RATE_LIMIT_MAX = 20; // 1 soatda bitta chat uchun maksimal xabar
@@ -177,7 +177,7 @@ export class SupportBotService implements OnModuleInit {
     }
   }
 
-  // ── AI javob (OpenRouter — bepul Hermes model) ──────────────────────────
+  // ── AI javob (OpenRouter — bepul Qwen model) ────────────────────────────
   private async askAi(chatId: string, text: string): Promise<string> {
     const apiKey = this.config.get<string>('OPENROUTER_API_KEY');
     if (!apiKey) {
