@@ -1,15 +1,7 @@
-import {
-  Body,
-  Controller,
-  Logger,
-  Post,
-  Req,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, Logger, Post, Req, UseGuards } from '@nestjs/common';
 import { Request } from 'express';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
-import { ConfigService } from '@nestjs/config';
-import { TelegramService } from '../telegram/telegram.service';
+import { SupportBotService } from '../support-bot/support-bot.service';
 import { TrialRequestDto } from './dto/trial-request.dto';
 
 const ORG_TYPE_LABELS: Record<string, string> = {
@@ -18,6 +10,12 @@ const ORG_TYPE_LABELS: Record<string, string> = {
   office: 'Ofis/IT',
   retail: 'Savdo',
   edu: "Ta'lim",
+};
+
+const PLAN_MAP: Record<string, 'start' | 'biznes' | 'korporativ'> = {
+  start: 'start',
+  biznes: 'biznes',
+  korporativ: 'korporativ',
 };
 
 /** Proxy orqali kelgan so'rovlarda ham haqiqiy IP ni olish */
@@ -41,26 +39,20 @@ function escapeHtml(value: string): string {
 /**
  * Marketing sahifasidan keladigan ochiq (auth talab qilinmaydigan) so'rovlar.
  * Hozircha faqat "14 kunlik sinov" so'rovnomasi (lead capture) — HAQIQIY
- * hisob/tenant yaratmaydi, faqat so'rovni Telegram orqali sotuv jamoasiga
- * yetkazadi. Hisob qo'lda (SUPER_ADMIN tomonidan) yaratiladi.
+ * hisob/tenant yaratmaydi, faqat so'rovni StaffPlusPRO support boti orqali
+ * Odiljonga (SUPPORT_STAFF_CHAT_ID) shaxsiy xabar + avtomatik shartnoma-PDF
+ * sifatida yetkazadi. Hisob qo'lda (SUPER_ADMIN tomonidan) yaratiladi.
  */
 @Controller('public')
 export class PublicController {
   private readonly logger = new Logger(PublicController.name);
 
-  constructor(
-    private readonly telegramService: TelegramService,
-    private readonly configService: ConfigService,
-  ) {}
+  constructor(private readonly supportBotService: SupportBotService) {}
 
   @UseGuards(ThrottlerGuard)
   @Throttle({ public: { ttl: 3_600_000, limit: 5 } })
   @Post('trial-request')
   async trialRequest(@Body() dto: TrialRequestDto, @Req() req: Request) {
-    const leadsChatId = this.configService.get<string>(
-      'TELEGRAM_LEADS_CHAT_ID',
-    );
-
     const orgTypeLabel = dto.orgType
       ? ORG_TYPE_LABELS[dto.orgType] || dto.orgType
       : '—';
@@ -69,39 +61,41 @@ export class PublicController {
       timeZone: 'Asia/Tashkent',
     });
 
-    const lines = [
-      "🆕 <b>Yangi 14 kunlik sinov so'rovi</b>",
-      '',
-      `🏢 Muassasa: <b>${escapeHtml(dto.hospitalName)}</b> (${escapeHtml(orgTypeLabel)})`,
-      `👤 Rahbar: ${escapeHtml(dto.directorName)}`,
-      `📞 Telefon: <code>${escapeHtml(dto.phone)}</code>`,
+    const extraLine = [
       dto.region ? `📍 Hudud: ${escapeHtml(dto.region)}` : null,
-      dto.staffCount ? `👥 Taxminiy xodimlar: ${dto.staffCount}` : null,
-      dto.plan
-        ? `💳 Reja: ${escapeHtml(dto.plan)} (${dto.billingCycle === 'annual' ? 'yillik' : 'oylik'})`
+      `🏷️ Tashkilot turi: ${escapeHtml(orgTypeLabel)}`,
+      dto.billingCycle
+        ? `💳 To'lov davri: ${dto.billingCycle === 'annual' ? 'yillik' : 'oylik'}`
         : null,
       dto.utmSource || dto.utmMedium || dto.utmCampaign
         ? `📊 UTM: ${escapeHtml([dto.utmSource, dto.utmMedium, dto.utmCampaign].filter(Boolean).join(' / '))}`
         : null,
       dto.pageUrl ? `🔗 Sahifa: ${escapeHtml(dto.pageUrl)}` : null,
-      '',
       `🕐 ${now} · IP: <code>${escapeHtml(ip)}</code>`,
-    ].filter(Boolean);
+    ]
+      .filter(Boolean)
+      .join('\n');
 
-    const message = lines.join('\n');
-
-    if (leadsChatId) {
-      try {
-        await this.telegramService.sendToChat(leadsChatId, message);
-      } catch (e) {
-        this.logger.error(
-          `Trial-request Telegram xabarini yuborishda xatolik: ${e}`,
-        );
-      }
-    } else {
+    try {
+      await this.supportBotService.notifyLeadFromWebForm(
+        {
+          fullName: dto.directorName,
+          phone: dto.phone,
+          institutionName: dto.hospitalName,
+          staffCount: dto.staffCount ?? null,
+          plan: dto.plan ? (PLAN_MAP[dto.plan] ?? null) : null,
+          faceId: null,
+          contactTime: null,
+        },
+        extraLine,
+      );
+    } catch (e) {
+      this.logger.error(
+        `Trial-request lead bildirishnomasini yuborishda xatolik: ${e}`,
+      );
       // Xabar yo'q bo'lsa ham so'rovni yo'qotmaslik uchun kamida log qoldiramiz
       this.logger.warn(
-        `TELEGRAM_LEADS_CHAT_ID sozlanmagan — lead faqat logga yozildi: ${JSON.stringify(dto)}`,
+        `Lead ma'lumotlari (fallback log): ${JSON.stringify(dto)}`,
       );
     }
 
