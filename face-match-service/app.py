@@ -13,6 +13,7 @@ yuborilmaydi — hammasi shu server ichida qoladi.
 import base64
 import io
 import logging
+from contextlib import asynccontextmanager
 
 import numpy as np
 from fastapi import FastAPI, HTTPException
@@ -22,18 +23,11 @@ from PIL import Image
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("face-match")
 
-app = FastAPI(title="MaternityCare Face Match Service")
-
 _analyzer = None
 
 
 def get_analyzer():
-    """InsightFace modelini birinchi so'rovda yuklaydi (lazy-load, ~5-15s).
-
-    Shunday qilinishi sababi: container tez ko'tarilishi kerak
-    (healthcheck /health modelni kutmaydi), model esa faqat haqiqiy
-    /verify so'rovi kelganda kerak bo'ladi.
-    """
+    """InsightFace modelini bir marta CPU xotirasiga yuklaydi."""
     global _analyzer
     if _analyzer is None:
         from insightface.app import FaceAnalysis
@@ -46,6 +40,25 @@ def get_analyzer():
         _analyzer.prepare(ctx_id=-1, det_size=(640, 640))
         logger.info("InsightFace buffalo_l modeli tayyor")
     return _analyzer
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """HTTP so'rov qabul qilishdan oldin modelni to'liq tayyorlaydi.
+
+    Oldingi lazy-load birinchi xodim check-in'ida 5–15 soniya olib,
+    backendning timeoutiga tushib qolishi mumkin edi. Startup muvaffaqiyatsiz
+    bo'lsa container health'ga chiqmaydi va Compose uni qayta ishga tushiradi.
+    """
+    try:
+        get_analyzer()
+    except Exception:
+        logger.exception("InsightFace modelini startup'da yuklab bo'lmadi")
+        raise
+    yield
+
+
+app = FastAPI(title="MaternityCare Face Match Service", lifespan=lifespan)
 
 
 class VerifyRequest(BaseModel):
@@ -87,7 +100,8 @@ def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    # lifespan modelni yuklamasdan turib serverni tinglashga qo'ymaydi.
+    return {"status": "ready"}
 
 
 @app.post("/verify", response_model=VerifyResponse)

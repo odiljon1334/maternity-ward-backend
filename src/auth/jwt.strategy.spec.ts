@@ -88,4 +88,26 @@ describe('JwtStrategy', () => {
       strategy.validate({ sub: 'u1', role: 'EMPLOYEE', username: 'emp' }),
     ).rejects.toThrow(UnauthorizedException);
   });
+
+  it('parol yangilangach undan oldin berilgan tokenni rad etadi', async () => {
+    const prisma = makeFakePrisma({
+      id: 'u1',
+      role: 'EMPLOYEE',
+      status: 'ACTIVE',
+      username: 'emp',
+      hospitalId: 'h1',
+      credentialsChangedAt: new Date('2026-09-21T03:00:00Z'),
+      permissionOverrides: [],
+    });
+    const strategy = makeStrategy(prisma);
+
+    await expect(
+      strategy.validate({
+        sub: 'u1',
+        role: 'EMPLOYEE',
+        username: 'emp',
+        iat: Math.floor(new Date('2026-09-21T02:59:59Z').getTime() / 1000),
+      }),
+    ).rejects.toThrow(UnauthorizedException);
+  });
 });

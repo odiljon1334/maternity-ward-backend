@@ -12,7 +12,16 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     private readonly prisma: PrismaService,
   ) {
     super({
-      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      // Browser sessiyasi HttpOnly cookie'da bo'ladi. Bearer extractor esa
+      // mobil/integratsiya mijozlari va xavfsiz rollout uchun qoladi.
+      jwtFromRequest: ExtractJwt.fromExtractors([
+        (request) => {
+          const cookie = request?.headers?.cookie;
+          const match = cookie?.match(/(?:^|;\s*)access_token=([^;]+)/);
+          return match ? decodeURIComponent(match[1]) : null;
+        },
+        ExtractJwt.fromAuthHeaderAsBearerToken(),
+      ]),
       secretOrKey: config.get('JWT_SECRET'),
     });
   }
@@ -22,6 +31,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     role: string;
     username: string;
     hospitalId?: string;
+    iat?: number;
   }) {
     const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },
@@ -31,6 +41,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         status: true,
         username: true,
         hospitalId: true,
+        credentialsChangedAt: true,
         // Granular ruxsatlar (FAZA 5, 7-bosqich) — bir xil so'rovda,
         // qo'shimcha DB chaqiruvisiz olinadi (deyarli har doim bo'sh massiv).
         permissionOverrides: {
@@ -40,6 +51,15 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
     if (!user || user.status !== 'ACTIVE') {
       throw new UnauthorizedException('Token yaroqsiz');
+    }
+    if (
+      user.credentialsChangedAt &&
+      (!payload.iat ||
+        payload.iat < Math.floor(user.credentialsChangedAt.getTime() / 1000))
+    ) {
+      throw new UnauthorizedException(
+        'Sessiya parol o‘zgargani uchun tugatilgan',
+      );
     }
     const permissions: Permission[] = computeEffectivePermissions(
       user.role,

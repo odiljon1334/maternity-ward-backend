@@ -13,7 +13,14 @@ import { UserRole } from '@prisma/client';
 
 @WebSocketGateway({
   namespace: '/live-location',
-  cors: { origin: '*' },
+  // HttpOnly sessiya cookie polling fallback bilan ham yuborilishi uchun
+  // wildcard CORS ishlatilmaydi.
+  cors: {
+    origin:
+      process.env.FRONTEND_URL?.split(',').map((origin) => origin.trim()) ??
+      true,
+    credentials: true,
+  },
 })
 export class LocationGateway
   implements OnGatewayConnection, OnGatewayDisconnect
@@ -34,10 +41,18 @@ export class LocationGateway
   @SubscribeMessage('join:admin')
   handleAdminJoin(
     @ConnectedSocket() client: Socket,
-    @MessageBody() payload: { token: string },
+    @MessageBody() payload: { token?: string },
   ) {
     try {
-      const user = this.jwtService.verify(payload.token);
+      // Yangi browser UI HttpOnly cookie ishlatadi; eski clientlar esa
+      // rollout davomida tokenni event payload'ida yuborishi mumkin.
+      const cookie = client.handshake.headers.cookie ?? '';
+      const cookieToken = cookie.match(/(?:^|;\s*)access_token=([^;]+)/)?.[1];
+      const token = cookieToken
+        ? decodeURIComponent(cookieToken)
+        : payload?.token;
+      if (!token) throw new Error('token_missing');
+      const user = this.jwtService.verify(token);
       const adminRoles = [
         UserRole.DIRECTOR,
         UserRole.ADMIN,

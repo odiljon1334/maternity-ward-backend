@@ -54,7 +54,8 @@ export class AuthService {
 
   /** Frontend bazaviy URL — CORS uchun ishlatilgan FRONTEND_URL bilan bir xil manba */
   private getFrontendUrl(): string {
-    const raw = this.config.get<string>('FRONTEND_URL') || 'http://localhost:3000';
+    const raw =
+      this.config.get<string>('FRONTEND_URL') || 'http://localhost:3000';
     return raw.split(',')[0].trim();
   }
 
@@ -173,7 +174,7 @@ export class AuthService {
     const newHash = await bcrypt.hash(dto.newPassword, 12);
     await this.prisma.user.update({
       where: { id: userId },
-      data: { passwordHash: newHash },
+      data: { passwordHash: newHash, credentialsChangedAt: new Date() },
     });
 
     this.auditLog.log({
@@ -253,7 +254,9 @@ export class AuthService {
       where: { email: dto.email },
     });
     if (existing && existing.id !== userId) {
-      throw new ConflictException('Bu email boshqa foydalanuvchida ro\'yxatdan o\'tgan');
+      throw new ConflictException(
+        "Bu email boshqa foydalanuvchida ro'yxatdan o'tgan",
+      );
     }
 
     const user = await this.prisma.user.findUnique({
@@ -268,7 +271,11 @@ export class AuthService {
       data: { email: dto.email, emailVerifiedAt: null },
     });
 
-    return this.sendEmailOtpInternal(userId, dto.email, user.employee?.fullName);
+    return this.sendEmailOtpInternal(
+      userId,
+      dto.email,
+      user.employee?.fullName,
+    );
   }
 
   /** Joriy (hali tasdiqlanmagan) emailga OTP kodni qayta yuborish */
@@ -283,7 +290,11 @@ export class AuthService {
       throw new BadRequestException('Email allaqachon tasdiqlangan');
     }
 
-    return this.sendEmailOtpInternal(userId, user.email, user.employee?.fullName);
+    return this.sendEmailOtpInternal(
+      userId,
+      user.email,
+      user.employee?.fullName,
+    );
   }
 
   private async sendEmailOtpInternal(
@@ -340,7 +351,9 @@ export class AuthService {
       throw new BadRequestException("Kod muddati o'tgan — qaytadan so'rang");
     }
     if (token.attempts >= 5) {
-      throw new BadRequestException("Urinishlar soni tugadi — qaytadan so'rang");
+      throw new BadRequestException(
+        "Urinishlar soni tugadi — qaytadan so'rang",
+      );
     }
 
     if (token.codeHash !== this.hash(dto.code)) {
@@ -387,8 +400,7 @@ export class AuthService {
 
     // Xavfsizlik: foydalanuvchi mavjud/mavjud emasligini oshkor qilmaymiz
     const generic = {
-      message:
-        "Agar hisob mavjud bo'lsa, tiklash bo'yicha ko'rsatma yuborildi",
+      message: "Agar hisob mavjud bo'lsa, tiklash bo'yicha ko'rsatma yuborildi",
     };
     if (!user) return generic;
 
@@ -467,7 +479,7 @@ export class AuthService {
       }),
       this.prisma.user.update({
         where: { id: record.userId },
-        data: { passwordHash: newHash },
+        data: { passwordHash: newHash, credentialsChangedAt: new Date() },
       }),
     ]);
 
@@ -479,7 +491,7 @@ export class AuthService {
       details: { channel: 'EMAIL' },
     });
 
-    return { message: "Parol muvaffaqiyatli tiklandi" };
+    return { message: 'Parol muvaffaqiyatli tiklandi' };
   }
 
   /** Telegram/SMS orqali kelgan OTP kod bilan parolni tiklash */
@@ -487,7 +499,8 @@ export class AuthService {
     const user = await this.prisma.user.findUnique({
       where: { username: dto.username },
     });
-    if (!user) throw new BadRequestException("Kod noto'g'ri yoki muddati o'tgan");
+    if (!user)
+      throw new BadRequestException("Kod noto'g'ri yoki muddati o'tgan");
 
     const record = await this.prisma.passwordResetToken.findFirst({
       where: {
@@ -511,7 +524,7 @@ export class AuthService {
       }),
       this.prisma.user.update({
         where: { id: user.id },
-        data: { passwordHash: newHash },
+        data: { passwordHash: newHash, credentialsChangedAt: new Date() },
       }),
     ]);
 

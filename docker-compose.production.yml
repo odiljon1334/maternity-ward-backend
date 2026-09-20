@@ -118,6 +118,7 @@ services:
       FACE_MATCH_ENABLED: ${FACE_MATCH_ENABLED:-true}
       FACE_MATCH_MODE: ${FACE_MATCH_MODE:-strict}
       FACE_MATCH_THRESHOLD: ${FACE_MATCH_THRESHOLD:-0.36}
+      FACE_MATCH_TIMEOUT_MS: ${FACE_MATCH_TIMEOUT_MS:-15000}
       # Sentry — SENTRY_DSN bo'lmasa (standart) hech narsa ishga tushmaydi
       SENTRY_DSN: ${SENTRY_DSN:-}
       SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0}
@@ -127,6 +128,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      face-match:
         condition: service_healthy
     networks:
       - maternity_net
@@ -229,7 +232,8 @@ services:
     networks:
       - maternity_net
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      # /health faqat InsightFace startup warm-up tugagandan keyin ready qaytaradi.
+      test: ["CMD", "python", "-c", "import json, urllib.request; assert json.load(urllib.request.urlopen('http://localhost:8000/health'))['status'] == 'ready'"]
       interval: 30s
       timeout: 10s
       retries: 3

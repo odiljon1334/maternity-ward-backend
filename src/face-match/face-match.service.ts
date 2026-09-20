@@ -10,7 +10,6 @@ export interface FaceMatchResult {
   similarity?: number;
 }
 
-
 /**
  * Check-in selfie'sini xodimning profil rasmi bilan solishtiradi
  * (o'z serverimizdagi InsightFace mikroservisi orqali — Qaror 4).
@@ -47,7 +46,10 @@ export class FaceMatchService {
     return Number(process.env.FACE_MATCH_THRESHOLD || 0.36);
   }
   private get timeoutMs(): number {
-    return Number(process.env.FACE_MATCH_TIMEOUT_MS || 6000);
+    // Startup warm-up asosiy yechim, 15 soniya esa model ishlayotgan paytdagi
+    // CPU yuklamasi uchun xavfsiz minimal zaxira. Eski .env.prod dagi 6000
+    // qiymati ham shu bilan xavfsiz ko'tariladi; kattaroq qiymat berish mumkin.
+    return Math.max(Number(process.env.FACE_MATCH_TIMEOUT_MS || 15000), 15000);
   }
 
   async verify(

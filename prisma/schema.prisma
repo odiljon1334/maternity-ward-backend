@@ -250,6 +250,9 @@ model User {
   permissionOverrides UserPermissionOverride[]
 
   lastLoginAt DateTime? // Oxirgi muvaffaqiyatli login vaqti (auth.service.ts login()da yangilanadi)
+  // Parol almashtirilsa yoki tiklansa, undan oldin berilgan barcha JWTlar
+  // shu vaqt bilan solishtirib yaroqsiz qilinadi.
+  credentialsChangedAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

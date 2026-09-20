@@ -5,9 +5,12 @@ import {
   Post,
   Put,
   Req,
+  Res,
+  UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
 import { Request } from 'express';
+import { Response } from 'express';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
@@ -42,8 +45,64 @@ export class AuthController {
   @UseGuards(ThrottlerGuard)
   @Throttle({ login: { ttl: 900_000, limit: 10 } })
   @Post('login')
-  login(@Body() dto: LoginDto, @Req() req: Request) {
-    return this.authService.login(dto, getIp(req));
+  async login(
+    @Body() dto: LoginDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.authService.login(dto, getIp(req));
+    this.setSessionCookie(res, result.accessToken);
+    // JWT JavaScript javobiga qaytarilmaydi — uni faqat HttpOnly cookie olib yuradi.
+    return { user: result.user };
+  }
+
+  /** Eski UI tokenini bir marta HttpOnly cookie'ga o‘tkazish. */
+  @UseGuards(JwtAuthGuard)
+  @Post('browser-session')
+  browserSession(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const authorization = req.headers.authorization;
+    const token = authorization?.startsWith('Bearer ')
+      ? authorization.slice('Bearer '.length)
+      : undefined;
+    if (!token) throw new UnauthorizedException('Bearer token talab qilinadi');
+    this.setSessionCookie(res, token);
+    return { migrated: true };
+  }
+
+  @Post('logout')
+  logout(@Res({ passthrough: true }) res: Response) {
+    res.clearCookie('access_token', this.cookieOptions());
+    return { loggedOut: true };
+  }
+
+  private cookieOptions() {
+    return {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax' as const,
+      path: '/',
+    };
+  }
+
+  private setSessionCookie(res: Response, token: string) {
+    // JWT_EXPIRES_IN standartda 7d. Cookie server tokenidan uzoq yashamasligi
+    // uchun faqat d/h/m/s birliklarini qabul qilamiz.
+    const raw = process.env.JWT_EXPIRES_IN || '7d';
+    const match = /^(\d+)([dhms])$/.exec(raw);
+    const unit = match?.[2];
+    const multiplier =
+      unit === 'd'
+        ? 86_400_000
+        : unit === 'h'
+          ? 3_600_000
+          : unit === 'm'
+            ? 60_000
+            : 1_000;
+    const maxAge = (match ? Number(match[1]) : 7 * 24 * 60 * 60) * multiplier;
+    res.cookie('access_token', token, { ...this.cookieOptions(), maxAge });
   }
 
   /**
@@ -84,10 +143,7 @@ export class AuthController {
 
   @UseGuards(JwtAuthGuard)
   @Put('email')
-  updateEmail(
-    @CurrentUser('sub') userId: string,
-    @Body() dto: UpdateEmailDto,
-  ) {
+  updateEmail(@CurrentUser('sub') userId: string, @Body() dto: UpdateEmailDto) {
     return this.authService.updateEmail(userId, dto);
   }
 

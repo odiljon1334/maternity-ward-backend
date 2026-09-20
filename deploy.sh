@@ -90,14 +90,37 @@ log "4. Database migratsiyasi tekshirilmoqda..."
 compose run --rm --no-deps backend npx prisma migrate deploy
 success "Migratsiya bajarildi"
 
-# ── 5. Faqat application containerlarini yangilash ────────────
-# postgres/redis/nginx/face-match ishlashda qoladi; global `down` QILINMAYDI.
-log "5. Backend va frontend yangilanmoqda..."
+# ── 5. Face-match readiness ───────────────────────────────────
+# Yangi InsightFace image'ni backenddan OLDIN tayyorlaymiz. Terminal webhook
+# eski healthy backendga kelishda davom etadi; yangi backend faqat model ready
+# bo'lgandan keyin almashtiriladi.
+log "5. Face-match modeli tayyorlanmoqda..."
+compose up -d --no-deps --force-recreate face-match
+
+FACE_MATCH_READY=false
+for i in $(seq 1 18); do
+    if compose exec -T face-match python -c "import json, urllib.request; assert json.load(urllib.request.urlopen('http://localhost:8000/health'))['status'] == 'ready'" 2>/dev/null; then
+        success "Face-match modeli tayyor (health: ready)"
+        FACE_MATCH_READY=true
+        break
+    fi
+    log "Face-match modeli yuklanmoqda... ($i/18)"
+    sleep 5
+done
+if [ "$FACE_MATCH_READY" = false ]; then
+    warn "Face-match ready bo'lmadi — loglarni tekshiring:"
+    compose logs --tail=100 face-match
+    error "Face-match modeli tayyor bo'lmagani uchun backend almashtirilmadi. Eski backend va terminal webhooklar ishlashda davom etadi."
+fi
+
+# ── 6. Faqat application containerlarini yangilash ────────────
+# postgres/redis/nginx ishlashda qoladi; global `down` QILINMAYDI.
+log "6. Backend va frontend yangilanmoqda..."
 compose up -d --no-deps --force-recreate backend frontend
 success "Application containerlari yangilandi"
 
-# ── 6. Health check ──────────────────────────────────────────
-log "6. Backend health check kutilmoqda..."
+# ── 7. Health check ──────────────────────────────────────────
+log "7. Backend health check kutilmoqda..."
 
 MAX_TRIES=10
 HEALTHY=false
@@ -118,7 +141,7 @@ if [ "$HEALTHY" = false ]; then
     error "Yangi backend health check'dan o'tmadi. Nginx va ma'lumotlar bazasi to'xtatilmadi; backend logini tekshirib rollback qiling."
 fi
 
-# ── 7. Status ────────────────────────────────────────────────
+# ── 8. Status ────────────────────────────────────────────────
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 compose ps
