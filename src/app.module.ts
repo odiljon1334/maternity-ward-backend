@@ -31,6 +31,7 @@ import { HikvisionModule } from './hikvision/hikvision.module';
 import { LocationModule } from './location/location.module';
 import { UsersModule } from './users/users.module';
 import { DidoxModule } from './didox/didox.module';
+import { PublicModule } from './public/public.module';
 
 @Module({
   imports: [
@@ -45,6 +46,7 @@ import { DidoxModule } from './didox/didox.module';
     // Barcha boshqa endpointlar JWT bilan himoyalangan + Nginx rate limit bor
     ThrottlerModule.forRoot([
       { name: 'login', ttl: 900_000, limit: 10 }, // 10 urinish / 15 daqiqa
+      { name: 'public', ttl: 3_600_000, limit: 5 }, // ochiq (marketing) endpointlar — 5 so'rov / soat / IP
     ]),
 
     // Cron scheduler
@@ -63,6 +65,7 @@ import { DidoxModule } from './didox/didox.module';
     AttendanceModule,
     PayrollModule,
     TelegramModule,
+    PublicModule,
     DashboardModule,
     CronModule,
     ReportsModule,
