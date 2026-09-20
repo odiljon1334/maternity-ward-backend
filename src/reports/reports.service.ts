@@ -2,12 +2,16 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import * as ExcelJS from 'exceljs';
 import dayjs from 'dayjs';
+import { AttendanceService } from '../attendance/attendance.service';
 
 const TZ = process.env.TIMEZONE || 'Asia/Tashkent';
 
 @Injectable()
 export class ReportsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly attendanceService: AttendanceService,
+  ) {}
 
   // ─────────────────────────────────────────────
   // ATTENDANCE EXCEL REPORT
@@ -660,6 +664,276 @@ export class ReportsService {
     [4, 26, 18, 18, ...Array(7).fill(10), 7, 7, 7].forEach((w, i) => {
       sheet.getColumn(i + 1).width = w;
     });
+
+    return workbook.xlsx.writeBuffer() as Promise<ExcelJS.Buffer>;
+  }
+
+  // ─────────────────────────────────────────────
+  // T-13 TABEL (1C:Enterprise/ZUP uchun moslashtirilgan) — StaffPulse rejasi,
+  // "O'zbekiston bozoriga mos integratsiyalar" bandi (2026-09-20).
+  // ─────────────────────────────────────────────
+  //
+  // ⚠️ MUHIM CHEKLOV: bu yerda standart T-13 harfli kodlari (Я/Н/В/ОТ/Б)
+  // ishlatilgan — bular buxgalterlar va 1C:ZUP tomonidan tanib olinadigan
+  // umumiy standart. LEKIN bu rasmiy davlat blank shablonining ANIQ
+  // katakma-katak ko'rinishi (OKUD/OKPO rekvizitlari, rasmiy o'lchamlar)
+  // EMAS — bizning tizimimizda OKPO/STIR kabi maydonlar saqlanmaydi.
+  // Buxgalteriyaga rasmiy blank kerak bo'lsa, aniq shablon berilishi va
+  // shunga moslab qayta ko'rib chiqilishi kerak.
+  private static readonly T13_CODES: Record<string, string> = {
+    PRESENT: 'Я',
+    LATE: 'Я',
+    EARLY_LEAVE: 'Я',
+    LATE_EARLY: 'Я',
+    ABSENT: 'Н',
+    DAY_OFF: 'В',
+    HOLIDAY: 'В',
+    VACATION: 'ОТ',
+    SICK: 'Б',
+    PLANNED: '',
+  };
+
+  private static readonly T13_WORKED_STATUSES = new Set([
+    'PRESENT',
+    'LATE',
+    'EARLY_LEAVE',
+    'LATE_EARLY',
+  ]);
+
+  async generateT13Excel(query: {
+    month: number;
+    year: number;
+    departmentId?: string;
+    hospitalId?: string;
+  }): Promise<ExcelJS.Buffer> {
+    const { month, year, departmentId, hospitalId } = query;
+    const daysInMonth = new Date(year, month, 0).getDate();
+
+    const [employees, hospital] = await Promise.all([
+      this.prisma.employee.findMany({
+        where: {
+          firedAt: null,
+          ...(departmentId ? { departmentId } : {}),
+          ...(hospitalId ? { hospitalId } : {}),
+        },
+        include: {
+          department: { select: { name: true } },
+          position: { select: { name: true } },
+        },
+        orderBy: [{ department: { name: 'asc' } }, { fullName: 'asc' }],
+      }),
+      hospitalId
+        ? this.prisma.hospital.findUnique({ where: { id: hospitalId } })
+        : Promise.resolve(null),
+    ]);
+
+    // Har bir xodim uchun kunlik davomatni (grafik asosida VACATION/SICK/
+    // DAY_OFF/HOLIDAY ham hisobga olingan holda) parallel olib kelamiz —
+    // AttendanceService.getEmployeeAttendance bilan bir xil, tekshirilgan
+    // mantiq (davomat moduli allaqachon shu logikani ishlatadi).
+    const attendanceByEmployee = await Promise.all(
+      employees.map((emp) =>
+        this.attendanceService.getEmployeeAttendance(emp.id, month, year, {
+          includePlanned: true,
+        }),
+      ),
+    );
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'StaffPulse (MaternityCare)';
+    workbook.created = new Date();
+
+    const sheet = workbook.addWorksheet(
+      `T-13 ${year}-${String(month).padStart(2, '0')}`,
+      { pageSetup: { orientation: 'landscape', fitToPage: true } },
+    );
+
+    const monthName = dayjs(`${year}-${month}-01`).format('MMMM YYYY');
+    const totalCols = 6 + daysInMonth + 4; // №,FIO,Bo'lim,Lavozim + kunlar + 4 jami ustun
+
+    sheet.mergeCells(1, 1, 1, totalCols);
+    const titleCell = sheet.getCell(1, 1);
+    titleCell.value = `Ishchi vaqtidan foydalanish tabeli (Forma T-13) — ${monthName}`;
+    titleCell.font = { bold: true, size: 14 };
+    titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+    sheet.getRow(1).height = 26;
+
+    sheet.mergeCells(2, 1, 2, totalCols);
+    const orgCell = sheet.getCell(2, 1);
+    orgCell.value = `Tashkilot: ${hospital?.name ?? 'Barcha shifoxonalar'}`;
+    orgCell.font = { italic: true, size: 10 };
+    orgCell.alignment = { horizontal: 'center' };
+
+    // ── Ustun sarlavhalari (2 qatorli: kod + soat) ──
+    const headerRowIdx = 4;
+    const codesRowIdx = 5;
+    const staticHeaders = ['№', 'F.I.O', "Bo'lim", 'Lavozim'];
+    staticHeaders.forEach((h, i) => {
+      sheet.mergeCells(headerRowIdx, i + 1, codesRowIdx, i + 1);
+      const cell = sheet.getCell(headerRowIdx, i + 1);
+      cell.value = h;
+      cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF1565C0' },
+      };
+      cell.alignment = {
+        horizontal: 'center',
+        vertical: 'middle',
+        wrapText: true,
+      };
+    });
+
+    for (let d = 1; d <= daysInMonth; d++) {
+      const col = 4 + d;
+      const cell = sheet.getCell(headerRowIdx, col);
+      cell.value = d;
+      cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF1565C0' },
+      };
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      sheet.getColumn(col).width = 4;
+
+      const subCell = sheet.getCell(codesRowIdx, col);
+      subCell.value = 'kod/soat';
+      subCell.font = { italic: true, size: 7, color: { argb: 'FFFFFFFF' } };
+      subCell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF1976D2' },
+      };
+      subCell.alignment = { horizontal: 'center', vertical: 'middle' };
+    }
+
+    const totalsHeaders = [
+      'Я (ish kuni)',
+      "ОТ (ta'til)",
+      'Б (kasallik)',
+      "Н (yo'qlik)",
+    ];
+    totalsHeaders.forEach((h, i) => {
+      const col = 4 + daysInMonth + i + 1;
+      sheet.mergeCells(headerRowIdx, col, codesRowIdx, col);
+      const cell = sheet.getCell(headerRowIdx, col);
+      cell.value = h;
+      cell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 9 };
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF1565C0' },
+      };
+      cell.alignment = {
+        horizontal: 'center',
+        vertical: 'middle',
+        wrapText: true,
+      };
+      sheet.getColumn(col).width = 10;
+    });
+
+    sheet.getColumn(1).width = 4;
+    sheet.getColumn(2).width = 28;
+    sheet.getColumn(3).width = 18;
+    sheet.getColumn(4).width = 18;
+
+    // ── Har bir xodim uchun 2 qator: kod qatori + soat qatori ──
+    let rowCursor = codesRowIdx + 1;
+    employees.forEach((emp, idx) => {
+      const dayMap = new Map<number, { status: string; netWorkMin: number }>();
+      attendanceByEmployee[idx].records.forEach((r: any) => {
+        dayMap.set(new Date(r.workDate).getDate(), {
+          status: r.status,
+          netWorkMin: r.netWorkMin ?? 0,
+        });
+      });
+
+      const codeRow = sheet.getRow(rowCursor);
+      const hoursRow = sheet.getRow(rowCursor + 1);
+
+      sheet.mergeCells(rowCursor, 1, rowCursor + 1, 1);
+      sheet.mergeCells(rowCursor, 2, rowCursor + 1, 2);
+      sheet.mergeCells(rowCursor, 3, rowCursor + 1, 3);
+      sheet.mergeCells(rowCursor, 4, rowCursor + 1, 4);
+      codeRow.getCell(1).value = idx + 1;
+      codeRow.getCell(2).value = emp.fullName;
+      codeRow.getCell(3).value = emp.department.name;
+      codeRow.getCell(4).value = emp.position.name;
+      [1, 2, 3, 4].forEach((c) => {
+        codeRow.getCell(c).alignment = {
+          horizontal: c === 2 ? 'left' : 'center',
+          vertical: 'middle',
+        };
+      });
+
+      let worked = 0;
+      let vacation = 0;
+      let sick = 0;
+      let absent = 0;
+
+      for (let d = 1; d <= daysInMonth; d++) {
+        const col = 4 + d;
+        const day = dayMap.get(d);
+        const code = day ? (ReportsService.T13_CODES[day.status] ?? '') : '';
+        codeRow.getCell(col).value = code;
+        codeRow.getCell(col).alignment = { horizontal: 'center' };
+        codeRow.getCell(col).font = { size: 9 };
+
+        const isWorked =
+          day && ReportsService.T13_WORKED_STATUSES.has(day.status);
+        hoursRow.getCell(col).value = isWorked
+          ? +(day!.netWorkMin / 60).toFixed(1)
+          : '';
+        hoursRow.getCell(col).alignment = { horizontal: 'center' };
+        hoursRow.getCell(col).font = { size: 7, color: { argb: 'FF757575' } };
+
+        if (isWorked) worked++;
+        else if (day?.status === 'VACATION') vacation++;
+        else if (day?.status === 'SICK') sick++;
+        else if (day?.status === 'ABSENT') absent++;
+      }
+
+      const totalsCol = 4 + daysInMonth;
+      sheet.mergeCells(rowCursor, totalsCol + 1, rowCursor + 1, totalsCol + 1);
+      sheet.mergeCells(rowCursor, totalsCol + 2, rowCursor + 1, totalsCol + 2);
+      sheet.mergeCells(rowCursor, totalsCol + 3, rowCursor + 1, totalsCol + 3);
+      sheet.mergeCells(rowCursor, totalsCol + 4, rowCursor + 1, totalsCol + 4);
+      sheet.getCell(rowCursor, totalsCol + 1).value = worked;
+      sheet.getCell(rowCursor, totalsCol + 2).value = vacation;
+      sheet.getCell(rowCursor, totalsCol + 3).value = sick;
+      sheet.getCell(rowCursor, totalsCol + 4).value = absent;
+      [1, 2, 3, 4].forEach((i) => {
+        const cell = sheet.getCell(rowCursor, totalsCol + i);
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        cell.font = { bold: true };
+      });
+
+      if (idx % 2 === 0) {
+        for (let c = 1; c <= totalsCol + 4; c++) {
+          [codeRow.getCell(c), hoursRow.getCell(c)].forEach((cell) => {
+            if (!cell.fill) {
+              cell.fill = {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: 'FFFAFAFA' },
+              };
+            }
+          });
+        }
+      }
+
+      rowCursor += 2;
+    });
+
+    // Belgilar izohi
+    const legendRow = sheet.getRow(rowCursor + 1);
+    legendRow.getCell(1).value = 'Kodlar:';
+    legendRow.getCell(1).font = { bold: true };
+    sheet.mergeCells(rowCursor + 1, 2, rowCursor + 1, totalCols);
+    legendRow.getCell(2).value =
+      "Я=Yavka (ishladi)  Н=Noma'lum sababli yo'qlik  В=Dam olish/bayram  ОТ=Navbatdagi ta'til  Б=Vaqtinchalik mehnatga layoqatsizlik (kasallik)";
 
     return workbook.xlsx.writeBuffer() as Promise<ExcelJS.Buffer>;
   }

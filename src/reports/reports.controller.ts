@@ -73,6 +73,34 @@ export class ReportsController {
     res.send(buffer);
   }
 
+  // GET /api/v1/reports/t13/excel?month=9&year=2026&departmentId=xxx
+  // StaffPulse rejasi — "T-13 tabelini bir tugma bilan 1C'ga uzatish" (2026-09-20)
+  @Get('t13/excel')
+  async t13Excel(
+    @CurrentUser('hospitalId') jwtHospitalId: string | null,
+    @Query('month') month: string,
+    @Query('year') year: string,
+    @Query('departmentId') departmentId: string,
+    @Query('targetHospitalId') targetHospitalId: string,
+    @Res() res: Response,
+  ) {
+    const hospitalId = targetHospitalId || jwtHospitalId || undefined;
+    const buffer = await this.reportsService.generateT13Excel({
+      month: parseInt(month) || new Date().getMonth() + 1,
+      year: parseInt(year) || new Date().getFullYear(),
+      departmentId: departmentId || undefined,
+      hospitalId,
+    });
+
+    const filename = `T-13-tabel-${year}-${String(month).padStart(2, '0')}.xlsx`;
+    res.set({
+      'Content-Type':
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+    });
+    res.send(buffer);
+  }
+
   // GET /api/v1/reports/attendance/weekly?weekStart=2026-03-10&departmentId=xxx
   @Get('attendance/weekly')
   async weeklyExcel(

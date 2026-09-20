@@ -94,7 +94,14 @@ export class DidoxService {
       const res = await this.http.get<DidoxChallengeResponse>(
         `/v1/auth/authId/${encodeURIComponent(serialNumber)}`,
       );
-      authId = String(res.data?.authId ?? res.data ?? '');
+      // Didox javobi { authId: '...' } yoki to'g'ridan-to'g'ri satr bo'lishi
+      // mumkin (javob tuzilishi tasdiqlanmagan) — lekin bo'sh obyekt `{}`
+      // ni HECH QACHON haqiqiy authId deb qabul qilmaslik kerak (avvalgi
+      // `res.data ?? ''` varianti buni "[object Object]" ga aylantirib,
+      // xatoni yashirib qo'yardi — testda topildi).
+      const raw: unknown = res.data;
+      authId =
+        typeof raw === 'string' ? raw : String((raw as any)?.authId ?? '');
     } catch (err) {
       this.logger.error(`Didox challenge xatosi: ${(err as Error).message}`);
       throw new BadGatewayException(
