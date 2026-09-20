@@ -32,6 +32,7 @@ import { LocationModule } from './location/location.module';
 import { UsersModule } from './users/users.module';
 import { DidoxModule } from './didox/didox.module';
 import { PublicModule } from './public/public.module';
+import { SupportBotModule } from './support-bot/support-bot.module';
 
 @Module({
   imports: [
@@ -66,6 +67,7 @@ import { PublicModule } from './public/public.module';
     PayrollModule,
     TelegramModule,
     PublicModule,
+    SupportBotModule,
     DashboardModule,
     CronModule,
     ReportsModule,
