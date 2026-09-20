@@ -126,4 +126,4 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo ""
 success "Deploy muvaffaqiyatli yakunlandi! 🚀"
 
-echo "🪐Log ko'rish: compose logs -f --tail=200 backend"
+echo "🪐Log ko'rish: docker compose --project-directory $BACKEND_DIR -f $COMPOSE_FILE --env-file $BACKEND_DIR/.env.prod logs -f --tail=200 backend"
