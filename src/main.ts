@@ -25,6 +25,10 @@ async function bootstrap() {
     logger: ['error', 'warn', 'log'],
     bodyParser: false,
   });
+  // Production trafik bitta Nginx reverse-proxy orqali keladi. Bu Express'ga
+  // haqiqiy client IP'ni X-Forwarded-For orqali olish imkonini beradi; aks
+  // holda webhook himoyasi Nginx'ning Docker IP'sini client deb ko'radi.
+  app.set('trust proxy', 1);
   app.useWebSocketAdapter(new IoAdapter(app));
 
   // Security headers

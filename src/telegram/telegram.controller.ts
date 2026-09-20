@@ -1,4 +1,14 @@
-import { Controller, Get, Post, Body, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Headers,
+  UnauthorizedException,
+  UseGuards,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { timingSafeEqual } from 'crypto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -12,13 +22,28 @@ export class TelegramController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly telegramService: TelegramService,
+    private readonly config: ConfigService,
   ) {}
 
   /** POST /telegram/webhook — JWT guard YO'Q! */
   @Post('webhook')
-  async handleWebhook(@Body() update: any) {
+  async handleWebhook(
+    @Body() update: any,
+    @Headers('x-telegram-bot-api-secret-token') secret?: string,
+  ) {
+    this.assertValidWebhookSecret(secret);
     await this.telegramService.handleUpdate(update);
     return { ok: true };
+  }
+
+  private assertValidWebhookSecret(provided?: string) {
+    const expected = this.config.get<string>('TELEGRAM_WEBHOOK_SECRET');
+    if (!expected) return; // O'tish davri: BotFather webhook sozlamasi hali yangilanmagan bo'lishi mumkin.
+    const actual = Buffer.from(provided ?? '');
+    const wanted = Buffer.from(expected);
+    if (actual.length !== wanted.length || !timingSafeEqual(actual, wanted)) {
+      throw new UnauthorizedException('Invalid Telegram webhook secret');
+    }
   }
 
   /** GET /telegram/status */

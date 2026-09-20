@@ -59,74 +59,56 @@ git fetch origin main
 git reset --hard origin/main
 success "Kod yangilandi"
 
-# ── 3. Barcha maternity containerlarni to'xtatish ───────────
-log "3. Barcha eski containerlar o'chirilmoqda..."
-# Compose orqali to'xtatish
-cd "$BACKEND_DIR"
-docker compose -f docker-compose.production.yml down --remove-orphans 2>/dev/null || true
-# Qolgan maternity containerlarni ham o'chirish (boshqa compose fayllar bilan ishgantushganlar)
-docker ps -a --format "{{.Names}}" | grep -i "maternity" | xargs -r docker rm -f 2>/dev/null || true
-success "Containerlar o'chirildi"
-
-# ── 4. Build ─────────────────────────────────────────────────
+# ── 3. Build (ishlayotgan servislar TO'XTATILMAYDI) ───────────
 # DIQQAT: --no-cache olib tashlandi. Kod git reset --hard bilan
 # allaqachon yangilangan (2-qadam), shuning uchun Docker layer
 # cache "eski kod" muammosini keltirib chiqarmaydi — u fayllar
 # haqiqatan o'zgarganini avtomatik aniqlaydi va faqat kerakli
 # qatlamlarni qayta quradi. --no-cache har safar HAMMA narsani
 # (shu jumladan npm ci'ni ham) noldan bajarishga majburlar edi.
-log "4. Docker image build qilinmoqda..."
+log "3. Docker image build qilinmoqda (production ishlashda davom etadi)..."
 docker compose -f docker-compose.production.yml --env-file .env.prod build
 success "Build tugadi"
 
-# ── 5. Start ─────────────────────────────────────────────────
-log "5. Servislar ishga tushirilmoqda..."
-docker compose -f docker-compose.production.yml --env-file .env.prod up -d
-success "Servislar ishga tushdi"
+# ── 4. Database migratsiyasi (yangi image bilan, app almashtirishdan oldin) ──
+# Dockerfile startup ichida migrate qilmaydi: bu parallel replica race'ini
+# va noto'g'ri image sabab deploydagi outage'ni oldini oladi.
+log "4. Database migratsiyasi tekshirilmoqda..."
+docker compose -f docker-compose.production.yml --env-file .env.prod \
+  run --rm --no-deps backend npx prisma migrate deploy
+success "Migratsiya bajarildi"
 
-# ── 6. Database migratsiyasi ─────────────────────────────────
-log "6. Database migratsiyasi ishga tushirilmoqda..."
-sleep 15  # Backend container va DB to'liq ishga tushsin
+# ── 5. Faqat application containerlarini yangilash ────────────
+# postgres/redis/nginx/face-match ishlashda qoladi; global `down` QILINMAYDI.
+log "5. Backend va frontend yangilanmoqda..."
+docker compose -f docker-compose.production.yml --env-file .env.prod \
+  up -d --no-deps --force-recreate backend frontend
+success "Application containerlari yangilandi"
 
-MIGRATE_OK=false
-for i in 1 2 3; do
-    if docker exec maternity-ward-backend-backend-1 npx prisma migrate deploy 2>&1; then
-        success "Migratsiya bajarildi"
-        MIGRATE_OK=true
-        break
-    fi
-    warn "Migratsiya urinishi $i muvaffaqiyatsiz, 10s kutilmoqda..."
-    sleep 10
-done
-if [ "$MIGRATE_OK" = false ]; then
-    error "Migratsiya 3 marta urinishdan keyin ham bajarilmadi!"
-fi
-
-# ── 7. Health check ──────────────────────────────────────────
-log "7. Health check (45s kutilmoqda)..."
-sleep 45
+# ── 6. Health check ──────────────────────────────────────────
+log "6. Backend health check kutilmoqda..."
 
 MAX_TRIES=10
+HEALTHY=false
 for i in $(seq 1 $MAX_TRIES); do
-    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5001/api/v1/health 2>/dev/null)
-    if [ "$HTTP_CODE" = "200" ]; then
+    if docker compose -f docker-compose.production.yml --env-file .env.prod \
+        exec -T backend wget -qO- http://localhost:5001/api/v1/health 2>/dev/null | grep -q '"status":"ok"'; then
         success "Backend ishlamoqda (health: OK)"
+        HEALTHY=true
         break
     fi
     if [ $i -eq $MAX_TRIES ]; then
         warn "Health check muvaffaqiyatsiz — loglarni tekshiring:"
-        docker logs maternity-ward-backend-backend-1 --tail=50
+        docker compose -f docker-compose.production.yml --env-file .env.prod logs --tail=50 backend
     fi
     log "Kutilmoqda... ($i/$MAX_TRIES)"
     sleep 10
 done
+if [ "$HEALTHY" = false ]; then
+    error "Yangi backend health check'dan o'tmadi. Nginx va ma'lumotlar bazasi to'xtatilmadi; backend logini tekshirib rollback qiling."
+fi
 
-# ── 8. Eski image larni tozalash ─────────────────────────────
-log "8. Eski Docker imagelar tozalanmoqda..."
-docker image prune -f
-success "Eski imagelar o'chirildi"
-
-# ── 9. Status ────────────────────────────────────────────────
+# ── 7. Status ────────────────────────────────────────────────
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 docker compose -f docker-compose.production.yml ps
@@ -134,4 +116,4 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo ""
 success "Deploy muvaffaqiyatli yakunlandi! 🚀"
 
-echo "🪐Log ko'rish: docker logs maternity-ward-backend-backend-1 -f --tail=200"
+echo "🪐Log ko'rish: docker compose -f docker-compose.production.yml --env-file .env.prod logs -f --tail=200 backend"

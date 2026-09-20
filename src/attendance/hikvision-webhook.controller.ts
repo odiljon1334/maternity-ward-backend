@@ -105,33 +105,41 @@ export class HikvisionWebhookController {
   // shuning uchun secret URL query-parametr sifatida yuboriladi:
   //   /api/v1/hikvision/webhook?key=<HIKVISION_WEBHOOK_SECRET>
   //
-  // HIKVISION_WEBHOOK_SECRET .env da sozlanmagan bo'lsa, eski/hali
-  // yangilanmagan terminallar bilan uzilib qolmaslik uchun faqat WARNING
-  // beriladi va so'rov o'tkaziladi. Production'da bu ENV albatta sozlanishi kerak.
- private assertValidSecret(req: Request) {
-  // Gateway internal networkdan kelayapti (172.18.x.x)
-  // Tashqaridan kirish mumkin emas — secret tekshirish kerak emas
-  const clientIp = req.ip ?? '';
-  if (clientIp.includes('172.18.') || clientIp.includes('172.17.')) {
-    return; // Docker internal — ishonchli
+  // O'tish rejimi: legacy terminal webhooklari uzilmasligi uchun default
+  // "monitor". HIKVISION_WEBHOOK_ENFORCE_SECRET=true faqat barcha terminal
+  // URLlariga ?key=... qo'yilgani tasdiqlangandan keyin yoqiladi.
+  private assertValidSecret(req: Request) {
+    const expected = process.env.HIKVISION_WEBHOOK_SECRET;
+    const enforce = process.env.HIKVISION_WEBHOOK_ENFORCE_SECRET === 'true';
+    if (!expected) {
+      this.logger.warn(
+        'HIKVISION_WEBHOOK_SECRET sozlanmagan — webhook monitor rejimida qabul qilindi',
+      );
+      return;
+    }
+
+    const provided = String(req.query.key ?? '');
+    const a = Buffer.from(provided);
+    const b = Buffer.from(expected);
+
+    const valid =
+      a.length === b.length && provided.length > 0
+        ? timingSafeEqual(a, b)
+        : false;
+
+    if (!valid && enforce) {
+      this.logger.warn(
+        `Webhook: noto'g'ri/yo'q secret rad etildi. IP=${req.ip}`,
+      );
+      throw new UnauthorizedException('Invalid webhook secret');
+    }
+
+    if (!valid) {
+      this.logger.warn(
+        `Webhook secret mos emas, ammo monitor rejimida qabul qilindi. IP=${req.ip}`,
+      );
+    }
   }
-
-  const expected = process.env.HIKVISION_WEBHOOK_SECRET;
-  if (!expected) return;
-
-  const provided = String(req.query.key ?? '');
-  const a = Buffer.from(provided);
-  const b = Buffer.from(expected);
-
-  const valid = a.length === b.length && provided.length > 0
-    ? timingSafeEqual(a, b)
-    : false;
-
-  if (!valid) {
-    this.logger.warn(`Webhook: noto'g'ri/yo'q secret. IP=${req.ip}`);
-    throw new UnauthorizedException('Invalid webhook secret');
-  }
-}
 
   // ─── PAYLOAD PARSER ──────────────────────────────────────────────────────────
 

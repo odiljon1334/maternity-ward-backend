@@ -44,6 +44,7 @@ EXPOSE 5001
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
   CMD wget -qO- http://localhost:5001/api/v1/health || exit 1
 
-# Migrate qilib keyin serverni start qilish
-# NODE_OPTIONS docker-compose da ham override qilish mumkin
-CMD ["sh", "-c", "npx prisma migrate deploy && node --max-old-space-size=${NODE_MEMORY_MB:-4096} dist/src/main"]
+# Migratsiya deploy.sh'da, yangi containerlar almashtirilishidan OLDIN alohida
+# bajariladi. Startup ichida migratsiya qilish parallel replica race'iga va
+# qayta ishga tushish vaqtida kutilmagan schema o'zgarishiga olib keladi.
+CMD ["sh", "-c", "node --max-old-space-size=${NODE_MEMORY_MB:-4096} dist/src/main"]
