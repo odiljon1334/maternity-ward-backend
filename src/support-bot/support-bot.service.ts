@@ -223,7 +223,33 @@ export class SupportBotService implements OnModuleInit {
       await ctx.reply(reply);
     });
 
+    await this.registerWebhook();
     this.logger.log('Support bot started (webhook mode)');
+  }
+
+  /** Secret+URL bo'lmasa avvalgi support-bot webhookiga tegmaydi. */
+  private async registerWebhook() {
+    const url = this.config.get<string>('SUPPORT_BOT_WEBHOOK_URL')?.trim();
+    const secret = this.config
+      .get<string>('SUPPORT_BOT_WEBHOOK_SECRET')
+      ?.trim();
+    if (!url || !secret) {
+      this.logger.warn(
+        "SUPPORT_BOT_WEBHOOK_URL/SUPPORT_BOT_WEBHOOK_SECRET sozlanmagan — mavjud webhook o'zgartirilmadi",
+      );
+      return;
+    }
+
+    try {
+      await this.bot.telegram.setWebhook(url, { secret_token: secret });
+      this.logger.log(
+        `Support bot webhook himoyalangan holda ro'yxatdan o'tdi: ${url}`,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Support bot webhook ro'yxatdan o'tmadi: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   async handleUpdate(update: any): Promise<void> {

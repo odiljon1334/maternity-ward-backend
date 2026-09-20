@@ -166,7 +166,41 @@ export class TelegramService implements OnModuleInit {
       ])
       .catch(() => {});
 
+    await this.registerWebhook(
+      'TELEGRAM_WEBHOOK_URL',
+      'TELEGRAM_WEBHOOK_SECRET',
+    );
+
     this.logger.log('Telegram bot started (webhook mode)');
+  }
+
+  /**
+   * URL va secret ikkalasi ENV'da bo'lsa, webhookni Telegram API orqali
+   * atomik yangilaydi. Birortasi yo'q bo'lsa, avvalgi production webhook
+   * sozlamasiga mutlaqo tegmaymiz — deploy vaqtida bildirishnomalar uzilmaydi.
+   */
+  private async registerWebhook(urlKey: string, secretKey: string) {
+    const url = this.config.get<string>(urlKey)?.trim();
+    const secret = this.config.get<string>(secretKey)?.trim();
+    if (!url || !secret) {
+      this.logger.warn(
+        `${urlKey}/${secretKey} sozlanmagan — mavjud Telegram webhook o'zgartirilmadi`,
+      );
+      return;
+    }
+
+    try {
+      await this.bot.telegram.setWebhook(url, { secret_token: secret });
+      this.logger.log(
+        `Telegram webhook himoyalangan holda ro'yxatdan o'tdi: ${url}`,
+      );
+    } catch (error) {
+      // Eski webhook Telegram tomonida saqlanib qoladi; bitta API xatosi
+      // botni yoki Nest startup'ini to'xtatmasligi kerak.
+      this.logger.error(
+        `Telegram webhook ro'yxatdan o'tmadi: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   private setupCommands() {
