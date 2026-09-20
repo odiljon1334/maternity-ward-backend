@@ -168,6 +168,7 @@ model Hospital {
   hikTerminals  HikTerminal[]
   leaveRequests LeaveRequest[]
   assistantAdmins HospitalAssistant[]
+  didoxCredential HospitalDidoxCredential?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -857,4 +858,26 @@ model UserPermissionOverride {
 
   @@unique([userId, permission])
   @@index([userId])
+}
+
+// ─────────────────────────────────────────────
+// DIDOX (elektron hujjat aylanish tizimi) — ЭЦП orqali autentifikatsiya
+// ─────────────────────────────────────────────
+// StaffPulse rejasi, "O'zbekiston bozoriga mos integratsiyalar" bandi
+// (2026-09-20). MUHIM: bu yerda mijozning ЭЦП PRIVATE KALITI HECH QACHON
+// saqlanmaydi — imzolash accountant kompyuterida E-IMZO ID lokal agenti
+// orqali brauzerda amalga oshiriladi, bizning serverimiz faqat NATIJA
+// (pkcs7 imzo va undan olingan token)ni qabul qiladi/saqlaydi.
+model HospitalDidoxCredential {
+  id             String    @id @default(uuid())
+  hospitalId     String    @unique
+  hospital       Hospital  @relation(fields: [hospitalId], references: [id], onDelete: Cascade)
+
+  serialNumber   String    // ЭЦП kalitining seriya raqami (shifoxona buxgalteri/rahbari)
+  authToken      String?   // Didox'dan olingan bearer token
+  tokenExpiresAt DateTime? // authToken muddati (odatda 24 soat)
+  lastAuthId     String?   // eng oxirgi olingan authId (challenge bosqichi uchun)
+
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 }

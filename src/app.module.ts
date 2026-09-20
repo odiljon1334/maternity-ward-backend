@@ -30,6 +30,7 @@ import { BirthdayModule } from './birthday/birthday.module';
 import { HikvisionModule } from './hikvision/hikvision.module';
 import { LocationModule } from './location/location.module';
 import { UsersModule } from './users/users.module';
+import { DidoxModule } from './didox/didox.module';
 
 @Module({
   imports: [
@@ -78,6 +79,7 @@ import { UsersModule } from './users/users.module';
     BirthdayModule,
     LocationModule,
     UsersModule,
+    DidoxModule,
   ],
   providers: [],
 })
