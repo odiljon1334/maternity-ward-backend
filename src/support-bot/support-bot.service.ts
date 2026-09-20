@@ -6,8 +6,8 @@ import { TelegramService } from '../telegram/telegram.service';
 import { SUPPORT_BOT_SYSTEM_PROMPT } from './faq-prompt';
 
 const TZ = 'Asia/Tashkent';
-const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const DEFAULT_MODEL = 'qwen/qwen3.8-27b:free';
+const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
+const DEFAULT_MODEL = 'gemini-3.8-flash';
 const MAX_HISTORY = 6; // oxirgi N ta xabar (user+assistant juftlashib)
 const HISTORY_TTL_MS = 30 * 60 * 1000; // 30 daqiqa harakatsizlikdan keyin unutiladi
 const RATE_LIMIT_MAX = 20; // 1 soatda bitta chat uchun maksimal xabar
@@ -177,12 +177,12 @@ export class SupportBotService implements OnModuleInit {
     }
   }
 
-  // ── AI javob (OpenRouter — bepul Qwen model) ────────────────────────────
+  // ── AI javob (Google Gemini) ────────────────────────────────────────────
   private async askAi(chatId: string, text: string): Promise<string> {
-    const apiKey = this.config.get<string>('OPENROUTER_API_KEY');
+    const apiKey = this.config.get<string>('GEMINI_API_KEY');
     if (!apiKey) {
       this.logger.warn(
-        'OPENROUTER_API_KEY sozlanmagan — support bot AI javob bera olmaydi',
+        'GEMINI_API_KEY sozlanmagan — support bot AI javob bera olmaydi',
       );
       return "Kechirasiz, hozircha avtomatik javob ishlamayapti. Ish vaqtida operatorimiz bilan bog'lanishingiz mumkin.";
     }
@@ -196,19 +196,23 @@ export class SupportBotService implements OnModuleInit {
       const model =
         this.config.get<string>('SUPPORT_BOT_AI_MODEL') || DEFAULT_MODEL;
       const { data } = await axios.post(
-        OPENROUTER_URL,
+        `${GEMINI_URL}/${model}:generateContent`,
         {
-          model,
-          messages: [
-            { role: 'system', content: SUPPORT_BOT_SYSTEM_PROMPT },
-            ...session.history,
-          ],
-          max_tokens: 500,
-          temperature: 0.4,
+          systemInstruction: {
+            parts: [{ text: SUPPORT_BOT_SYSTEM_PROMPT }],
+          },
+          contents: session.history.map((m) => ({
+            role: m.role === 'assistant' ? 'model' : 'user',
+            parts: [{ text: m.content }],
+          })),
+          generationConfig: {
+            temperature: 0.4,
+            maxOutputTokens: 500,
+          },
         },
         {
           headers: {
-            Authorization: `Bearer ${apiKey}`,
+            'x-goog-api-key': apiKey,
             'Content-Type': 'application/json',
           },
           timeout: 20_000,
@@ -216,13 +220,13 @@ export class SupportBotService implements OnModuleInit {
       );
 
       const reply =
-        data?.choices?.[0]?.message?.content?.trim() ||
+        data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ||
         "Kechirasiz, javob shakllantira olmadim. Operatorimiz bilan bog'laning.";
       session.history.push({ role: 'assistant', content: reply });
       session.history = session.history.slice(-MAX_HISTORY);
       return reply;
     } catch (e) {
-      this.logger.error(`OpenRouter chaqiruvida xatolik: ${e}`);
+      this.logger.error(`Gemini chaqiruvida xatolik: ${e}`);
       return 'Kechirasiz, hozir texnik nosozlik bor. Ish vaqtida operatorimiz javob beradi.';
     }
   }
