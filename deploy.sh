@@ -57,6 +57,10 @@ git reset --hard origin/main
 cd "$FRONTEND_DIR"
 git fetch origin main
 git reset --hard origin/main
+# Compose fayli va yagona production .env.prod backend repo ichida.
+# Frontend yangilangach shu yerga qaytmasak Docker Compose frontend papkasidan
+# .env.prod qidiradi va build boshlanishidan oldin to'xtaydi.
+cd "$BACKEND_DIR"
 success "Kod yangilandi"
 
 # ── 3. Build (ishlayotgan servislar TO'XTATILMAYDI) ───────────
