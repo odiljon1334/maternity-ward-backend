@@ -26,6 +26,15 @@ log()     { echo -e "${BLUE}[INFO]${NC} $1"; }
 success() { echo -e "${GREEN}[OK]${NC} $1"; }
 warn()    { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error()   { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
+# Deploy qaysi papkadan chaqirilishidan qat'i nazar, Compose doim backend
+# repo va uning yagona production .env.prod faylidan foydalanadi.
+compose() {
+    docker compose \
+        --project-directory "$BACKEND_DIR" \
+        -f "$COMPOSE_FILE" \
+        --env-file "$BACKEND_DIR/.env.prod" \
+        "$@"
+}
 
 echo ""
 echo "🏥 =============================================="
@@ -71,22 +80,20 @@ success "Kod yangilandi"
 # qatlamlarni qayta quradi. --no-cache har safar HAMMA narsani
 # (shu jumladan npm ci'ni ham) noldan bajarishga majburlar edi.
 log "3. Docker image build qilinmoqda (production ishlashda davom etadi)..."
-docker compose -f docker-compose.production.yml --env-file .env.prod build
+compose build
 success "Build tugadi"
 
 # ── 4. Database migratsiyasi (yangi image bilan, app almashtirishdan oldin) ──
 # Dockerfile startup ichida migrate qilmaydi: bu parallel replica race'ini
 # va noto'g'ri image sabab deploydagi outage'ni oldini oladi.
 log "4. Database migratsiyasi tekshirilmoqda..."
-docker compose -f docker-compose.production.yml --env-file .env.prod \
-  run --rm --no-deps backend npx prisma migrate deploy
+compose run --rm --no-deps backend npx prisma migrate deploy
 success "Migratsiya bajarildi"
 
 # ── 5. Faqat application containerlarini yangilash ────────────
 # postgres/redis/nginx/face-match ishlashda qoladi; global `down` QILINMAYDI.
 log "5. Backend va frontend yangilanmoqda..."
-docker compose -f docker-compose.production.yml --env-file .env.prod \
-  up -d --no-deps --force-recreate backend frontend
+compose up -d --no-deps --force-recreate backend frontend
 success "Application containerlari yangilandi"
 
 # ── 6. Health check ──────────────────────────────────────────
@@ -95,15 +102,14 @@ log "6. Backend health check kutilmoqda..."
 MAX_TRIES=10
 HEALTHY=false
 for i in $(seq 1 $MAX_TRIES); do
-    if docker compose -f docker-compose.production.yml --env-file .env.prod \
-        exec -T backend wget -qO- http://localhost:5001/api/v1/health 2>/dev/null | grep -q '"status":"ok"'; then
+    if compose exec -T backend wget -qO- http://localhost:5001/api/v1/health 2>/dev/null | grep -q '"status":"ok"'; then
         success "Backend ishlamoqda (health: OK)"
         HEALTHY=true
         break
     fi
     if [ $i -eq $MAX_TRIES ]; then
         warn "Health check muvaffaqiyatsiz — loglarni tekshiring:"
-        docker compose -f docker-compose.production.yml --env-file .env.prod logs --tail=50 backend
+        compose logs --tail=50 backend
     fi
     log "Kutilmoqda... ($i/$MAX_TRIES)"
     sleep 10
@@ -115,9 +121,9 @@ fi
 # ── 7. Status ────────────────────────────────────────────────
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-docker compose -f docker-compose.production.yml ps
+compose ps
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 success "Deploy muvaffaqiyatli yakunlandi! 🚀"
 
-echo "🪐Log ko'rish: docker compose -f docker-compose.production.yml --env-file .env.prod logs -f --tail=200 backend"
+echo "🪐Log ko'rish: compose logs -f --tail=200 backend"
