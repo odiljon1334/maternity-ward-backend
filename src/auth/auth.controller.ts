@@ -51,7 +51,7 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const result = await this.authService.login(dto, getIp(req));
-    this.setSessionCookie(res, result.accessToken);
+    this.setSessionCookie(req, res, result.accessToken);
     // JWT JavaScript javobiga qaytarilmaydi — uni faqat HttpOnly cookie olib yuradi.
     return { user: result.user };
   }
@@ -68,26 +68,53 @@ export class AuthController {
       ? authorization.slice('Bearer '.length)
       : undefined;
     if (!token) throw new UnauthorizedException('Bearer token talab qilinadi');
-    this.setSessionCookie(res, token);
+    this.setSessionCookie(req, res, token);
     return { migrated: true };
   }
 
   @Post('logout')
-  logout(@Res({ passthrough: true }) res: Response) {
+  logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    // Avvalgi API host-only cookie ham, yangi umumiy domen cookie ham o'chadi.
     res.clearCookie('access_token', this.cookieOptions());
+    const domain = this.sharedCookieDomain(req);
+    if (domain) {
+      res.clearCookie('access_token', this.cookieOptions(domain));
+    }
     return { loggedOut: true };
   }
 
-  private cookieOptions() {
+  private cookieOptions(domain?: string) {
     return {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax' as const,
       path: '/',
+      ...(domain && { domain }),
     };
   }
 
-  private setSessionCookie(res: Response, token: string) {
+  private sharedCookieDomain(req: Request): string | undefined {
+    const apiHost = req.hostname.toLowerCase();
+    const origins = (process.env.FRONTEND_URL || '').split(',');
+    for (const origin of origins) {
+      try {
+        const frontendHost = new URL(origin.trim()).hostname.toLowerCase();
+        // API subdomenida yozilgan host-only cookie asosiy saytda ko'rinmaydi.
+        // Faqat FRONTEND_URL API hostining ota domeni bo'lsa ulashamiz.
+        if (
+          frontendHost.includes('.') &&
+          apiHost.endsWith(`.${frontendHost}`)
+        ) {
+          return frontendHost;
+        }
+      } catch {
+        // Noto'g'ri URL cookie domenini kengaytirmaydi.
+      }
+    }
+    return undefined;
+  }
+
+  private setSessionCookie(req: Request, res: Response, token: string) {
     // JWT_EXPIRES_IN standartda 7d. Cookie server tokenidan uzoq yashamasligi
     // uchun faqat d/h/m/s birliklarini qabul qilamiz.
     const raw = process.env.JWT_EXPIRES_IN || '7d';
@@ -102,7 +129,16 @@ export class AuthController {
             ? 60_000
             : 1_000;
     const maxAge = (match ? Number(match[1]) : 7 * 24 * 60 * 60) * multiplier;
-    res.cookie('access_token', token, { ...this.cookieOptions(), maxAge });
+    const domain = this.sharedCookieDomain(req);
+    if (domain) {
+      // Eski host-only cookie qolsa, API ga bir xil nomli ikki cookie boradi.
+      // JWT extractor eskisini olib qo'ymasligi uchun uni birinchi o'chiramiz.
+      res.clearCookie('access_token', this.cookieOptions());
+    }
+    res.cookie('access_token', token, {
+      ...this.cookieOptions(domain),
+      maxAge,
+    });
   }
 
   /**
