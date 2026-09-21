@@ -135,6 +135,18 @@ git reset --hard origin/main
 cd "$BACKEND_DIR"
 success "Kod yangilandi"
 
+# Bind-mount qilingan nginx.conf diskda darhol yangilanadi, ammo Nginx workerlar
+# reload bo'lmaguncha eski konfiguratsiyada qoladi. Avval yangi faylni tekshirib,
+# xato bo'lsa application containerlariga tegmasdan deployni to'xtatamiz.
+log "2.1. Nginx konfiguratsiyasi tekshirilmoqda..."
+if [ -z "$(compose ps -q nginx 2>/dev/null)" ]; then
+    error "Nginx container ishlamayapti; deploy xavfsiz davom eta olmaydi."
+fi
+if ! compose exec -T nginx nginx -t; then
+    error "Nginx konfiguratsiyasida xato bor. Eski workerlar ishlashda davom etadi."
+fi
+success "Nginx konfiguratsiyasi to'g'ri"
+
 # Build mavjud taglarni yangilashidan oldin ayni paytda productionda ishlayotgan
 # image ID va nomlarini saqlab qolamiz.
 OLD_BACKEND_IMAGE=$(capture_running_image backend)
@@ -250,7 +262,14 @@ if [ "$FRONTEND_HEALTHY" = false ]; then
     error "Yangi frontend health check'dan o'tmadi. Avtomatik rollback bajarildi; yuqoridagi natijani tekshiring."
 fi
 
-# ── 9. Status ────────────────────────────────────────────────
+# ── 9. Nginx reload ──────────────────────────────────────────
+# `nginx -s reload` graceful: mavjud ulanishlar uzilmaydi, yangi workerlar
+# tekshirilgan konfiguratsiya bilan ishga tushadi.
+log "9. Nginx konfiguratsiyasi uzilishsiz yangilanmoqda..."
+compose exec -T nginx nginx -s reload
+success "Nginx graceful reload qilindi"
+
+# ── 10. Status ───────────────────────────────────────────────
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 compose ps
