@@ -7,6 +7,7 @@ import { LeaveModule } from '../leave/leave.module';
 import { PushModule } from '../push/push.module';
 import { PaymentsModule } from '../payments/payments.module';
 import { HikvisionModule } from '../hikvision/hikvision.module';
+import { FaceMatchModule } from '../face-match/face-match.module';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { HikvisionModule } from '../hikvision/hikvision.module';
     PushModule,
     PaymentsModule,
     HikvisionModule,
+    FaceMatchModule,
   ],
   providers: [CronService],
 })

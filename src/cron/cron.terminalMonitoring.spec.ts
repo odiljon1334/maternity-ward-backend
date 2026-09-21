@@ -53,6 +53,7 @@ function makeService(options: {
     push as any,
     {} as any,
     hikvision as any,
+    {} as any,
   );
 
   return { service, prisma, push, telegram, hikvision };

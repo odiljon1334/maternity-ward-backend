@@ -630,6 +630,20 @@ model SystemSettings {
   @@unique([key, hospitalId])
 }
 
+// Global, durable state for critical infrastructure monitoring. Keeping this
+// in PostgreSQL prevents duplicate alerts while two backend replicas overlap
+// during a rolling deploy.
+model OperationalServiceMonitor {
+  serviceKey          String   @id
+  status              String   @default("HEALTHY")
+  consecutiveFailures Int      @default(0)
+  outageStartedAt     DateTime?
+  alertedAt           DateTime?
+  lastSuccessAt       DateTime?
+  lastFailureAt       DateTime?
+  updatedAt           DateTime @updatedAt
+}
+
 // ─────────────────────────────────────────────
 // TELEGRAM SUBSCRIPTIONS
 // ─────────────────────────────────────────────

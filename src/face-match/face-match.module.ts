@@ -1,8 +1,11 @@
 import { Module } from '@nestjs/common';
 import { FaceMatchService } from './face-match.service';
+import { FaceMatchMonitorService } from './face-match-monitor.service';
+import { SupportBotModule } from '../support-bot/support-bot.module';
 
 @Module({
-  providers: [FaceMatchService],
-  exports: [FaceMatchService],
+  imports: [SupportBotModule],
+  providers: [FaceMatchService, FaceMatchMonitorService],
+  exports: [FaceMatchService, FaceMatchMonitorService],
 })
 export class FaceMatchModule {}

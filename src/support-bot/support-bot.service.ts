@@ -493,6 +493,29 @@ export class SupportBotService implements OnModuleInit {
     await this.sendLeadNotification(text, pdfBuffer);
   }
 
+  /**
+   * StaffPlusPRO operatoriga global texnik ogohlantirish yuboradi.
+   * Muassasa direktorlariga yuborilmaydi: ular global infratuzilma
+   * nosozligini tuzata olmaydi va keraksiz xavotir paydo bo'ladi.
+   */
+  async notifyOperationalAlert(message: string): Promise<boolean> {
+    const staffChatId = this.config.get<string>('SUPPORT_STAFF_CHAT_ID');
+    if (!staffChatId || !this.bot) {
+      this.logger.warn(
+        'Support bot yoki SUPPORT_STAFF_CHAT_ID sozlanmagan — texnik ogohlantirish yuborilmadi',
+      );
+      return false;
+    }
+
+    try {
+      await this.bot.telegram.sendMessage(staffChatId, message);
+      return true;
+    } catch (e) {
+      this.logger.error(`Texnik ogohlantirishni yuborishda xatolik: ${e}`);
+      return false;
+    }
+  }
+
   private async sendLeadNotification(text: string, pdfBuffer: Buffer | null) {
     const staffChatId =
       this.config.get<string>('SUPPORT_STAFF_CHAT_ID') ||

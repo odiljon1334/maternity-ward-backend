@@ -9,6 +9,7 @@ import { LeaveService } from '../leave/leave.service';
 import { PushService } from '../push/push.service';
 import { PaymentsService, currentPeriod } from '../payments/payments.service';
 import { HikvisionService } from '../hikvision/hikvision.service';
+import { FaceMatchMonitorService } from '../face-match/face-match-monitor.service';
 import dayjs from 'dayjs';
 import timezone from 'dayjs/plugin/timezone';
 import utc from 'dayjs/plugin/utc';
@@ -29,7 +30,20 @@ export class CronService {
     private readonly pushService: PushService,
     private readonly paymentsService: PaymentsService,
     private readonly hikvisionService: HikvisionService,
+    private readonly faceMatchMonitorService: FaceMatchMonitorService,
   ) {}
+
+  /** Face Match strict rejimda mobil check-in uchun kritik dependency. */
+  @Cron('* * * * *', { timeZone: TZ })
+  async monitorFaceMatch() {
+    try {
+      await this.faceMatchMonitorService.check();
+    } catch (err) {
+      this.logger.error(
+        `Face Match monitoring o'tkazib yuborildi: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
 
   /**
    * Har 2 daqiqada Hikvision gateway'dagi aniq devIndex holatini tekshiradi.
