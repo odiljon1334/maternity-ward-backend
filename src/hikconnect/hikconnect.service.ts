@@ -159,12 +159,23 @@ export class HikConnectService {
       deviceSerial?: string;
       isActive?: boolean;
     },
+    hospitalId?: string,
   ) {
+    await this.ensureCameraInHospital(id, hospitalId);
     return this.prisma.camera.update({ where: { id }, data });
   }
 
-  async deleteCamera(id: string) {
+  async deleteCamera(id: string, hospitalId?: string) {
+    await this.ensureCameraInHospital(id, hospitalId);
     return this.prisma.camera.delete({ where: { id } });
+  }
+
+  private async ensureCameraInHospital(id: string, hospitalId?: string) {
+    const camera = await this.prisma.camera.findFirst({
+      where: { id, ...(hospitalId && { hospitalId }) },
+      select: { id: true },
+    });
+    if (!camera) throw new NotFoundException('Kamera topilmadi');
   }
 
   // ─── Live URL — asosiy metod ───────────────────────────────────────────────
@@ -176,9 +187,12 @@ export class HikConnectService {
    *   1. HikConnect (configured bo'lsa va cameraIndexCode + deviceSerial bor bo'lsa)
    *   2. MediaMTX   (streamPath bor bo'lsa)
    */
-  async getLiveUrlById(cameraId: string): Promise<LiveUrlResult> {
-    const camera = await this.prisma.camera.findUnique({
-      where: { id: cameraId },
+  async getLiveUrlById(
+    cameraId: string,
+    hospitalId?: string,
+  ): Promise<LiveUrlResult> {
+    const camera = await this.prisma.camera.findFirst({
+      where: { id: cameraId, ...(hospitalId && { hospitalId }) },
     });
     if (!camera) throw new NotFoundException('Kamera topilmadi');
 

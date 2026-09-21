@@ -20,6 +20,7 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
 import { AddPersonDto } from './hikvision.dto';
+import { TenantScopeGuard } from '../common/guards/tenant-scope.guard';
 
 const TERMINAL_ROLES = [
   UserRole.SUPER_ADMIN,
@@ -29,7 +30,7 @@ const TERMINAL_ROLES = [
 ];
 
 function isSuperLike(role: UserRole): boolean {
-  return role === UserRole.SUPER_ADMIN || role === UserRole.ASSISTANT_ADMIN;
+  return role === UserRole.SUPER_ADMIN;
 }
 
 @UseGuards(JwtAuthGuard)
@@ -39,17 +40,23 @@ export class HikvisionController {
 
   // Gateway devices
   @Get('devices')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
   getDevices() {
     return this.hikvision.getDevices();
   }
 
   // Person
   @Post('devices/:devIndex/persons')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
   addPerson(@Param('devIndex') devIndex: string, @Body() dto: AddPersonDto) {
     return this.hikvision.addPerson(devIndex, dto);
   }
 
   @Delete('devices/:devIndex/persons/:employeeNo')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
   deletePerson(
     @Param('devIndex') devIndex: string,
     @Param('employeeNo') employeeNo: string,
@@ -59,6 +66,8 @@ export class HikvisionController {
 
   // Face
   @Post('devices/:devIndex/persons/:employeeNo/face')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
   @UseInterceptors(FileInterceptor('image'))
   addFace(
     @Param('devIndex') devIndex: string,
@@ -69,6 +78,8 @@ export class HikvisionController {
   }
 
   @Delete('devices/:devIndex/persons/:employeeNo/face')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
   deleteFace(
     @Param('devIndex') devIndex: string,
     @Param('employeeNo') employeeNo: string,
@@ -79,14 +90,15 @@ export class HikvisionController {
   // ─────────────────────────────────────────────────────────
   // Terminallar — DIQQAT: DIRECTOR/ADMIN uchun hospitalId HAR DOIM
   // JWT'dan olinadi (mijoz yuborgan qiymatga ishonilmaydi). Faqat
-  // SUPER_ADMIN/ASSISTANT_ADMIN so'rovda ko'rsatilgan hospitalId'dan
-  // (yoki "all"dan) foydalanishi mumkin. Bu — boshqa shifoxonaning
+  // SUPER_ADMIN so'rovda ko'rsatilgan hospitalId'dan (yoki "all"dan)
+  // foydalanishi mumkin. Assistant Admin uchun qiymat TenantScopeGuard
+  // tomonidan faqat biriktirilgan muassasaga almashtiriladi. Bu — boshqa shifoxonaning
   // terminaliga aralashish imkoniyatini yopadi (avval hech qanday
   // tekshiruv yo'q edi).
   // ─────────────────────────────────────────────────────────
 
   @Get('terminals')
-  @UseGuards(RolesGuard)
+  @UseGuards(RolesGuard, TenantScopeGuard)
   @Roles(...TERMINAL_ROLES)
   getTerminals(
     @Query('hospitalId') hospitalId: string,
@@ -100,13 +112,13 @@ export class HikvisionController {
       return this.hikvision.getTerminalsWithStatus(hospitalId);
     }
     if (!jwtHospitalId) {
-      throw new ForbiddenException("Shifoxona aniqlanmadi");
+      throw new ForbiddenException('Shifoxona aniqlanmadi');
     }
     return this.hikvision.getTerminalsWithStatus(jwtHospitalId);
   }
 
   @Post('terminals')
-  @UseGuards(RolesGuard)
+  @UseGuards(RolesGuard, TenantScopeGuard)
   @Roles(...TERMINAL_ROLES)
   addTerminal(
     @Body()
@@ -121,7 +133,7 @@ export class HikvisionController {
   ) {
     const hospitalId = isSuperLike(role) ? body.hospitalId : jwtHospitalId;
     if (!hospitalId) {
-      throw new ForbiddenException("Shifoxona aniqlanmadi");
+      throw new ForbiddenException('Shifoxona aniqlanmadi');
     }
     return this.hikvision.addTerminal(hospitalId, {
       name: body.name,
@@ -131,7 +143,7 @@ export class HikvisionController {
   }
 
   @Delete('terminals/:id')
-  @UseGuards(RolesGuard)
+  @UseGuards(RolesGuard, TenantScopeGuard)
   @Roles(...TERMINAL_ROLES)
   deleteTerminal(
     @Param('id') id: string,
@@ -141,13 +153,13 @@ export class HikvisionController {
   ) {
     const scopedHospitalId = isSuperLike(role) ? hospitalId : jwtHospitalId;
     if (!scopedHospitalId) {
-      throw new ForbiddenException("Shifoxona aniqlanmadi");
+      throw new ForbiddenException('Shifoxona aniqlanmadi');
     }
     return this.hikvision.removeTerminal(id, scopedHospitalId);
   }
 
   @Patch('terminals/:id')
-  @UseGuards(RolesGuard)
+  @UseGuards(RolesGuard, TenantScopeGuard)
   @Roles(...TERMINAL_ROLES)
   toggleTerminal(
     @Param('id') id: string,
@@ -157,14 +169,14 @@ export class HikvisionController {
   ) {
     const hospitalId = isSuperLike(role) ? body.hospitalId : jwtHospitalId;
     if (!hospitalId) {
-      throw new ForbiddenException("Shifoxona aniqlanmadi");
+      throw new ForbiddenException('Shifoxona aniqlanmadi');
     }
     return this.hikvision.toggleTerminal(id, hospitalId, body.isActive);
   }
 
   // Bulk sync
   @Post('sync/:hospitalId')
-  @UseGuards(RolesGuard)
+  @UseGuards(RolesGuard, TenantScopeGuard)
   @Roles(...TERMINAL_ROLES)
   syncHospital(
     @Param('hospitalId') hospitalId: string,
@@ -179,7 +191,7 @@ export class HikvisionController {
 
   // Reboot — faqat admin, chunki terminal ~30-90s offline bo'lib qoladi
   @UseGuards(RolesGuard)
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ASSISTANT_ADMIN)
+  @Roles(UserRole.SUPER_ADMIN)
   @Post('devices/:devIndex/reboot')
   rebootTerminal(@Param('devIndex') devIndex: string) {
     return this.hikvision.rebootTerminal(devIndex);

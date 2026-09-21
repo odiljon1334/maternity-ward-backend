@@ -28,6 +28,9 @@ import { memoryStorage } from 'multer';
 import { BadRequestException } from '@nestjs/common';
 import { Response } from 'express';
 import { AuditLogService } from '../audit-log/audit-log.service';
+import { TenantScopeGuard } from '../common/guards/tenant-scope.guard';
+import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { RequirePermission } from '../common/decorators/require-permission.decorator';
 
 /** SUPER_ADMIN uchun: JWT'dagi hospitalId null bo'lsa, query'dan targetHospitalId oladi.
  *  Ikkalasi ham yo'q bo'lsa — '' qaytaradi (findAll unda filtersiz ko'rsatadi) */
@@ -39,7 +42,7 @@ function resolveHospitalId(
 }
 
 @Controller('employees')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard, TenantScopeGuard)
 export class EmployeesController {
   constructor(
     private readonly service: EmployeesService,
@@ -59,7 +62,12 @@ export class EmployeesController {
   }
 
   @Get('export/excel')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+  )
   async exportExcel(
     @Res({ passthrough: true }) res: Response,
     @CurrentUser('hospitalId') hospitalId: string,
@@ -87,7 +95,12 @@ export class EmployeesController {
   }
 
   @Get('export/enroll-pic')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+  )
   async enrollPicZip(
     @Res({ passthrough: true }) res: Response,
     @CurrentUser('hospitalId') hospitalId: string,
@@ -120,8 +133,11 @@ export class EmployeesController {
   }
 
   @Get('archive/:id')
-  async getArchivedEmployee(@Param('id') id: string) {
-    const result = await this.service.getArchivedEmployee(id);
+  async getArchivedEmployee(
+    @Param('id') id: string,
+    @CurrentUser('hospitalId') hospitalId: string | null,
+  ) {
+    const result = await this.service.getArchivedEmployee(id, hospitalId);
     return { success: true, data: result };
   }
 
@@ -129,8 +145,13 @@ export class EmployeesController {
   async lookup(
     @Query('fullName') fullName: string,
     @Query('birthDate') birthDate: string,
+    @CurrentUser('hospitalId') hospitalId: string | null,
   ) {
-    const result = await this.service.lookupByName(fullName, birthDate);
+    const result = await this.service.lookupByName(
+      fullName,
+      birthDate,
+      hospitalId,
+    );
     return { success: true, data: result };
   }
 
@@ -147,7 +168,13 @@ export class EmployeesController {
   }
 
   @Post()
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  @RequirePermission('employees.edit')
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+  )
   async create(
     @Body() dto: CreateEmployeeDto,
     @CurrentUser('sub') userId: string,
@@ -170,7 +197,13 @@ export class EmployeesController {
   }
 
   @Put(':id')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  @RequirePermission('employees.edit')
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+  )
   async update(
     @Param('id') id: string,
     @Body() dto: UpdateEmployeeDto,
@@ -191,7 +224,13 @@ export class EmployeesController {
   }
 
   @Post(':id/photo')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  @RequirePermission('employees.edit')
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+  )
   @UseInterceptors(FileInterceptor('photo', { storage: memoryStorage() }))
   async uploadPhoto(
     @Param('id') id: string,
@@ -214,7 +253,13 @@ export class EmployeesController {
   }
 
   @Post('import/csv')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  @RequirePermission('employees.edit')
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+  )
   @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
   async importCsv(
     @UploadedFile() file: Express.Multer.File,
@@ -236,6 +281,13 @@ export class EmployeesController {
   }
 
   @Put(':id/fire')
+  @RequirePermission('employees.edit')
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+  )
   async fire(
     @Param('id') id: string,
     @CurrentUser('sub') userId: string,
@@ -265,7 +317,8 @@ export class EmployeesController {
   }
 
   @Post('bulk-delete')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN)
+  @RequirePermission('employees.edit')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ASSISTANT_ADMIN, UserRole.ADMIN)
   async bulkDelete(
     @Body('ids') ids: string[],
     @CurrentUser('sub') userId: string,
@@ -285,7 +338,13 @@ export class EmployeesController {
   }
 
   @Put('bulk-department')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  @RequirePermission('employees.edit')
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+  )
   async bulkUpdateDepartment(
     @Body('ids') ids: string[],
     @Body('departmentId') departmentId: string,
@@ -310,7 +369,8 @@ export class EmployeesController {
   }
 
   @Delete(':id')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN)
+  @RequirePermission('employees.edit')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ASSISTANT_ADMIN, UserRole.ADMIN)
   async remove(
     @Param('id') id: string,
     @CurrentUser('sub') userId: string,
@@ -331,7 +391,13 @@ export class EmployeesController {
 
   /** EMP-XXXXXX formatli eski employee numberlarni raqamli formatga o'tkazish */
   @Post('fix-employee-numbers')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  @RequirePermission('employees.edit')
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+  )
   fixEmployeeNumbers(
     @CurrentUser('hospitalId') hospitalId: string,
     @Query('targetHospitalId') targetHospitalId?: string,

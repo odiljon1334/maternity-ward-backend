@@ -16,6 +16,7 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
+import { TenantScopeGuard } from '../common/guards/tenant-scope.guard';
 
 function resolveHospitalId(
   jwtHospId: string | null,
@@ -25,7 +26,7 @@ function resolveHospitalId(
 }
 
 @Controller('positions')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, TenantScopeGuard)
 export class PositionsController {
   constructor(private readonly service: PositionsService) {}
 
@@ -52,7 +53,12 @@ export class PositionsController {
   }
 
   @Post()
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+  )
   create(
     @Body() body: { name: string },
     @CurrentUser('hospitalId') hospitalId: string | null,
@@ -65,7 +71,12 @@ export class PositionsController {
   }
 
   @Put(':id')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+  )
   update(
     @Param('id') id: string,
     @Body() body: { name: string },
@@ -80,7 +91,12 @@ export class PositionsController {
   }
 
   @Patch(':id/gps')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+  )
   updateGps(
     @Param('id') id: string,
     @Body()
@@ -100,7 +116,12 @@ export class PositionsController {
   }
 
   @Patch(':id/gps-reset')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+  )
   resetGps(
     @Param('id') id: string,
     @CurrentUser('hospitalId') hospitalId: string | null,
@@ -113,7 +134,12 @@ export class PositionsController {
   }
 
   @Delete(':id')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+  )
   remove(
     @Param('id') id: string,
     @CurrentUser('hospitalId') hospitalId: string | null,

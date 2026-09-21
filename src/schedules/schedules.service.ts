@@ -1,6 +1,7 @@
 import {
   Injectable,
   BadRequestException,
+  ForbiddenException,
   NotFoundException,
   Logger,
 } from '@nestjs/common';
@@ -50,7 +51,12 @@ export class SchedulesService {
   // ──────────────────────────────────────────
   // GET schedules for employee by month
   // ──────────────────────────────────────────
-  async getEmployeeSchedule(employeeId: string, month: number, year: number) {
+  async getEmployeeSchedule(
+    employeeId: string,
+    month: number,
+    year: number,
+    hospitalId?: string | null,
+  ) {
     const start = DateUtil.startOfMonth(year, month);
     const end = DateUtil.endOfMonth(year, month);
 
@@ -58,6 +64,7 @@ export class SchedulesService {
       where: {
         employeeId,
         date: { gte: start, lte: end },
+        ...(hospitalId && { employee: { hospitalId } }),
       },
       include: {
         shift: true,
@@ -343,7 +350,7 @@ export class SchedulesService {
   // ──────────────────────────────────────────
   // GENERATE schedule by pattern
   // ──────────────────────────────────────────
-  async generate(dto: GenerateScheduleDto) {
+  async generate(dto: GenerateScheduleDto, hospitalId?: string) {
     const { employeeId, month, year, pattern, customWeeks, shiftId } = dto;
     // FIXED_DAY/FIXED_NIGHT uchun startsWith shart emas; rotating uchun default DAYTIME
     const startsWith: ShiftType = dto.startsWith ?? 'DAYTIME';
@@ -355,6 +362,9 @@ export class SchedulesService {
       where: { id: employeeId },
     });
     if (!emp) throw new NotFoundException('Hodim topilmadi');
+    if (hospitalId && emp.hospitalId !== hospitalId) {
+      throw new ForbiddenException('Bu xodim boshqa muassasaga tegishli');
+    }
 
     // Get shift templates (with auto-seed fallback)
     let [dayShift, nightShift] = await Promise.all([
@@ -561,7 +571,7 @@ export class SchedulesService {
   // ──────────────────────────────────────────
   // BULK MANUAL schedule
   // ──────────────────────────────────────────
-  async bulkManual(dto: BulkManualScheduleDto) {
+  async bulkManual(dto: BulkManualScheduleDto, hospitalId?: string) {
     const { employeeId, employeeIds, entries } = dto;
 
     // Bitta xodim ham, ro'yxat ham qabul qilinadi
@@ -576,10 +586,14 @@ export class SchedulesService {
     }
 
     const found = await this.prisma.employee.findMany({
-      where: { id: { in: ids } },
+      where: { id: { in: ids }, ...(hospitalId ? { hospitalId } : {}) },
       select: { id: true },
     });
-    if (!found.length) throw new NotFoundException('Hodim topilmadi');
+    if (found.length !== ids.length) {
+      throw new ForbiddenException(
+        "Ro'yxatdagi xodimlardan biri boshqa muassasaga tegishli",
+      );
+    }
     const validIds = new Set(found.map((e) => e.id));
 
     // Sanalarni bir marta normalizatsiya qilamiz — har xodim uchun qayta emas
@@ -620,8 +634,11 @@ export class SchedulesService {
   async updateEntry(
     id: string,
     data: { shiftId?: string; status?: ScheduleStatus; note?: string },
+    hospitalId?: string | null,
   ) {
-    const entry = await this.prisma.schedule.findUnique({ where: { id } });
+    const entry = await this.prisma.schedule.findFirst({
+      where: { id, ...(hospitalId && { employee: { hospitalId } }) },
+    });
     if (!entry) throw new NotFoundException('Grafik yozuvi topilmadi');
     return this.prisma.schedule.update({ where: { id }, data });
   }

@@ -19,9 +19,10 @@ import { RequirePermission } from '../common/decorators/require-permission.decor
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
 import { Response } from 'express';
+import { TenantScopeGuard } from '../common/guards/tenant-scope.guard';
 
 @Controller('payroll')
-@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard, TenantScopeGuard)
 export class PayrollController {
   constructor(private readonly service: PayrollService) {}
 
@@ -185,12 +186,14 @@ export class PayrollController {
     @Param('employeeId') employeeId: string,
     @Query('month') month: string,
     @Query('year') year: string,
+    @CurrentUser('hospitalId') hospitalId: string | null,
   ) {
     const now = new Date();
     return this.service.calculate(
       employeeId,
       +month || now.getMonth() + 1,
       +year || now.getFullYear(),
+      hospitalId,
     );
   }
 
@@ -200,18 +203,23 @@ export class PayrollController {
     UserRole.ADMIN,
     UserRole.DIRECTOR,
     UserRole.ASSISTANT_ADMIN,
-    UserRole.EMPLOYEE,
   )
   async downloadPayslip(
     @Param('employeeId') employeeId: string,
     @Query('month') month: string,
     @Query('year') year: string,
     @Res({ passthrough: true }) res: Response,
+    @CurrentUser('hospitalId') hospitalId: string | null,
   ): Promise<StreamableFile> {
     const now = new Date();
     const m = +month || now.getMonth() + 1;
     const y = +year || now.getFullYear();
-    const buffer = await this.service.generatePayslipPdf(employeeId, m, y);
+    const buffer = await this.service.generatePayslipPdf(
+      employeeId,
+      m,
+      y,
+      hospitalId,
+    );
     const filename = `maosh-${m}-${y}.pdf`;
     res.set({
       'Content-Type': 'application/pdf',
@@ -232,12 +240,14 @@ export class PayrollController {
     @Param('employeeId') employeeId: string,
     @Query('month') month: string,
     @Query('year') year: string,
+    @CurrentUser('hospitalId') hospitalId: string | null,
   ) {
     const now = new Date();
     return this.service.findOne(
       employeeId,
       +month || now.getMonth() + 1,
       +year || now.getFullYear(),
+      hospitalId,
     );
   }
 }

@@ -24,6 +24,7 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { UserRole, ScheduleStatus } from '@prisma/client';
+import { TenantScopeGuard } from '../common/guards/tenant-scope.guard';
 
 function resolveHospitalId(
   jwtHospId: string | null,
@@ -33,7 +34,7 @@ function resolveHospitalId(
 }
 
 @Controller('schedules')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, TenantScopeGuard)
 export class SchedulesController {
   constructor(private readonly service: SchedulesService) {}
 
@@ -53,8 +54,9 @@ export class SchedulesController {
     @Param('id') id: string,
     @Query('month') month: string,
     @Query('year') year: string,
+    @CurrentUser('hospitalId') hospitalId: string | null,
   ) {
-    return this.service.getEmployeeSchedule(id, +month, +year);
+    return this.service.getEmployeeSchedule(id, +month, +year, hospitalId);
   }
 
   @Get('daily')
@@ -118,13 +120,26 @@ export class SchedulesController {
   }
 
   @Post('generate')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
-  generate(@Body() dto: GenerateScheduleDto) {
-    return this.service.generate(dto);
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+  )
+  generate(
+    @Body() dto: GenerateScheduleDto,
+    @CurrentUser('hospitalId') hospitalId: string | null,
+  ) {
+    return this.service.generate(dto, hospitalId ?? undefined);
   }
 
   @Post('bulk-generate')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+  )
   bulkGenerate(
     @Body() dto: BulkGenerateScheduleDto,
     @CurrentUser('hospitalId') hospitalId: string | null,
@@ -139,13 +154,26 @@ export class SchedulesController {
   }
 
   @Post('manual')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
-  bulkManual(@Body() dto: BulkManualScheduleDto) {
-    return this.service.bulkManual(dto);
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+  )
+  bulkManual(
+    @Body() dto: BulkManualScheduleDto,
+    @CurrentUser('hospitalId') hospitalId: string | null,
+  ) {
+    return this.service.bulkManual(dto, hospitalId ?? undefined);
   }
 
   @Post('rollover')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+  )
   rollover(
     @Body()
     body: {
@@ -167,7 +195,12 @@ export class SchedulesController {
   }
 
   @Post('import-xlsx')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+  )
   @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
   async importXlsx(
     @UploadedFile() file: Express.Multer.File,
@@ -188,11 +221,17 @@ export class SchedulesController {
   }
 
   @Put(':id')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+  )
   updateEntry(
     @Param('id') id: string,
     @Body() body: { shiftId?: string; status?: ScheduleStatus; note?: string },
+    @CurrentUser('hospitalId') hospitalId: string | null,
   ) {
-    return this.service.updateEntry(id, body);
+    return this.service.updateEntry(id, body, hospitalId);
   }
 }

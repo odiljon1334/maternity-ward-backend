@@ -5,6 +5,7 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
 
 import { PrismaModule } from './prisma/prisma.module';
+import { CommonModule } from './common/common.module';
 import { AuthModule } from './auth/auth.module';
 import { DepartmentsModule } from './departments/departments.module';
 import { PositionsModule } from './positions/positions.module';
@@ -55,6 +56,7 @@ import { SupportBotModule } from './support-bot/support-bot.module';
 
     // Database
     PrismaModule,
+    CommonModule,
 
     // Feature modules
     AuthModule,

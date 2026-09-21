@@ -15,6 +15,7 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
+import { TenantScopeGuard } from '../common/guards/tenant-scope.guard';
 
 function resolveHospitalId(
   jwtHospId: string | null,
@@ -24,7 +25,7 @@ function resolveHospitalId(
 }
 
 @Controller('departments')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, TenantScopeGuard)
 export class DepartmentsController {
   constructor(private readonly service: DepartmentsService) {}
 
@@ -51,7 +52,12 @@ export class DepartmentsController {
   }
 
   @Post()
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+  )
   create(
     @Body() body: { name: string; code: string; description?: string },
     @CurrentUser('hospitalId') hospitalId: string | null,
@@ -64,7 +70,12 @@ export class DepartmentsController {
   }
 
   @Put(':id')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+  )
   update(
     @Param('id') id: string,
     @Body() body: { name?: string; description?: string },
@@ -79,7 +90,12 @@ export class DepartmentsController {
   }
 
   @Delete(':id')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+  )
   remove(
     @Param('id') id: string,
     @CurrentUser('hospitalId') hospitalId: string | null,

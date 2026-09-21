@@ -22,9 +22,8 @@ export class HospitalsService {
    * - SUPER_ADMIN (va boshqa rollar) — null qaytaradi (cheklovsiz).
    * - ASSISTANT_ADMIN, kamida 1 ta biriktirilgan shifoxonasi bo'lsa —
    *   faqat o'sha ID'lar massivi.
-   * - ASSISTANT_ADMIN, hali bironta ham biriktirilmagan bo'lsa — null
-   *   (o'tish davri uchun eski xatti-harakat: hammasini ko'radi, Odiljon
-   *   bilan kelishilgan — 2026-09-19).
+   * - ASSISTANT_ADMIN, hali bironta ham biriktirilmagan bo'lsa — bo'sh
+   *   massiv (hech qaysi muassasa ko'rinmaydi).
    */
   async resolveAllowedHospitalIds(
     role: string,
@@ -35,7 +34,7 @@ export class HospitalsService {
       where: { userId },
       select: { hospitalId: true },
     });
-    if (rows.length === 0) return null;
+    if (rows.length === 0) return [];
     return rows.map((r) => r.hospitalId);
   }
 

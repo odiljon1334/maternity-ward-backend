@@ -11,6 +11,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PushService } from '../push/push.service';
 import { TelegramService } from '../telegram/telegram.service';
 import { DateUtil } from '../common/utils/date.util';
+import { TenantScopeGuard } from '../common/guards/tenant-scope.guard';
 
 @Controller('location')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -43,10 +44,20 @@ export class LocationController {
             gpsRadius: true,
             department: { select: { name: true } },
             position: {
-              select: { name: true, gpsLat: true, gpsLng: true, gpsRadius: true },
+              select: {
+                name: true,
+                gpsLat: true,
+                gpsLng: true,
+                gpsRadius: true,
+              },
             },
             hospital: {
-              select: { name: true, gpsLat: true, gpsLng: true, gpsRadius: true },
+              select: {
+                name: true,
+                gpsLat: true,
+                gpsLng: true,
+                gpsRadius: true,
+              },
             },
           },
         },
@@ -164,6 +175,7 @@ export class LocationController {
 
   // Admin / Director — o'z hospitalidagi barcha locationlarni oladi
   @Get('live')
+  @UseGuards(TenantScopeGuard)
   @Roles(
     UserRole.DIRECTOR,
     UserRole.ADMIN,
@@ -178,9 +190,7 @@ export class LocationController {
   ) {
     // SUPER_ADMIN hospitalId ni query dan oladi
     const targetHospitalId =
-      user.role === UserRole.SUPER_ADMIN ||
-      user.role === UserRole.MINISTRY ||
-      user.role === UserRole.ASSISTANT_ADMIN
+      user.role === UserRole.SUPER_ADMIN || user.role === UserRole.MINISTRY
         ? queryHospitalId
         : user.hospitalId;
 

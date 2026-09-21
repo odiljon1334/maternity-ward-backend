@@ -3,6 +3,7 @@ import {
   ConflictException,
   NotFoundException,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateEmployeeDto } from './dto/create-employee.dto';
@@ -300,6 +301,23 @@ export class EmployeesService {
   async update(id: string, dto: UpdateEmployeeDto, hospitalId: string) {
     await this.findOne(id, hospitalId);
     const { username, password, ...rest } = dto as any;
+
+    if (rest.departmentId || rest.positionId) {
+      const [department, position] = await Promise.all([
+        rest.departmentId
+          ? this.prisma.department.findFirst({
+              where: { id: rest.departmentId, hospitalId },
+            })
+          : Promise.resolve(true),
+        rest.positionId
+          ? this.prisma.position.findFirst({
+              where: { id: rest.positionId, hospitalId },
+            })
+          : Promise.resolve(true),
+      ]);
+      if (!department) throw new NotFoundException("Bo'lim topilmadi");
+      if (!position) throw new NotFoundException('Lavozim topilmadi');
+    }
 
     return this.prisma.$transaction(async (tx) => {
       if (username || password) {
@@ -640,7 +658,11 @@ export class EmployeesService {
   // ──────────────────────────────────────────
   // LOOKUP — ism + tug'ilgan sana bo'yicha cross-hospital qidiruv
   // ──────────────────────────────────────────
-  async lookupByName(fullName: string, birthDate?: string): Promise<any[]> {
+  async lookupByName(
+    fullName: string,
+    birthDate?: string,
+    hospitalId?: string | null,
+  ): Promise<any[]> {
     if (!fullName || fullName.trim().length < 3) return [];
 
     const nameParts = fullName
@@ -657,6 +679,7 @@ export class EmployeesService {
     const candidates = await this.prisma.employee.findMany({
       where: {
         firedAt: { not: null },
+        ...(hospitalId && { hospitalId }),
       },
       include: {
         department: true,
@@ -772,9 +795,9 @@ export class EmployeesService {
   // ──────────────────────────────────────────
   // ARXIV — bitta ketgan xodim to'liq profili
   // ──────────────────────────────────────────
-  async getArchivedEmployee(id: string) {
+  async getArchivedEmployee(id: string, hospitalId?: string | null) {
     const emp = await this.prisma.employee.findFirst({
-      where: { id, firedAt: { not: null } },
+      where: { id, firedAt: { not: null }, ...(hospitalId && { hospitalId }) },
       include: {
         department: true,
         position: true,
@@ -896,17 +919,27 @@ export class EmployeesService {
   // BULK OPERATIONS
   // ──────────────────────────────────────────
   async bulkDelete(ids: string[], hospitalId: string) {
-    const where = { employeeId: { in: ids } };
+    const employees = await this.prisma.employee.findMany({
+      where: { id: { in: ids }, hospitalId },
+      select: { id: true },
+    });
+    if (employees.length !== ids.length) {
+      throw new ForbiddenException(
+        'Tanlangan xodimlardan biri bu muassasaga tegishli emas',
+      );
+    }
+    const employeeIds = employees.map((employee) => employee.id);
+    const where = { employeeId: { in: employeeIds } };
     await this.prisma.$transaction([
       this.prisma.payrollRecord.deleteMany({ where }),
       this.prisma.weeklyAttendanceStat.deleteMany({ where }),
       this.prisma.attendanceRecord.deleteMany({ where }),
       this.prisma.schedule.deleteMany({ where }),
       this.prisma.employee.deleteMany({
-        where: { id: { in: ids }, ...(hospitalId ? { hospitalId } : {}) },
+        where: { id: { in: employeeIds }, hospitalId },
       }),
     ]);
-    return { success: true, deleted: ids.length };
+    return { success: true, deleted: employeeIds.length };
   }
 
   async bulkUpdateDepartment(
@@ -914,6 +947,12 @@ export class EmployeesService {
     departmentId: string,
     hospitalId: string,
   ) {
+    const department = await this.prisma.department.findFirst({
+      where: { id: departmentId, hospitalId },
+      select: { id: true },
+    });
+    if (!department) throw new NotFoundException("Bo'lim topilmadi");
+
     const result = await this.prisma.employee.updateMany({
       where: { id: { in: ids }, ...(hospitalId ? { hospitalId } : {}) },
       data: { departmentId },

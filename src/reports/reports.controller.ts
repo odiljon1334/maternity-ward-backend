@@ -6,9 +6,10 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
+import { TenantScopeGuard } from '../common/guards/tenant-scope.guard';
 
 @Controller('reports')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, TenantScopeGuard)
 @Roles(
   UserRole.SUPER_ADMIN,
   UserRole.ADMIN,

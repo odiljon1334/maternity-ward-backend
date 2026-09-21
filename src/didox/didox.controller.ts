@@ -8,6 +8,7 @@ import { UserRole } from '@prisma/client';
 import { DidoxChallengeDto } from './dto/didox-challenge.dto';
 import { DidoxRegisterDto } from './dto/didox-register.dto';
 import { DidoxLoginDto } from './dto/didox-login.dto';
+import { TenantScopeGuard } from '../common/guards/tenant-scope.guard';
 
 function resolveHospitalId(jwtHospId: string | null): string {
   if (!jwtHospId) {
@@ -26,7 +27,7 @@ const DIDOX_ROLES = [
 ];
 
 @Controller('didox')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, TenantScopeGuard)
 @Roles(...DIDOX_ROLES)
 export class DidoxController {
   constructor(private readonly didox: DidoxService) {}

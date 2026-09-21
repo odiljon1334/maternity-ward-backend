@@ -18,6 +18,7 @@ import { QueryUsersDto } from './dto/query-users.dto';
 import { UpdateUserStatusDto } from './dto/update-user-status.dto';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
 import { SetPermissionOverrideDto } from './dto/set-permission-override.dto';
+import { TenantScopeGuard } from '../common/guards/tenant-scope.guard';
 
 const SUPER = UserRole.SUPER_ADMIN;
 const ASST = UserRole.ASSISTANT_ADMIN;
@@ -36,7 +37,7 @@ function resolveHospitalId(
 }
 
 @Controller('users')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, TenantScopeGuard)
 export class UsersController {
   constructor(
     private readonly service: UsersService,
@@ -82,7 +83,7 @@ export class UsersController {
   }
 
   @Patch(':id/role')
-  @Roles(SUPER, ASST, ADMIN, DIR)
+  @Roles(SUPER)
   async updateRole(
     @Param('id') id: string,
     @Body() dto: UpdateUserRoleDto,
@@ -121,7 +122,7 @@ export class UsersController {
   }
 
   @Patch(':id/permissions')
-  @Roles(SUPER, ASST, ADMIN, DIR)
+  @Roles(SUPER)
   async setPermission(
     @Param('id') id: string,
     @Body() dto: SetPermissionOverrideDto,

@@ -24,10 +24,17 @@ export class PayrollService {
   // ──────────────────────────────────────────
   // CALCULATE payroll for employee/month
   // ──────────────────────────────────────────
-  async calculate(employeeId: string, month: number, year: number) {
-    const emp = await this.prisma.employee.findUnique({
-      where: { id: employeeId },
-    });
+  async calculate(
+    employeeId: string,
+    month: number,
+    year: number,
+    hospitalId?: string | null,
+  ) {
+    const emp = hospitalId
+      ? await this.prisma.employee.findFirst({
+          where: { id: employeeId, hospitalId },
+        })
+      : await this.prisma.employee.findUnique({ where: { id: employeeId } });
     if (!emp) throw new NotFoundException('Hodim topilmadi');
 
     const start = DateUtil.startOfMonth(year, month);
@@ -293,9 +300,19 @@ export class PayrollService {
     });
   }
 
-  async findOne(employeeId: string, month: number, year: number) {
-    return this.prisma.payrollRecord.findUnique({
-      where: { employeeId_month_year: { employeeId, month, year } },
+  async findOne(
+    employeeId: string,
+    month: number,
+    year: number,
+    hospitalId?: string | null,
+  ) {
+    return this.prisma.payrollRecord.findFirst({
+      where: {
+        employeeId,
+        month,
+        year,
+        ...(hospitalId && { employee: { hospitalId } }),
+      },
       include: { employee: { include: { department: true, position: true } } },
     });
   }
@@ -456,10 +473,16 @@ export class PayrollService {
     employeeId: string,
     month: number,
     year: number,
+    hospitalId?: string | null,
   ): Promise<Buffer> {
     // Fetch saved record first; if not found, calculate on the fly
-    const record = await this.prisma.payrollRecord.findUnique({
-      where: { employeeId_month_year: { employeeId, month, year } },
+    const record = await this.prisma.payrollRecord.findFirst({
+      where: {
+        employeeId,
+        month,
+        year,
+        ...(hospitalId && { employee: { hospitalId } }),
+      },
       include: {
         employee: {
           include: { department: true, position: true, hospital: true },
@@ -472,12 +495,22 @@ export class PayrollService {
     let emp: any = null;
 
     if (!record) {
-      emp = await this.prisma.employee.findUnique({
-        where: { id: employeeId },
-        include: { department: true, position: true, hospital: true },
-      });
+      emp = hospitalId
+        ? await this.prisma.employee.findFirst({
+            where: { id: employeeId, hospitalId },
+            include: { department: true, position: true, hospital: true },
+          })
+        : await this.prisma.employee.findUnique({
+            where: { id: employeeId },
+            include: { department: true, position: true, hospital: true },
+          });
       if (!emp) throw new NotFoundException('Xodim topilmadi');
-      const { preview } = await this.calculate(employeeId, month, year);
+      const { preview } = await this.calculate(
+        employeeId,
+        month,
+        year,
+        hospitalId,
+      );
       previewData = preview;
     } else {
       emp = record.employee;

@@ -167,7 +167,7 @@ export class AttendanceService {
     this.logger.log(
       `${employee.fullName} | type=${resolvedType} | ` +
         `explicit=${terminalEventType ?? 'none'} | ` +
-        `raw="${eventTime ?? 'yo\'q'}" | ` +
+        `raw="${eventTime ?? "yo'q"}" | ` +
         `local=${tzDate.format('YYYY-MM-DD HH:mm:ss')} (${TZ})`,
     );
 
@@ -434,7 +434,14 @@ export class AttendanceService {
     );
 
     await this.updateAttendanceEventRecord(employee.id, eventDate, updated.id);
-    await this.updateWeeklyStats(employee.id, eventDate, lateMinutes, 0, 0, true);
+    await this.updateWeeklyStats(
+      employee.id,
+      eventDate,
+      lateMinutes,
+      0,
+      0,
+      true,
+    );
 
     this.emitAttendanceEvent(employee, 'CHECK_IN', updated);
 
@@ -793,8 +800,11 @@ export class AttendanceService {
     employeeId: string,
     month: number,
     year: number,
-    opts: { includePlanned?: boolean } = {},
+    opts: { includePlanned?: boolean; hospitalId?: string | null } = {},
   ) {
+    if (opts.hospitalId) {
+      await this.ensureEmployeeInHospital(employeeId, opts.hospitalId);
+    }
     const start = DateUtil.startOfMonth(year, month);
     const end = DateUtil.endOfMonth(year, month);
 
@@ -813,9 +823,7 @@ export class AttendanceService {
         orderBy: { date: 'asc' },
       });
 
-      const recordDays = new Set(
-        records.map((r) => r.workDate.getTime()),
-      );
+      const recordDays = new Set(records.map((r) => r.workDate.getTime()));
       const todayStart = DateUtil.startOfDay(new Date()).getTime();
 
       const planned = schedules
@@ -1173,7 +1181,14 @@ export class AttendanceService {
     return { marked: toCreate.length, skipped: false };
   }
 
-  async getWeeklyStats(employeeId: string, weekStart: string) {
+  async getWeeklyStats(
+    employeeId: string,
+    weekStart: string,
+    hospitalId?: string | null,
+  ) {
+    if (hospitalId) {
+      await this.ensureEmployeeInHospital(employeeId, hospitalId);
+    }
     const start = DateUtil.startOfWeek(weekStart);
     return this.prisma.weeklyAttendanceStat.findUnique({
       where: { employeeId_weekStart: { employeeId, weekStart: start } },
@@ -1317,8 +1332,8 @@ export class AttendanceService {
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-// QO'SHISH KERAK: attendance.service.ts ichiga, setEmployeeGps() dan keyin
-// ─────────────────────────────────────────────────────────────────────────────
+  // QO'SHISH KERAK: attendance.service.ts ichiga, setEmployeeGps() dan keyin
+  // ─────────────────────────────────────────────────────────────────────────────
 
   /**
    * SUPER_ADMIN/ASSISTANT_ADMIN/DIRECTOR/ADMIN tomonidan: xodimning
@@ -1326,9 +1341,12 @@ export class AttendanceService {
    * xodim ilovaga kirganda "Ish joyi manzilini belgilang" banneri qayta
    * chiqadi va u to'g'ri joyda turib qaytadan belgilashi mumkin bo'ladi.
    */
-  async resetEmployeeGps(employeeId: string): Promise<{ reset: boolean }> {
-    const employee = await this.prisma.employee.findUnique({
-      where: { id: employeeId },
+  async resetEmployeeGps(
+    employeeId: string,
+    hospitalId?: string | null,
+  ): Promise<{ reset: boolean }> {
+    const employee = await this.prisma.employee.findFirst({
+      where: { id: employeeId, ...(hospitalId && { hospitalId }) },
     });
     if (!employee) throw new NotFoundException('Xodim topilmadi');
 
@@ -1337,11 +1355,20 @@ export class AttendanceService {
       data: { gpsLat: null, gpsLng: null },
     });
 
-    this.logger.log(
-      `Employee GPS reset: ${employee.fullName} (${employeeId})`,
-    );
+    this.logger.log(`Employee GPS reset: ${employee.fullName} (${employeeId})`);
 
     return { reset: true };
+  }
+
+  private async ensureEmployeeInHospital(
+    employeeId: string,
+    hospitalId: string,
+  ): Promise<void> {
+    const employee = await this.prisma.employee.findFirst({
+      where: { id: employeeId, hospitalId },
+      select: { id: true },
+    });
+    if (!employee) throw new NotFoundException('Xodim topilmadi');
   }
 
   /**
@@ -1447,7 +1474,10 @@ export class AttendanceService {
         }
       }
 
-      const faceResult = await this.faceMatch.verify(referenceBuffer, selfieBuffer);
+      const faceResult = await this.faceMatch.verify(
+        referenceBuffer,
+        selfieBuffer,
+      );
 
       this.auditLog.log({
         userId,
@@ -1459,7 +1489,10 @@ export class AttendanceService {
             : 'FACE_MATCH_OK',
         entity: 'AttendanceRecord',
         entityId: employee.id,
-        details: { reason: faceResult.reason, similarity: faceResult.similarity },
+        details: {
+          reason: faceResult.reason,
+          similarity: faceResult.similarity,
+        },
       });
 
       if (faceResult.mismatch) {
@@ -1469,9 +1502,9 @@ export class AttendanceService {
           LIVE_FACE_NOT_FOUND:
             "Suratda yuzingiz aniqlanmadi — check-in rad etildi. Iltimos, yorug'roq joyda, yuzingizni kameraga to'g'ridan qaratib qaytadan urinib ko'ring.",
           REFERENCE_FACE_NOT_FOUND:
-            "Profil rasmingizda yuz aniqlanmadi — check-in rad etildi. Iltimos, administratorga murojaat qiling.",
+            'Profil rasmingizda yuz aniqlanmadi — check-in rad etildi. Iltimos, administratorga murojaat qiling.',
           NO_REFERENCE_PHOTO:
-            "Profilingizda rasm mavjud emas — yuz tasdiqlash uchun avval profilga rasm yuklashingiz kerak. Administratorga murojaat qiling.",
+            'Profilingizda rasm mavjud emas — yuz tasdiqlash uchun avval profilga rasm yuklashingiz kerak. Administratorga murojaat qiling.',
           SERVICE_ERROR:
             "Yuz tekshirish xizmati vaqtincha ishlamayapti — check-in rad etildi. Birozdan so'ng qaytadan urinib ko'ring yoki administratorga murojaat qiling.",
         };

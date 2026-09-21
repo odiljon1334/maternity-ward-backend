@@ -17,6 +17,7 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
+import { TenantScopeGuard } from '../common/guards/tenant-scope.guard';
 
 function resolveHospitalId(
   jwtHospId: string | null,
@@ -26,7 +27,7 @@ function resolveHospitalId(
 }
 
 @Controller('shifts')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, TenantScopeGuard)
 export class ShiftsController {
   constructor(private readonly service: ShiftsService) {}
 
@@ -53,7 +54,12 @@ export class ShiftsController {
   }
 
   @Post()
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+  )
   create(
     @Body() dto: CreateShiftDto,
     @CurrentUser('hospitalId') hospitalId: string | null,
@@ -70,7 +76,12 @@ export class ShiftsController {
    * Grafik yaratishda har kunga har xil vaqt belgilash uchun ishlatiladi.
    */
   @Post('resolve')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+  )
   resolve(
     @Body() dto: ResolveShiftDto,
     @CurrentUser('hospitalId') hospitalId: string | null,
@@ -85,7 +96,12 @@ export class ShiftsController {
   }
 
   @Put(':id')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+  )
   update(
     @Param('id') id: string,
     @Body() dto: Partial<CreateShiftDto>,
@@ -100,7 +116,12 @@ export class ShiftsController {
   }
 
   @Delete(':id')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+  )
   remove(
     @Param('id') id: string,
     @CurrentUser('hospitalId') hospitalId: string | null,
@@ -114,7 +135,12 @@ export class ShiftsController {
 
   /** Default DAYTIME + NIGHTTIME smenlarini avtomatik yaratish */
   @Post('seed')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+  )
   seed(
     @CurrentUser('hospitalId') hospitalId: string | null,
     @Query('targetHospitalId') targetHospitalId?: string,

@@ -38,11 +38,14 @@ export class PaymentsService {
   constructor(private readonly prisma: PrismaService) {}
 
   // ─── Overview — per-hospital payment dashboard ──────────────────────────────
-  async getOverview() {
+  async getOverview(hospitalIds?: string[]) {
     const period = currentPeriod();
 
     const hospitals = await this.prisma.hospital.findMany({
-      where: { isActive: true },
+      where: {
+        isActive: true,
+        ...(hospitalIds && { id: { in: hospitalIds } }),
+      },
       select: {
         id: true,
         name: true,
@@ -68,7 +71,10 @@ export class PaymentsService {
 
     const periodTotals = await this.prisma.payment.groupBy({
       by: ['hospitalId'],
-      where: { period },
+      where: {
+        period,
+        ...(hospitalIds && { hospitalId: { in: hospitalIds } }),
+      },
       _sum: { amount: true },
     });
     const totalsMap = new Map(
@@ -147,12 +153,15 @@ export class PaymentsService {
   // "kutilgan summa" biroz noaniq bo'lishi mumkin — amalda buning ta'siri kam,
   // chunki maqsad aniq buxgalteriya emas, balki "qaysi shifoxona qancha vaqtdan
   // beri to'lamayapti" degan boshqaruv ko'rinishini berish.
-  async getDebtorsReport(months = 6) {
+  async getDebtorsReport(months = 6, allowedHospitalIds?: string[]) {
     const clampedMonths = Math.min(24, Math.max(1, months));
     const periods = lastNPeriods(clampedMonths);
 
     const hospitals = await this.prisma.hospital.findMany({
-      where: { isActive: true },
+      where: {
+        isActive: true,
+        ...(allowedHospitalIds && { id: { in: allowedHospitalIds } }),
+      },
       select: {
         id: true,
         name: true,
@@ -263,7 +272,7 @@ export class PaymentsService {
   // Platforma darajasidagi umumiy ko'rsatkichlar — /panel "Umumiy ko'rinish"
   // sahifasi shu metoddan foydalanadi (avval mock-data.ts'da bo'lgan
   // qiymatlarning o'rnini bosadi).
-  async getPlatformStats(months = 8) {
+  async getPlatformStats(months = 8, allowedHospitalIds?: string[]) {
     const clampedMonths = Math.min(24, Math.max(2, months));
     const periods = lastNPeriods(clampedMonths);
     const period = currentPeriod();
@@ -272,7 +281,10 @@ export class PaymentsService {
     // (barcha shifoxonalar bo'yicha, kutilgan emas — bu haqiqiy daromad).
     const periodSums = await this.prisma.payment.groupBy({
       by: ['period'],
-      where: { period: { in: periods } },
+      where: {
+        period: { in: periods },
+        ...(allowedHospitalIds && { hospitalId: { in: allowedHospitalIds } }),
+      },
       _sum: { amount: true },
     });
     const sumsMap = new Map(
@@ -287,7 +299,7 @@ export class PaymentsService {
     const arr = mrr * 12;
 
     // To'lov holati taqsimoti (joriy oy) — mavjud getOverview()'ni qayta ishlatamiz.
-    const overview = await this.getOverview();
+    const overview = await this.getOverview(allowedHospitalIds);
     const paymentStatusCounts = { PAID: 0, PENDING: 0, OVERDUE: 0 };
     let currentMonthOutstanding = 0;
     for (const h of overview) {
@@ -298,12 +310,18 @@ export class PaymentsService {
     // Faol foydalanuvchilar — oxirgi 7 kun ichida kirganlar
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     const activeUsersCount = await this.prisma.user.count({
-      where: { lastLoginAt: { gte: sevenDaysAgo } },
+      where: {
+        lastLoginAt: { gte: sevenDaysAgo },
+        ...(allowedHospitalIds && { hospitalId: { in: allowedHospitalIds } }),
+      },
     });
 
     // Rollar taqsimoti
     const roleGroups = await this.prisma.user.groupBy({
       by: ['role'],
+      where: allowedHospitalIds
+        ? { hospitalId: { in: allowedHospitalIds } }
+        : undefined,
       _count: { _all: true },
     });
     const roleDistribution = roleGroups.map((r) => ({
@@ -314,6 +332,9 @@ export class PaymentsService {
     // Churn — bloklanmagan lekin FAOLSIZ (isActive:false) YOKI oxirgi 2 oyda
     // hech qanday to'lov qilmagan faol shifoxonalar.
     const allHospitals = await this.prisma.hospital.findMany({
+      where: allowedHospitalIds
+        ? { id: { in: allowedHospitalIds } }
+        : undefined,
       select: { id: true, name: true, code: true, isActive: true },
     });
     const activeIds = allHospitals.filter((h) => h.isActive).map((h) => h.id);

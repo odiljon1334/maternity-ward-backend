@@ -18,9 +18,10 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
 import { SelfCheckInDto } from './dto/self-check-in.dto';
+import { TenantScopeGuard } from '../common/guards/tenant-scope.guard';
 
 @Controller('attendance')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, TenantScopeGuard)
 export class AttendanceController {
   constructor(private readonly service: AttendanceService) {}
 
@@ -57,6 +58,7 @@ export class AttendanceController {
     @Param('id') id: string,
     @Query('month') month: string,
     @Query('year') year: string,
+    @CurrentUser('hospitalId') hospitalId: string | null,
   ) {
     return this.service.getEmployeeAttendance(
       id,
@@ -64,7 +66,7 @@ export class AttendanceController {
       +year || new Date().getFullYear(),
       // Grafigi bor, lekin hali davomat yozuvi yo'q kunlar ham ko'rsatiladi —
       // "Kelishi kerak / Ketishi kerak" ustunlari shundan to'ladi
-      { includePlanned: true },
+      { includePlanned: true, hospitalId },
     );
   }
 
@@ -72,8 +74,9 @@ export class AttendanceController {
   getWeeklyStats(
     @Param('employeeId') employeeId: string,
     @Query('weekStart') weekStart: string,
+    @CurrentUser('hospitalId') hospitalId: string | null,
   ) {
-    return this.service.getWeeklyStats(employeeId, weekStart);
+    return this.service.getWeeklyStats(employeeId, weekStart, hospitalId);
   }
 
   /**
@@ -134,10 +137,10 @@ export class AttendanceController {
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-// QO'SHISH KERAK: attendance.controller.ts ichiga, setEmployeeGps() dan keyin
-// UserRole importida ASSISTANT_ADMIN allaqachon bor deb faraz qilinmoqda —
-// bo'lmasa import qatoridan olib tashlang yoki qo'shing.
-// ─────────────────────────────────────────────────────────────────────────────
+  // QO'SHISH KERAK: attendance.controller.ts ichiga, setEmployeeGps() dan keyin
+  // UserRole importida ASSISTANT_ADMIN allaqachon bor deb faraz qilinmoqda —
+  // bo'lmasa import qatoridan olib tashlang yoki qo'shing.
+  // ─────────────────────────────────────────────────────────────────────────────
 
   /**
    * Admin: xodimning (adashib belgilangan) ish joyi GPS'ini tozalaydi,
@@ -151,8 +154,11 @@ export class AttendanceController {
     UserRole.ADMIN,
     UserRole.DIRECTOR,
   )
-  resetEmployeeGps(@Param('employeeId') employeeId: string) {
-    return this.service.resetEmployeeGps(employeeId);
+  resetEmployeeGps(
+    @Param('employeeId') employeeId: string,
+    @CurrentUser('hospitalId') hospitalId: string | null,
+  ) {
+    return this.service.resetEmployeeGps(employeeId, hospitalId);
   }
 
   @Post('manual-checkin')
