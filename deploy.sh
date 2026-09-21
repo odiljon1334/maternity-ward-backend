@@ -199,16 +199,19 @@ if [ "$FACE_MATCH_READY" = false ]; then
     error "Face-match modeli tayyor bo'lmagani uchun backend almashtirilmadi. Eski backend va terminal webhooklar ishlashda davom etadi."
 fi
 
-# ── 6. Faqat application containerlarini yangilash ────────────
+# ── 6. Application containerlarini yangilash ──────────────────
+# Backend rolling usulda: yangi replica healthy bo'lmaguncha eski backend
+# ishlashda davom etadi. Frontend esa faqat image o'zgarganda recreate qilinadi.
 # postgres/redis/nginx ishlashda qoladi; global `down` QILINMAYDI.
-log "6. Backend va frontend yangilanmoqda..."
+log "6. Backend rolling deploy va frontend yangilanishi boshlanmoqda..."
 APP_SERVICES=()
 
 # Faqat image'i haqiqatan o'zgargan servisni recreate qilamiz. Masalan faqat
 # frontend o'zgarsa, ishlab turgan backend va terminal webhook oqimi uzilmaydi.
 if [ -z "$OLD_BACKEND_IMAGE_ID" ] || [ "$(docker image inspect --format '{{.Id}}' "$OLD_BACKEND_IMAGE_REF")" != "$OLD_BACKEND_IMAGE_ID" ]; then
-    APP_SERVICES+=(backend)
-    BACKEND_UPDATED=true
+    bash "$BACKEND_DIR/scripts/rolling-backend-deploy.sh" \
+        "$BACKEND_DIR" "$COMPOSE_FILE" "$BACKEND_DIR/.env.prod"
+    success "Backend uzilishsiz yangilandi"
 fi
 if [ -z "$OLD_FRONTEND_IMAGE_ID" ] || [ "$(docker image inspect --format '{{.Id}}' "$OLD_FRONTEND_IMAGE_REF")" != "$OLD_FRONTEND_IMAGE_ID" ]; then
     APP_SERVICES+=(frontend)
@@ -217,9 +220,9 @@ fi
 
 if [ ${#APP_SERVICES[@]} -gt 0 ]; then
     compose up -d --no-deps --force-recreate "${APP_SERVICES[@]}"
-    success "Yangilangan application containerlari ishga tushirildi: ${APP_SERVICES[*]}"
+    success "Yangilangan frontend containeri ishga tushirildi"
 else
-    success "Application image'lari o'zgarmagan — containerlar recreate qilinmadi"
+    success "Frontend image o'zgarmagan — container recreate qilinmadi"
 fi
 
 # ── 7. Health check ──────────────────────────────────────────
