@@ -36,6 +36,69 @@ compose() {
         "$@"
 }
 
+# Ishlayotgan application image'larini deploydan oldin eslab qolamiz. Yangi
+# container health check'dan o'tmasa, shu immutable image ID'lar bilan avtomatik
+# rollback qilinadi. Postgres/Redis/Nginx bu jarayonda tegilmaydi.
+capture_running_image() {
+    local service="$1"
+    local container_id
+    container_id=$(compose ps -q "$service" 2>/dev/null || true)
+    if [ -n "$container_id" ]; then
+        docker inspect --format '{{.Image}}|{{.Config.Image}}' "$container_id"
+    fi
+}
+
+rollback_applications() {
+    set +e
+    warn "Application rollback boshlandi..."
+
+    local rollback_services=()
+    if [ "$BACKEND_UPDATED" = true ] && [ -n "$OLD_BACKEND_IMAGE_ID" ] && [ -n "$OLD_BACKEND_IMAGE_REF" ]; then
+        docker image tag "$OLD_BACKEND_IMAGE_ID" "$OLD_BACKEND_IMAGE_REF"
+        rollback_services+=(backend)
+    fi
+    if [ "$FRONTEND_UPDATED" = true ] && [ -n "$OLD_FRONTEND_IMAGE_ID" ] && [ -n "$OLD_FRONTEND_IMAGE_REF" ]; then
+        docker image tag "$OLD_FRONTEND_IMAGE_ID" "$OLD_FRONTEND_IMAGE_REF"
+        rollback_services+=(frontend)
+    fi
+
+    if [ ${#rollback_services[@]} -eq 0 ]; then
+        warn "Rollback uchun oldingi application image topilmadi."
+        set -e
+        return 1
+    fi
+
+    compose up -d --no-deps --force-recreate "${rollback_services[@]}"
+
+    local rollback_healthy=false
+    local backend_ok=false
+    local frontend_ok=false
+    for i in $(seq 1 12); do
+        if compose exec -T backend wget -qO- http://localhost:5001/api/v1/health 2>/dev/null | grep -q '"status":"ok"'; then
+            backend_ok=true
+        fi
+        if [ "$FRONTEND_UPDATED" = false ] || compose exec -T frontend wget -qO- http://localhost:5000/login >/dev/null 2>&1; then
+            frontend_ok=true
+        fi
+        if [ "$backend_ok" = true ] && [ "$frontend_ok" = true ]; then
+            rollback_healthy=true
+            break
+        fi
+        sleep 5
+    done
+
+    if [ "$rollback_healthy" = true ]; then
+        success "Rollback yakunlandi: oldingi application yana healthy."
+        set -e
+        return 0
+    fi
+
+    warn "Rollback containeri ham health check'dan o'tmadi — zudlik bilan loglarni tekshiring."
+    compose logs --tail=100 backend
+    set -e
+    return 1
+}
+
 echo ""
 echo "🏥 =============================================="
 echo "   Maternity Ward — Production Deploy"
@@ -71,6 +134,17 @@ git reset --hard origin/main
 # .env.prod qidiradi va build boshlanishidan oldin to'xtaydi.
 cd "$BACKEND_DIR"
 success "Kod yangilandi"
+
+# Build mavjud taglarni yangilashidan oldin ayni paytda productionda ishlayotgan
+# image ID va nomlarini saqlab qolamiz.
+OLD_BACKEND_IMAGE=$(capture_running_image backend)
+OLD_BACKEND_IMAGE_ID=${OLD_BACKEND_IMAGE%%|*}
+OLD_BACKEND_IMAGE_REF=${OLD_BACKEND_IMAGE#*|}
+OLD_FRONTEND_IMAGE=$(capture_running_image frontend)
+OLD_FRONTEND_IMAGE_ID=${OLD_FRONTEND_IMAGE%%|*}
+OLD_FRONTEND_IMAGE_REF=${OLD_FRONTEND_IMAGE#*|}
+BACKEND_UPDATED=false
+FRONTEND_UPDATED=false
 
 # ── 3. Build (ishlayotgan servislar TO'XTATILMAYDI) ───────────
 # DIQQAT: --no-cache olib tashlandi. Kod git reset --hard bilan
@@ -116,8 +190,25 @@ fi
 # ── 6. Faqat application containerlarini yangilash ────────────
 # postgres/redis/nginx ishlashda qoladi; global `down` QILINMAYDI.
 log "6. Backend va frontend yangilanmoqda..."
-compose up -d --no-deps --force-recreate backend frontend
-success "Application containerlari yangilandi"
+APP_SERVICES=()
+
+# Faqat image'i haqiqatan o'zgargan servisni recreate qilamiz. Masalan faqat
+# frontend o'zgarsa, ishlab turgan backend va terminal webhook oqimi uzilmaydi.
+if [ -z "$OLD_BACKEND_IMAGE_ID" ] || [ "$(docker image inspect --format '{{.Id}}' "$OLD_BACKEND_IMAGE_REF")" != "$OLD_BACKEND_IMAGE_ID" ]; then
+    APP_SERVICES+=(backend)
+    BACKEND_UPDATED=true
+fi
+if [ -z "$OLD_FRONTEND_IMAGE_ID" ] || [ "$(docker image inspect --format '{{.Id}}' "$OLD_FRONTEND_IMAGE_REF")" != "$OLD_FRONTEND_IMAGE_ID" ]; then
+    APP_SERVICES+=(frontend)
+    FRONTEND_UPDATED=true
+fi
+
+if [ ${#APP_SERVICES[@]} -gt 0 ]; then
+    compose up -d --no-deps --force-recreate "${APP_SERVICES[@]}"
+    success "Yangilangan application containerlari ishga tushirildi: ${APP_SERVICES[*]}"
+else
+    success "Application image'lari o'zgarmagan — containerlar recreate qilinmadi"
+fi
 
 # ── 7. Health check ──────────────────────────────────────────
 log "7. Backend health check kutilmoqda..."
@@ -138,10 +229,28 @@ for i in $(seq 1 $MAX_TRIES); do
     sleep 10
 done
 if [ "$HEALTHY" = false ]; then
-    error "Yangi backend health check'dan o'tmadi. Nginx va ma'lumotlar bazasi to'xtatilmadi; backend logini tekshirib rollback qiling."
+    rollback_applications || true
+    error "Yangi backend health check'dan o'tmadi. Avtomatik rollback bajarildi; yuqoridagi natijani tekshiring."
 fi
 
-# ── 8. Status ────────────────────────────────────────────────
+log "8. Frontend health check kutilmoqda..."
+FRONTEND_HEALTHY=false
+for i in $(seq 1 10); do
+    if compose exec -T frontend wget -qO- http://localhost:5000/login >/dev/null 2>&1; then
+        success "Frontend ishlamoqda (login: OK)"
+        FRONTEND_HEALTHY=true
+        break
+    fi
+    log "Frontend kutilmoqda... ($i/10)"
+    sleep 5
+done
+if [ "$FRONTEND_HEALTHY" = false ]; then
+    compose logs --tail=50 frontend
+    rollback_applications || true
+    error "Yangi frontend health check'dan o'tmadi. Avtomatik rollback bajarildi; yuqoridagi natijani tekshiring."
+fi
+
+# ── 9. Status ────────────────────────────────────────────────
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 compose ps

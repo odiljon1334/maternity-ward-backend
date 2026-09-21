@@ -34,8 +34,16 @@ echo "[INFO] $(date) — backup boshlandi: $FILENAME"
 
 docker exec maternity_postgres pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" | gzip > "$BACKUP_DIR/$FILENAME"
 
+# Truncated/corrupt dump S3'ga chiqib ketmasin. `gzip -t` siqilgan oqimning
+# checksumini tekshiradi; bo'sh fayl ham backup deb qabul qilinmaydi.
+if [ ! -s "$BACKUP_DIR/$FILENAME" ]; then
+  echo "[XATO] Backup fayli bo'sh: $BACKUP_DIR/$FILENAME"
+  exit 1
+fi
+gzip -t "$BACKUP_DIR/$FILENAME"
+
 SIZE=$(du -h "$BACKUP_DIR/$FILENAME" | cut -f1)
-echo "[OK] Lokal backup tayyor: $BACKUP_DIR/$FILENAME ($SIZE)"
+echo "[OK] Lokal backup tekshirildi: $BACKUP_DIR/$FILENAME ($SIZE)"
 
 echo "[INFO] S3'ga yuklanmoqda: s3://$AWS_S3_BACKUP_BUCKET/$FILENAME"
 aws s3 cp "$BACKUP_DIR/$FILENAME" "s3://$AWS_S3_BACKUP_BUCKET/$FILENAME" \
