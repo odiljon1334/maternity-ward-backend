@@ -109,6 +109,19 @@ enum PaymentStatus {
   OVERDUE
 }
 
+enum TrialLeadSource {
+  WEB_FORM
+  TELEGRAM_BOT
+}
+
+enum TrialLeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  CONVERTED
+  REJECTED
+}
+
 // ─────────────────────────────────────────────
 // TERMINAL EVENT TYPES (Hikvision work status)
 // ─────────────────────────────────────────────
@@ -642,6 +655,35 @@ model OperationalServiceMonitor {
   lastSuccessAt       DateTime?
   lastFailureAt       DateTime?
   updatedAt           DateTime @updatedAt
+}
+
+model TrialLead {
+  id               String          @id @default(uuid())
+  source           TrialLeadSource
+  status           TrialLeadStatus @default(NEW)
+  institutionName  String
+  contactName      String
+  phone            String
+  orgType          String?
+  region           String?
+  staffCount       Int?
+  plan             String?
+  billingCycle     String?
+  faceId           Boolean?
+  contactTime      String?
+  telegramChatId   String?
+  telegramUsername String?
+  utmSource        String?
+  utmMedium        String?
+  utmCampaign      String?
+  pageUrl          String?
+  note             String?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  @@index([status, createdAt])
+  @@index([source, createdAt])
+  @@index([phone])
 }
 
 // ─────────────────────────────────────────────

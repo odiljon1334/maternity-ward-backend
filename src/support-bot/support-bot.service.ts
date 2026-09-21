@@ -8,6 +8,8 @@ import {
   TrialContractData,
 } from '../contract/contract.service';
 import { SUPPORT_BOT_SYSTEM_PROMPT } from './faq-prompt';
+import { TrialLeadSource } from '@prisma/client';
+import { TrialLeadsService } from '../trial-leads/trial-leads.service';
 
 const TZ = 'Asia/Tashkent';
 const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
@@ -102,6 +104,7 @@ export class SupportBotService implements OnModuleInit {
     private readonly config: ConfigService,
     private readonly telegramService: TelegramService,
     private readonly contractService: ContractService,
+    private readonly trialLeadsService: TrialLeadsService,
   ) {}
 
   async onModuleInit() {
@@ -393,6 +396,27 @@ export class SupportBotService implements OnModuleInit {
     };
 
     session.flow = undefined; // oqim tugadi, chat oddiy FAQ rejimiga qaytadi
+
+    try {
+      await this.trialLeadsService.capture({
+        source: TrialLeadSource.TELEGRAM_BOT,
+        institutionName: contractData.institutionName,
+        contactName: contractData.fullName,
+        phone: contractData.phone,
+        staffCount: contractData.staffCount,
+        plan: contractData.plan,
+        faceId: contractData.faceId,
+        contactTime: contractData.contactTime,
+        telegramChatId: String(ctx.chat?.id ?? '') || null,
+        telegramUsername: ctx.from?.username || null,
+      });
+    } catch (e) {
+      // DB vaqtincha ishlamasa ham mijoz PDF va operator Telegram xabarini
+      // olishi kerak; mavjud tashqi oqim saqlanib qoladi.
+      this.logger.error(
+        `Telegram trial lead bazaga saqlanmadi: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
 
     let pdfBuffer: Buffer | null = null;
     try {

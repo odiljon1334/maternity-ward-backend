@@ -3,6 +3,8 @@ import { Request } from 'express';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { SupportBotService } from '../support-bot/support-bot.service';
 import { TrialRequestDto } from './dto/trial-request.dto';
+import { TrialLeadSource } from '@prisma/client';
+import { TrialLeadsService } from '../trial-leads/trial-leads.service';
 
 const ORG_TYPE_LABELS: Record<string, string> = {
   clinic: 'Klinika',
@@ -47,7 +49,10 @@ function escapeHtml(value: string): string {
 export class PublicController {
   private readonly logger = new Logger(PublicController.name);
 
-  constructor(private readonly supportBotService: SupportBotService) {}
+  constructor(
+    private readonly supportBotService: SupportBotService,
+    private readonly trialLeadsService: TrialLeadsService,
+  ) {}
 
   @UseGuards(ThrottlerGuard)
   @Throttle({ public: { ttl: 3_600_000, limit: 5 } })
@@ -75,6 +80,30 @@ export class PublicController {
     ]
       .filter(Boolean)
       .join('\n');
+
+    try {
+      await this.trialLeadsService.capture({
+        source: TrialLeadSource.WEB_FORM,
+        institutionName: dto.hospitalName,
+        contactName: dto.directorName,
+        phone: dto.phone,
+        orgType: dto.orgType,
+        region: dto.region,
+        staffCount: dto.staffCount,
+        plan: dto.plan,
+        billingCycle: dto.billingCycle,
+        utmSource: dto.utmSource,
+        utmMedium: dto.utmMedium,
+        utmCampaign: dto.utmCampaign,
+        pageUrl: dto.pageUrl,
+      });
+    } catch (e) {
+      // Telegram/PDF oqimini DB yozuvi xatosi sabab to'xtatmaymiz: ikkala
+      // kanal bir-biriga fallback bo'lib, lead yo'qolish xavfini kamaytiradi.
+      this.logger.error(
+        `Trial-request lead bazaga saqlanmadi: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
 
     try {
       await this.supportBotService.notifyLeadFromWebForm(

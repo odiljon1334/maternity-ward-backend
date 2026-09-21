@@ -34,6 +34,7 @@ import { UsersModule } from './users/users.module';
 import { DidoxModule } from './didox/didox.module';
 import { PublicModule } from './public/public.module';
 import { SupportBotModule } from './support-bot/support-bot.module';
+import { TrialLeadsModule } from './trial-leads/trial-leads.module';
 
 @Module({
   imports: [
@@ -70,6 +71,7 @@ import { SupportBotModule } from './support-bot/support-bot.module';
     TelegramModule,
     PublicModule,
     SupportBotModule,
+    TrialLeadsModule,
     DashboardModule,
     CronModule,
     ReportsModule,
