@@ -47,6 +47,7 @@ function makeService(overrides: {
     {} as any, // leaveService
     {} as any, // pushService
     fakePaymentsService,
+    {} as any, // hikvisionService
   );
 
   return { service, notifyPaymentReminder, markPaymentReminderSent };

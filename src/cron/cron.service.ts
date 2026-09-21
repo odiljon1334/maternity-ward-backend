@@ -8,6 +8,7 @@ import { DateUtil } from '../common/utils/date.util';
 import { LeaveService } from '../leave/leave.service';
 import { PushService } from '../push/push.service';
 import { PaymentsService, currentPeriod } from '../payments/payments.service';
+import { HikvisionService } from '../hikvision/hikvision.service';
 import dayjs from 'dayjs';
 import timezone from 'dayjs/plugin/timezone';
 import utc from 'dayjs/plugin/utc';
@@ -27,7 +28,127 @@ export class CronService {
     private readonly leaveService: LeaveService,
     private readonly pushService: PushService,
     private readonly paymentsService: PaymentsService,
+    private readonly hikvisionService: HikvisionService,
   ) {}
+
+  /**
+   * Har 2 daqiqada Hikvision gateway'dagi aniq devIndex holatini tekshiradi.
+   * Terminal uzluksiz TERMINAL_OFFLINE_THRESHOLD_MINUTES davomida offline
+   * bo'lsa bir marta ogohlantiradi; qayta online bo'lganda tiklanganini aytadi.
+   * Gatewayning o'zi javob bermasa hech bir terminal holati o'zgartirilmaydi.
+   */
+  @Cron('*/2 * * * *', { timeZone: TZ })
+  async monitorTerminalConnectivity() {
+    const configuredThreshold = Number(
+      process.env.TERMINAL_OFFLINE_THRESHOLD_MINUTES ?? 5,
+    );
+    const thresholdMinutes = Number.isFinite(configuredThreshold)
+      ? Math.max(2, configuredThreshold)
+      : 5;
+
+    try {
+      const statusMap = await this.hikvisionService.getTerminalStatusSnapshot();
+      const terminals = await this.prisma.hikTerminal.findMany({
+        where: { isActive: true },
+        include: { hospital: { select: { name: true } } },
+      });
+      const now = new Date();
+      const alertCutoff = new Date(now.getTime() - thresholdMinutes * 60_000);
+
+      for (const terminal of terminals) {
+        const rawStatus = statusMap[terminal.devIndex];
+        if (!rawStatus) {
+          this.logger.warn(
+            `Terminal gateway ro'yxatida topilmadi: ${terminal.name} (${terminal.devIndex})`,
+          );
+          continue;
+        }
+
+        const isOnline = rawStatus.toLowerCase() === 'online';
+        if (isOnline) {
+          const recovered = await this.prisma.hikTerminal.updateMany({
+            where: { id: terminal.id, offlineSince: { not: null } },
+            data: {
+              lastSeenAt: now,
+              offlineSince: null,
+              lastOfflineAlertAt: null,
+            },
+          });
+
+          if (recovered.count === 0) {
+            await this.prisma.hikTerminal.update({
+              where: { id: terminal.id },
+              data: { lastSeenAt: now },
+            });
+          } else if (terminal.lastOfflineAlertAt) {
+            await Promise.allSettled([
+              this.pushService.notifyTerminalConnectivity(
+                terminal.hospitalId,
+                terminal.id,
+                terminal.name,
+                true,
+              ),
+              this.telegramService.notifyTerminalConnectivity(
+                terminal.hospitalId,
+                terminal.hospital.name,
+                terminal.name,
+                true,
+              ),
+            ]);
+            this.logger.log(`Terminal qayta online: ${terminal.name}`);
+          }
+          continue;
+        }
+
+        if (!terminal.offlineSince) {
+          await this.prisma.hikTerminal.updateMany({
+            where: { id: terminal.id, offlineSince: null },
+            data: { offlineSince: now },
+          });
+          continue;
+        }
+
+        if (
+          terminal.offlineSince <= alertCutoff &&
+          !terminal.lastOfflineAlertAt
+        ) {
+          // Bir vaqtning o'zida ikki backend ishlasa ham faqat bittasi xabar
+          // yuborishi uchun avval atomik ravishda alertni "egallab" olamiz.
+          const claimed = await this.prisma.hikTerminal.updateMany({
+            where: {
+              id: terminal.id,
+              offlineSince: { lte: alertCutoff },
+              lastOfflineAlertAt: null,
+            },
+            data: { lastOfflineAlertAt: now },
+          });
+          if (claimed.count === 0) continue;
+
+          await Promise.allSettled([
+            this.pushService.notifyTerminalConnectivity(
+              terminal.hospitalId,
+              terminal.id,
+              terminal.name,
+              false,
+            ),
+            this.telegramService.notifyTerminalConnectivity(
+              terminal.hospitalId,
+              terminal.hospital.name,
+              terminal.name,
+              false,
+            ),
+          ]);
+          this.logger.warn(
+            `Terminal ${thresholdMinutes} daqiqadan beri offline: ${terminal.name}`,
+          );
+        }
+      }
+    } catch (err) {
+      this.logger.error(
+        `Terminal monitoring o'tkazib yuborildi: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
 
   /**
    * Har kuni kechqurun 21:00 da — kelmagan hodimlarni ABSENT deb belgilaydi

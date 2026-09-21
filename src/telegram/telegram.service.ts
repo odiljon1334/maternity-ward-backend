@@ -754,7 +754,7 @@ export class TelegramService implements OnModuleInit {
 
         this.logger.warn(
           `Telegram ulanish rad etildi: ${employee.fullName} ` +
-            `(${employee.hospital?.name}) — rol: ${employee.user?.role ?? 'login yo\'q'}`,
+            `(${employee.hospital?.name}) — rol: ${employee.user?.role ?? "login yo'q"}`,
         );
         return;
       }
@@ -1154,9 +1154,7 @@ export class TelegramService implements OnModuleInit {
   /**
    * Bugungi davomat xulosasi + "Kelganlar / Kelmaganlar" tugmalari
    */
-  private async buildTodaySummary(
-    hospitalId: string | null,
-  ): Promise<{
+  private async buildTodaySummary(hospitalId: string | null): Promise<{
     text: string;
     keyboard: ReturnType<typeof Markup.inlineKeyboard>;
   }> {
@@ -1714,5 +1712,33 @@ export class TelegramService implements OnModuleInit {
   async handleUpdate(update: any): Promise<void> {
     if (!this.bot) return;
     await this.bot.handleUpdate(update);
+  }
+
+  async notifyTerminalConnectivity(
+    hospitalId: string,
+    hospitalName: string,
+    terminalName: string,
+    isOnline: boolean,
+  ) {
+    if (!this.bot) return;
+
+    const subscribers = await this.prisma.telegramSubscription.findMany({
+      where: { isActive: true, hospitalId },
+    });
+    if (!subscribers.length) return;
+
+    const escapeHtml = (value: string) =>
+      value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const message = isOnline
+      ? `✅ <b>Terminal aloqasi tiklandi</b>\n\n🏥 ${escapeHtml(hospitalName)}\n📟 ${escapeHtml(terminalName)} yana online.`
+      : `⚠️ <b>Terminal bilan aloqa uzildi</b>\n\n🏥 ${escapeHtml(hospitalName)}\n📟 ${escapeHtml(terminalName)} bir necha daqiqadan beri offline. Elektr va internet ulanishini tekshiring.`;
+
+    await Promise.allSettled(
+      subscribers.map((sub) =>
+        this.bot!.telegram.sendMessage(sub.chatId, message, {
+          parse_mode: 'HTML',
+        }),
+      ),
+    );
   }
 }

@@ -382,4 +382,46 @@ export class PushService {
         this.logger.warn(`Notification persist failed: ${e?.message ?? e}`),
       );
   }
+
+  async notifyTerminalConnectivity(
+    hospitalId: string,
+    terminalId: string,
+    terminalName: string,
+    isOnline: boolean,
+  ) {
+    const title = isOnline
+      ? 'Terminal aloqasi tiklandi ✅'
+      : 'Terminal bilan aloqa uzildi ⚠️';
+    const body = isOnline
+      ? `${terminalName} yana online holatga qaytdi`
+      : `${terminalName} bir necha daqiqadan beri offline`;
+    const url = '/dashboard/settings';
+
+    const recipientIds = await this.sendToHospital(
+      hospitalId,
+      {
+        title,
+        body,
+        url,
+        tag: `terminal-connectivity-${terminalId}`,
+      },
+      ['DIRECTOR', 'ADMIN', 'SUPER_ADMIN'],
+    );
+
+    await this.notifications
+      .createForUsers(recipientIds, {
+        type: NotificationType.ALERT,
+        title,
+        message: body,
+        metadata: {
+          kind: 'terminal-connectivity',
+          hospitalId,
+          terminalId,
+          isOnline,
+        },
+      })
+      .catch((e) =>
+        this.logger.warn(`Notification persist failed: ${e?.message ?? e}`),
+      );
+  }
 }

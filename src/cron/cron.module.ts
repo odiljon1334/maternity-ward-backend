@@ -6,6 +6,7 @@ import { SchedulesModule } from '../schedules/schedules.module';
 import { LeaveModule } from '../leave/leave.module';
 import { PushModule } from '../push/push.module';
 import { PaymentsModule } from '../payments/payments.module';
+import { HikvisionModule } from '../hikvision/hikvision.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { PaymentsModule } from '../payments/payments.module';
     LeaveModule,
     PushModule,
     PaymentsModule,
+    HikvisionModule,
   ],
   providers: [CronService],
 })

@@ -625,37 +625,41 @@ export class HikvisionService {
   // Gateway device list
   // ═══════════════════════════════════════════════════════════════════════════
 
-  private async fetchGatewayDevices(): Promise<any[]> {
-    try {
-      this.logger.log('fetchGatewayDevices: request...');
+  private async requestGatewayDevices(): Promise<any[]> {
+    this.logger.log('fetchGatewayDevices: request...');
 
-      const url = this.buildUrl('/ISAPI/ContentMgmt/DeviceMgmt/deviceList', {
-        format: 'json',
-      });
+    const url = this.buildUrl('/ISAPI/ContentMgmt/DeviceMgmt/deviceList', {
+      format: 'json',
+    });
 
-      const response = await this.digestRequest('POST', url, {
-        data: {
-          SearchDescription: {
-            position: 0,
-            maxResult: 100,
-            Filter: {
-              key: '',
-              devType: '',
-              protocolType: ['ehomeV5'],
-              devStatus: ['online', 'offline'],
-            },
+    const response = await this.digestRequest('POST', url, {
+      data: {
+        SearchDescription: {
+          position: 0,
+          maxResult: 100,
+          Filter: {
+            key: '',
+            devType: '',
+            protocolType: ['ehomeV5'],
+            devStatus: ['online', 'offline'],
           },
         },
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      });
+      },
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
 
-      const devices = response.data?.SearchResult?.MatchList ?? [];
+    const devices = response.data?.SearchResult?.MatchList ?? [];
 
-      this.logger.log(`fetchGatewayDevices: ${devices.length} devices`);
+    this.logger.log(`fetchGatewayDevices: ${devices.length} devices`);
 
-      return devices;
+    return devices;
+  }
+
+  private async fetchGatewayDevices(): Promise<any[]> {
+    try {
+      return await this.requestGatewayDevices();
     } catch (err: any) {
       this.logger.error(`fetchGatewayDevices error: ${err.message}`);
 
@@ -675,6 +679,15 @@ export class HikvisionService {
     }
 
     return statusMap;
+  }
+
+  /**
+   * Cron monitoring uchun qat'iy snapshot. Gateway ishlamasa xato tashlaydi:
+   * bu holatda terminallarni yolg'ondan offline deb belgilash mumkin emas.
+   */
+  async getTerminalStatusSnapshot(): Promise<Record<string, string>> {
+    const devices = await this.requestGatewayDevices();
+    return this.buildStatusMap(devices);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
