@@ -552,11 +552,6 @@ export class CronService {
         } else {
           const totalLate = stats.reduce((s, r) => s + r.totalLateMin, 0);
           const totalAbsent = stats.reduce((s, r) => s + r.daysAbsent, 0);
-          const totalDeductions = stats.reduce(
-            (s, r) => s + Number(r.deductionAmount),
-            0,
-          );
-
           const problemEmployees = stats
             .filter((s) => s.totalLateMin > 30 || s.daysAbsent > 0)
             .slice(0, 8)
@@ -570,8 +565,7 @@ export class CronService {
             `📊 <b>Haftalik hisobot — ${hospital.name}</b>\n\n` +
             `👥 Hodimlar: ${stats.length} nafar\n` +
             `⏱ Kechikish: ${totalLate} daqiqa\n` +
-            `❌ Yo'qlik: ${totalAbsent} kun\n` +
-            `💰 Kesimlar: ${Math.round(totalDeductions).toLocaleString()} so'm\n\n` +
+            `❌ Yo'qlik: ${totalAbsent} kun\n\n` +
             (problemEmployees
               ? `⚠️ <b>Diqqat talab etuvchilar:</b>\n${problemEmployees}`
               : '✅ Hamma yaxshi!');

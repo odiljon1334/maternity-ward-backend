@@ -3,6 +3,11 @@ import { NotFoundException } from '@nestjs/common';
 import { PayrollService } from './payroll.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { PushService } from '../push/push.service';
+import {
+  PayrollAdjustmentStatus,
+  PayrollAdjustmentType,
+  SalaryAdvanceStatus,
+} from '@prisma/client';
 
 /**
  * PayrollService.calculate() uchun servis-darajasidagi (unit) testlar —
@@ -21,9 +26,18 @@ function makeFakePrisma() {
   const attendanceRecords: any[] = [];
   const weeklyStats: any[] = [];
   const schedules: any[] = [];
+  const adjustments: any[] = [];
+  const advances: any[] = [];
 
   return {
-    __state: { employees, attendanceRecords, weeklyStats, schedules },
+    __state: {
+      employees,
+      attendanceRecords,
+      weeklyStats,
+      schedules,
+      adjustments,
+      advances,
+    },
 
     employee: {
       findUnique: jest.fn(
@@ -48,6 +62,30 @@ function makeFakePrisma() {
       findMany: jest.fn(async ({ where }: any) =>
         schedules.filter(
           (s) => s.employeeId === where.employeeId && s.status === 'WORKING',
+        ),
+      ),
+    },
+
+    payrollAdjustment: {
+      findMany: jest.fn(async ({ where }: any) =>
+        adjustments.filter(
+          (item) =>
+            item.employeeId === where.employeeId &&
+            item.month === where.month &&
+            item.year === where.year &&
+            where.status.in.includes(item.status),
+        ),
+      ),
+    },
+
+    salaryAdvance: {
+      findMany: jest.fn(async ({ where }: any) =>
+        advances.filter(
+          (item) =>
+            item.employeeId === where.employeeId &&
+            item.month === where.month &&
+            item.year === where.year &&
+            where.status.in.includes(item.status),
         ),
       ),
     },
@@ -206,19 +244,41 @@ describe('PayrollService', () => {
     expect(preview.absenceDeduction).toBe(Math.round(BASE_SALARY / 2));
   });
 
-  it('haftalik statistikadagi deductionAmount yig‘indisi lateDeduction sifatida qo‘llanadi', async () => {
-    prisma.__state.weeklyStats.push(
-      { employeeId: EMPLOYEE_ID, deductionAmount: 40_000 },
-      { employeeId: EMPLOYEE_ID, deductionAmount: 25_000 },
+  it('kechikishni qayd etadi, lekin avtomatik pul jarimasi hisoblamaydi', async () => {
+    prisma.__state.attendanceRecords.push(
+      {
+        employeeId: EMPLOYEE_ID,
+        workDate: new Date('2026-03-02T09:00:00+05:00'),
+        status: 'LATE',
+        lateMinutes: 70,
+        earlyLeaveMin: 0,
+        overtimeMinutes: 0,
+        netWorkMin: 650,
+      },
+      {
+        employeeId: EMPLOYEE_ID,
+        workDate: new Date('2026-03-03T09:00:00+05:00'),
+        status: 'LATE',
+        lateMinutes: 60,
+        earlyLeaveMin: 0,
+        overtimeMinutes: 0,
+        netWorkMin: 660,
+      },
     );
+    // Bu jamlanma ataylab noto'g'ri/eski: calculate uni ishlatmasligi kerak.
+    prisma.__state.weeklyStats.push({
+      employeeId: EMPLOYEE_ID,
+      deductionAmount: 65_000,
+    });
 
     const { preview } = await service.calculate(EMPLOYEE_ID, MONTH, YEAR);
 
-    expect(preview.lateDeduction).toBe(65_000);
-    expect(preview.netSalary).toBe(BASE_SALARY - 65_000);
+    expect(preview.totalLateMin).toBe(130);
+    expect(preview.lateDeduction).toBe(0);
+    expect(preview.netSalary).toBe(BASE_SALARY);
   });
 
-  it('overtime daqiqalari OVERTIME_RATE bo‘yicha bonus sifatida qo‘shiladi', async () => {
+  it('aniqlangan overtime tasdiqsiz bo‘lsa pul qo‘shmaydi', async () => {
     const OVERTIME_MIN = 120; // 2 soat overtime
     prisma.__state.attendanceRecords.push({
       employeeId: EMPLOYEE_ID,
@@ -231,13 +291,67 @@ describe('PayrollService', () => {
 
     const { preview } = await service.calculate(EMPLOYEE_ID, MONTH, YEAR);
 
-    const minuteRate = BASE_SALARY / (SCHEDULED_DAYS * 12 * 60);
-    const overtimeRate = parseFloat(process.env.OVERTIME_RATE || '1.5');
-    const expectedBonus = Math.round(OVERTIME_MIN * minuteRate * overtimeRate);
-
     expect(preview.totalOvertimeMin).toBe(OVERTIME_MIN);
-    expect(preview.overtimeBonus).toBe(expectedBonus);
-    expect(preview.netSalary).toBe(BASE_SALARY + expectedBonus);
+    expect(preview.overtimeBonus).toBe(0);
+    expect(preview.netSalary).toBe(BASE_SALARY);
+  });
+
+  it('faqat tasdiqlangan KPI va to‘langan avansni yakuniy hisobga qo‘shadi', async () => {
+    prisma.__state.adjustments.push(
+      {
+        employeeId: EMPLOYEE_ID,
+        month: MONTH,
+        year: YEAR,
+        status: PayrollAdjustmentStatus.APPROVED,
+        type: PayrollAdjustmentType.CONTRACTUAL_KPI_BONUS,
+        proposedAmount: 400_000,
+        approvedAmount: 350_000,
+      },
+      {
+        employeeId: EMPLOYEE_ID,
+        month: MONTH,
+        year: YEAR,
+        status: PayrollAdjustmentStatus.PENDING_APPROVAL,
+        type: PayrollAdjustmentType.ONE_TIME_AWARD,
+        proposedAmount: 900_000,
+      },
+    );
+    prisma.__state.advances.push({
+      employeeId: EMPLOYEE_ID,
+      month: MONTH,
+      year: YEAR,
+      status: SalaryAdvanceStatus.PAID,
+      approvedAmount: 1_000_000,
+      paidAmount: 800_000,
+    });
+
+    const { preview } = await service.calculate(EMPLOYEE_ID, MONTH, YEAR);
+
+    expect(preview.contractualKpiBonus).toBe(350_000);
+    expect(preview.oneTimeAward).toBe(0);
+    expect(preview.advancePaid).toBe(800_000);
+    expect(preview.advanceApplied).toBe(800_000);
+    expect(preview.deferredAdvance).toBe(0);
+    expect(preview.grossSalary).toBe(BASE_SALARY + 350_000);
+    expect(preview.netSalary).toBe(BASE_SALARY + 350_000 - 800_000);
+  });
+
+  it('qonuniy ushlanmalar yig‘indisini gross maoshning 50 foizida cheklaydi', async () => {
+    prisma.__state.adjustments.push({
+      employeeId: EMPLOYEE_ID,
+      month: MONTH,
+      year: YEAR,
+      status: PayrollAdjustmentStatus.APPROVED,
+      type: PayrollAdjustmentType.DISCIPLINARY_FINE,
+      proposedAmount: 4_000_000,
+      approvedAmount: 4_000_000,
+    });
+
+    const { preview } = await service.calculate(EMPLOYEE_ID, MONTH, YEAR);
+
+    expect(preview.disciplinaryFine).toBe(BASE_SALARY / 2);
+    expect(preview.deferredDeduction).toBe(1_250_000);
+    expect(preview.netSalary).toBe(BASE_SALARY / 2);
   });
 
   it('09:00–18:00 va 1 soat tushlik uchun stavkani 8 sof ish soatidan hisoblaydi', async () => {
@@ -254,17 +368,15 @@ describe('PayrollService', () => {
       employeeId: EMPLOYEE_ID,
       status: 'PRESENT',
       lateMinutes: 0,
-      earlyLeaveMin: 0,
-      overtimeMinutes: 60,
-      netWorkMin: 540,
+      earlyLeaveMin: 60,
+      overtimeMinutes: 0,
+      netWorkMin: 420,
     });
 
     const { preview } = await service.calculate(EMPLOYEE_ID, MONTH, YEAR);
-    const expected = Math.round(
-      60 * (BASE_SALARY / (SCHEDULED_DAYS * 8 * 60)) * 1.5,
-    );
+    const expected = Math.round(60 * (BASE_SALARY / (SCHEDULED_DAYS * 8 * 60)));
 
-    expect(preview.overtimeBonus).toBe(expected);
+    expect(preview.earlyLeaveDeduction).toBe(expected);
   });
 
   it("chegirmalar baseSalary'dan oshib ketsa netSalary hech qachon manfiy bo'lmaydi (0'da to'xtaydi)", async () => {

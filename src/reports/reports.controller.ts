@@ -30,7 +30,7 @@ export class ReportsController {
     @Query('targetHospitalId') targetHospitalId: string,
     @Res() res: Response,
   ) {
-    const hospitalId = targetHospitalId || jwtHospitalId || undefined;
+    const hospitalId = jwtHospitalId || targetHospitalId || undefined;
     const buffer = await this.reportsService.generateAttendanceExcel({
       month: parseInt(month) || new Date().getMonth() + 1,
       year: parseInt(year) || new Date().getFullYear(),
@@ -57,7 +57,7 @@ export class ReportsController {
     @Query('targetHospitalId') targetHospitalId: string,
     @Res() res: Response,
   ) {
-    const hospitalId = targetHospitalId || jwtHospitalId || undefined;
+    const hospitalId = jwtHospitalId || targetHospitalId || undefined;
     const buffer = await this.reportsService.generatePayrollExcel({
       month: parseInt(month) || new Date().getMonth() + 1,
       year: parseInt(year) || new Date().getFullYear(),
@@ -85,7 +85,7 @@ export class ReportsController {
     @Query('targetHospitalId') targetHospitalId: string,
     @Res() res: Response,
   ) {
-    const hospitalId = targetHospitalId || jwtHospitalId || undefined;
+    const hospitalId = jwtHospitalId || targetHospitalId || undefined;
     const buffer = await this.reportsService.generateT13Excel({
       month: parseInt(month) || new Date().getMonth() + 1,
       year: parseInt(year) || new Date().getFullYear(),
@@ -111,7 +111,7 @@ export class ReportsController {
     @Query('targetHospitalId') targetHospitalId: string,
     @Res() res: Response,
   ) {
-    const hospitalId = targetHospitalId || jwtHospitalId || undefined;
+    const hospitalId = jwtHospitalId || targetHospitalId || undefined;
     const buffer = await this.reportsService.generateWeeklyExcel({
       weekStart: weekStart || new Date().toISOString().slice(0, 10),
       departmentId: departmentId || undefined,

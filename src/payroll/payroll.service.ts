@@ -4,15 +4,20 @@ import {
   Logger,
   NotFoundException,
   ConflictException,
+  BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { DateUtil } from '../common/utils/date.util';
 import { isHospitalBlocked } from '../common/utils/payment.util';
-import { OVERTIME_RATE } from '../common/constants';
 import * as ExcelJS from 'exceljs';
 import PDFDocument from 'pdfkit';
 import { PushService } from '../push/push.service';
 import { calcShiftNetMinutes } from '../common/utils/shift.util';
+import {
+  PayrollAdjustmentStatus,
+  PayrollAdjustmentType,
+  SalaryAdvanceStatus,
+} from '@prisma/client';
 
 @Injectable()
 export class PayrollService {
@@ -44,14 +49,6 @@ export class PayrollService {
     // Get attendance records
     const records = await this.prisma.attendanceRecord.findMany({
       where: { employeeId, workDate: { gte: start, lte: end } },
-    });
-
-    // Get weekly stats for this month (for late deductions)
-    const weeklyStats = await this.prisma.weeklyAttendanceStat.findMany({
-      where: {
-        employeeId,
-        weekStart: { gte: start, lte: end },
-      },
     });
 
     const baseSalary = Number(emp.baseSalary);
@@ -107,25 +104,108 @@ export class PayrollService {
     // Deductions
     const absenceDeduction = absences * dailyRate;
 
-    // Late deduction: haftalik 2 soatdan oshgan kechikish
-    const lateDeduction = weeklyStats.reduce(
-      (sum, ws) => sum + Number(ws.deductionAmount),
-      0,
-    );
+    // Kechikish — davomat fakti. U Mehnat kodeksidagi tushuntirish, buyruq
+    // va tanishtirish jarayonisiz avtomatik pul jarimasiga aylantirilmaydi.
+    // Qonuniy tasdiqlangan intizomiy ushlanma alohida payroll ledger orqali
+    // qo'llanadi; legacy maydon yangi hisoblarda nol bo'lib qoladi.
+    const lateDeduction = 0;
 
     // Early leave deduction (every minute)
     const earlyLeaveDeduction = totalEarlyMin * minuteRate;
 
-    // Overtime bonus
-    const overtimeBonus = totalOvertimeMin * minuteRate * OVERTIME_RATE;
+    const [adjustments, advances] = await Promise.all([
+      this.prisma.payrollAdjustment.findMany({
+        where: {
+          employeeId,
+          month,
+          year,
+          status: {
+            in: [
+              PayrollAdjustmentStatus.APPROVED,
+              PayrollAdjustmentStatus.APPLIED,
+            ],
+          },
+        },
+        select: { type: true, approvedAmount: true, proposedAmount: true },
+      }),
+      this.prisma.salaryAdvance.findMany({
+        where: {
+          employeeId,
+          month,
+          year,
+          status: {
+            in: [SalaryAdvanceStatus.PAID, SalaryAdvanceStatus.APPLIED],
+          },
+        },
+        select: { paidAmount: true, approvedAmount: true },
+      }),
+    ]);
 
-    const netSalary = Math.max(
+    const adjustmentAmount = (type: PayrollAdjustmentType) =>
+      adjustments
+        .filter((item) => item.type === type)
+        .reduce(
+          (sum, item) =>
+            sum + Number(item.approvedAmount ?? item.proposedAmount),
+          0,
+        );
+    const contractualKpiBonus = adjustmentAmount(
+      PayrollAdjustmentType.CONTRACTUAL_KPI_BONUS,
+    );
+    const oneTimeAward = adjustmentAmount(PayrollAdjustmentType.ONE_TIME_AWARD);
+    // Kech check-outning o'zi overtime to'lovi uchun yetarli emas. Faqat
+    // rozilik/asos va Director qarori bilan tasdiqlangan summa qo'shiladi.
+    const overtimeBonus = adjustmentAmount(PayrollAdjustmentType.OVERTIME_PAY);
+    const requestedDisciplinaryFine = adjustmentAmount(
+      PayrollAdjustmentType.DISCIPLINARY_FINE,
+    );
+    const requestedOtherDeduction = adjustmentAmount(
+      PayrollAdjustmentType.OTHER_LAWFUL_DEDUCTION,
+    );
+    const advancePaid = advances.reduce(
+      (sum, item) => sum + Number(item.paidAmount ?? item.approvedAmount ?? 0),
+      0,
+    );
+
+    const grossSalary = Math.max(
       0,
       baseSalary -
         absenceDeduction -
         lateDeduction -
         earlyLeaveDeduction +
-        overtimeBonus,
+        overtimeBonus +
+        contractualKpiBonus +
+        oneTimeAward,
+    );
+    // MK 270: umumiy ushlanmalar, odatda, har bir to'lovning 50%idan oshmaydi.
+    const deductionCap = grossSalary * 0.5;
+    const requestedLawfulDeductions =
+      requestedDisciplinaryFine + requestedOtherDeduction;
+    const appliedLawfulDeductions = Math.min(
+      requestedLawfulDeductions,
+      deductionCap,
+    );
+    const disciplinaryFine = Math.min(
+      requestedDisciplinaryFine,
+      appliedLawfulDeductions,
+    );
+    const otherLawfulDeduction = Math.max(
+      0,
+      appliedLawfulDeductions - disciplinaryFine,
+    );
+    const deferredDeduction = Math.max(
+      0,
+      requestedLawfulDeductions - appliedLawfulDeductions,
+    );
+    const advanceApplied = Math.min(
+      advancePaid,
+      Math.max(0, grossSalary - appliedLawfulDeductions),
+    );
+    const deferredAdvance = Math.max(0, advancePaid - advanceApplied);
+
+    const netSalary = Math.max(
+      0,
+      grossSalary - appliedLawfulDeductions - advanceApplied,
     );
 
     return {
@@ -145,6 +225,15 @@ export class PayrollService {
         lateDeduction: Math.round(lateDeduction),
         earlyLeaveDeduction: Math.round(earlyLeaveDeduction),
         overtimeBonus: Math.round(overtimeBonus),
+        contractualKpiBonus: Math.round(contractualKpiBonus),
+        oneTimeAward: Math.round(oneTimeAward),
+        disciplinaryFine: Math.round(disciplinaryFine),
+        otherLawfulDeduction: Math.round(otherLawfulDeduction),
+        deferredDeduction: Math.round(deferredDeduction),
+        advancePaid: Math.round(advancePaid),
+        advanceApplied: Math.round(advanceApplied),
+        deferredAdvance: Math.round(deferredAdvance),
+        grossSalary: Math.round(grossSalary),
         netSalary: Math.round(netSalary),
       },
     };
@@ -161,12 +250,14 @@ export class PayrollService {
     manualDeduction = 0,
     note?: string,
   ) {
+    if (manualBonus !== 0 || manualDeduction !== 0) {
+      throw new BadRequestException(
+        'Qo‘l bonus/kesimi o‘rniga sabab va tasdiq auditi bo‘lgan KPI, mukofot yoki qonuniy ushlanma workflowidan foydalaning',
+      );
+    }
     const { preview } = await this.calculate(employeeId, month, year);
 
-    const netWithManual = Math.max(
-      0,
-      preview.netSalary + manualBonus - manualDeduction,
-    );
+    const netWithManual = preview.netSalary;
 
     // scheduledDays, employeeId, month, year — DB modelida yo'q yoki where clause da
     const {
@@ -186,19 +277,24 @@ export class PayrollService {
 
     const keepStatus =
       existing?.status === 'APPROVED' || existing?.status === 'PAID';
-    const finalStatus = keepStatus ? existing!.status : 'DRAFT';
+    if (keepStatus) {
+      // Tasdiqlangan/to'langan payroll immutable. Keyingi o'zgarishlar yangi
+      // davr yoki alohida korrektirovka/reversiya orqali yuritiladi.
+      return this.prisma.payrollRecord.findUnique({
+        where: { employeeId_month_year: { employeeId, month, year } },
+      });
+    }
+    const finalStatus = 'DRAFT';
 
     // APPROVED/PAID bo'lsa manual bonuslarni ham saqlaymiz
-    const finalBonus = keepStatus ? Number(existing!.manualBonus) : manualBonus;
-    const finalDeduction = keepStatus
-      ? Number(existing!.manualDeduction)
-      : manualDeduction;
+    const finalBonus = keepStatus ? Number(existing!.manualBonus) : 0;
+    const finalDeduction = keepStatus ? Number(existing!.manualDeduction) : 0;
     const finalNet = Math.max(
       0,
       preview.netSalary + finalBonus - finalDeduction,
     );
 
-    return this.prisma.payrollRecord.upsert({
+    const record = await this.prisma.payrollRecord.upsert({
       where: { employeeId_month_year: { employeeId, month, year } },
       update: {
         ...dbFields,
@@ -213,13 +309,40 @@ export class PayrollService {
         month,
         year,
         ...dbFields,
-        manualBonus,
-        manualDeduction,
+        manualBonus: 0,
+        manualDeduction: 0,
         netSalary: netWithManual,
         note,
         status: 'DRAFT',
       },
     });
+    await this.prisma.$transaction([
+      this.prisma.payrollAdjustment.updateMany({
+        where: {
+          employeeId,
+          month,
+          year,
+          status: PayrollAdjustmentStatus.APPROVED,
+        },
+        data: {
+          status: PayrollAdjustmentStatus.APPLIED,
+          payrollRecordId: record.id,
+        },
+      }),
+      this.prisma.salaryAdvance.updateMany({
+        where: {
+          employeeId,
+          month,
+          year,
+          status: SalaryAdvanceStatus.PAID,
+        },
+        data: {
+          status: SalaryAdvanceStatus.APPLIED,
+          payrollRecordId: record.id,
+        },
+      }),
+    ]);
+    return record;
   }
 
   // ──────────────────────────────────────────
@@ -372,7 +495,7 @@ export class PayrollService {
       'Dekabr',
     ];
 
-    sheet.mergeCells('A1:N1');
+    sheet.mergeCells('A1:AB1');
     sheet.getCell('A1').value =
       `Tug'ruq xona — ${monthNames[month]} ${year} — Oylik maosh jadvali`;
     sheet.getCell('A1').font = { bold: true, size: 14 };
@@ -395,6 +518,15 @@ export class PayrollService {
       'Kechikish kesim',
       "Yo'qlik kesim",
       'Overtime bonus',
+      'KPI bonus',
+      'Bir martalik mukofot',
+      'Intizomiy jarima',
+      'Boshqa qonuniy ushlanma',
+      'Keyingi davrga qoldirilgan ushlanma',
+      'Avans',
+      'Payrollga qo‘llangan avans',
+      'Keyingi davrga qolgan avans',
+      'Gross maosh',
       "Qo'l bonus",
       "Qo'l kesim",
       'Net maosh',
@@ -428,6 +560,15 @@ export class PayrollService {
         Number(r.lateDeduction),
         Number(r.absenceDeduction),
         Number(r.overtimeBonus),
+        Number(r.contractualKpiBonus),
+        Number(r.oneTimeAward),
+        Number(r.disciplinaryFine),
+        Number(r.otherLawfulDeduction),
+        Number(r.deferredDeduction),
+        Number(r.advancePaid),
+        Number(r.advanceApplied),
+        Number(r.deferredAdvance),
+        Number(r.grossSalary),
         Number(r.manualBonus),
         Number(r.manualDeduction),
         Number(r.netSalary),
@@ -441,6 +582,13 @@ export class PayrollService {
       { width: 20 },
       { width: 20 },
       { width: 15 },
+      { width: 15 },
+      { width: 20 },
+      { width: 17 },
+      { width: 22 },
+      { width: 26 },
+      { width: 15 },
+      { width: 16 },
       { width: 12 },
       { width: 10 },
       { width: 15 },
@@ -455,6 +603,8 @@ export class PayrollService {
       { width: 12 },
       { width: 15 },
       { width: 12 },
+      { width: 18 },
+      { width: 20 },
     ];
 
     return (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
@@ -603,6 +753,33 @@ export class PayrollService {
     const overtimeBonus = record
       ? Number(record.overtimeBonus)
       : previewData.overtimeBonus;
+    const contractualKpiBonus = record
+      ? Number(record.contractualKpiBonus)
+      : previewData.contractualKpiBonus;
+    const oneTimeAward = record
+      ? Number(record.oneTimeAward)
+      : previewData.oneTimeAward;
+    const disciplinaryFine = record
+      ? Number(record.disciplinaryFine)
+      : previewData.disciplinaryFine;
+    const otherLawfulDeduction = record
+      ? Number(record.otherLawfulDeduction)
+      : previewData.otherLawfulDeduction;
+    const deferredDeduction = record
+      ? Number(record.deferredDeduction)
+      : previewData.deferredDeduction;
+    const advancePaid = record
+      ? Number(record.advancePaid)
+      : previewData.advancePaid;
+    const advanceApplied = record
+      ? Number(record.advanceApplied)
+      : previewData.advanceApplied;
+    const deferredAdvance = record
+      ? Number(record.deferredAdvance)
+      : previewData.deferredAdvance;
+    const grossSalary = record
+      ? Number(record.grossSalary)
+      : previewData.grossSalary;
     const manualBonus = record ? Number(record.manualBonus) : 0;
     const manualDeduction = record ? Number(record.manualDeduction) : 0;
     const netSalary = record ? Number(record.netSalary) : previewData.netSalary;
@@ -610,8 +787,14 @@ export class PayrollService {
     const hospitalName = (emp.hospital as any)?.name ?? "Tug'ruqxona";
 
     const totalDeductions =
-      absenceDeduction + lateDeduction + earlyLeaveDeduction + manualDeduction;
-    const totalBonuses = overtimeBonus + manualBonus;
+      absenceDeduction +
+      earlyLeaveDeduction +
+      disciplinaryFine +
+      otherLawfulDeduction +
+      advanceApplied +
+      manualDeduction;
+    const totalBonuses =
+      overtimeBonus + contractualKpiBonus + oneTimeAward + manualBonus;
 
     // ── Build PDF ──────────────────────────────────────────────────────────
     return new Promise((resolve, reject) => {
@@ -756,16 +939,15 @@ export class PayrollService {
       ]);
 
       // ── SECTION 2: KESIMLAR ───────────────────────────────────
-      drawSection('KESIMLAR (CHEGIRMALAR)', [
+      drawSection('HISOB-KITOB TUZATMALARI VA USHLANMALAR', [
         {
           label: "Yo'qlik uchun kesim",
           value: totalDeductions > 0 ? `− ${fmtMoney(absenceDeduction)}` : '—',
           color: absenceDeduction > 0 ? COLORS.danger : undefined,
         },
         {
-          label: 'Kechikish uchun kesim',
-          value: lateDeduction > 0 ? `− ${fmtMoney(lateDeduction)}` : '—',
-          color: lateDeduction > 0 ? COLORS.danger : undefined,
+          label: 'Kechikish (faqat davomat fakti)',
+          value: fmtMin(totalLateMin),
         },
         {
           label: 'Erta ketish uchun kesim',
@@ -776,9 +958,30 @@ export class PayrollService {
           color: earlyLeaveDeduction > 0 ? COLORS.danger : undefined,
         },
         {
-          label: "Qo'lda kesim",
-          value: manualDeduction > 0 ? `− ${fmtMoney(manualDeduction)}` : '—',
-          color: manualDeduction > 0 ? COLORS.danger : undefined,
+          label: 'Tasdiqlangan intizomiy jarima',
+          value: disciplinaryFine > 0 ? `− ${fmtMoney(disciplinaryFine)}` : '—',
+          color: disciplinaryFine > 0 ? COLORS.danger : undefined,
+        },
+        {
+          label: 'Boshqa qonuniy ushlanma',
+          value:
+            otherLawfulDeduction > 0
+              ? `− ${fmtMoney(otherLawfulDeduction)}`
+              : '—',
+          color: otherLawfulDeduction > 0 ? COLORS.danger : undefined,
+        },
+        {
+          label: 'Oldindan to‘langan avans',
+          value: advanceApplied > 0 ? `− ${fmtMoney(advanceApplied)}` : '—',
+          color: advanceApplied > 0 ? COLORS.danger : undefined,
+        },
+        {
+          label: 'Keyingi davrga qolgan avans',
+          value: deferredAdvance > 0 ? fmtMoney(deferredAdvance) : '—',
+        },
+        {
+          label: 'Limit sabab keyingi davrga qoldi',
+          value: deferredDeduction > 0 ? fmtMoney(deferredDeduction) : '—',
         },
         {
           label: 'Jami kesimlar',
@@ -795,13 +998,24 @@ export class PayrollService {
           value: overtimeBonus > 0 ? `+ ${fmtMoney(overtimeBonus)}` : '—',
           color: overtimeBonus > 0 ? COLORS.success : undefined,
         },
-        { label: 'Kechikish (soat)', value: fmtMin(totalLateMin) },
+        {
+          label: 'KPI bonusi',
+          value:
+            contractualKpiBonus > 0
+              ? `+ ${fmtMoney(contractualKpiBonus)}`
+              : '—',
+          color: contractualKpiBonus > 0 ? COLORS.success : undefined,
+        },
+        {
+          label: 'Bir martalik mukofot',
+          value: oneTimeAward > 0 ? `+ ${fmtMoney(oneTimeAward)}` : '—',
+          color: oneTimeAward > 0 ? COLORS.success : undefined,
+        },
         { label: 'Erta ketish', value: fmtMin(totalEarlyMin) },
         { label: 'Overtime', value: fmtMin(totalOvertimeMin) },
         {
-          label: "Qo'lda bonus",
-          value: manualBonus > 0 ? `+ ${fmtMoney(manualBonus)}` : '—',
-          color: manualBonus > 0 ? COLORS.success : undefined,
+          label: 'Hisoblangan gross maosh',
+          value: fmtMoney(grossSalary),
         },
         {
           label: 'Jami bonuslar',

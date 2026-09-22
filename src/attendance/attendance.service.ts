@@ -26,10 +26,7 @@ import { isHospitalBlocked } from '../common/utils/payment.util';
 import { calcNetWorkMin } from '../common/utils/shift.util';
 import { haversineMeters, formatDistance } from '../common/utils/geo.util';
 import { processAndSavePhoto } from '../common/utils/image.util';
-import {
-  LATE_GRACE_MINUTES,
-  WEEKLY_LATE_THRESHOLD_MIN,
-} from '../common/constants';
+import { LATE_GRACE_MINUTES } from '../common/constants';
 import { SelfCheckInDto } from './dto/self-check-in.dto';
 import { LocationGateway } from '../location/location.gateway';
 
@@ -2049,29 +2046,10 @@ export class AttendanceService {
     const weekStart = DateUtil.startOfWeek(date);
     const weekEnd = DateUtil.endOfWeek(date);
 
-    const existing = await this.prisma.weeklyAttendanceStat.findUnique({
-      where: { employeeId_weekStart: { employeeId, weekStart } },
-    });
-
-    const prevLate = existing?.totalLateMin ?? 0;
-    const newLate = prevLate + addLateMin;
-    const penaltyLateMin = Math.max(0, newLate - WEEKLY_LATE_THRESHOLD_MIN);
-
-    let deductionAmount = 0;
-    if (penaltyLateMin > 0) {
-      const emp = await this.prisma.employee.findUnique({
-        where: { id: employeeId },
-        select: { baseSalary: true },
-      });
-      if (emp) {
-        const monthWorkMinutes = 26 * 8 * 60;
-        const minuteRate = Number(emp.baseSalary) / monthWorkMinutes;
-        const addedPenalty = penaltyLateMin - (existing?.penaltyLateMin ?? 0);
-        deductionAmount =
-          (existing ? Number(existing.deductionAmount) : 0) +
-          addedPenalty * minuteRate;
-      }
-    }
+    // Weekly stat faqat davomat faktlarini jamlaydi. Intizomiy pul jarimasi
+    // tushuntirish va buyruqsiz avtomatik hisoblanmaydi.
+    const penaltyLateMin = 0;
+    const deductionAmount = 0;
 
     await this.prisma.weeklyAttendanceStat.upsert({
       where: { employeeId_weekStart: { employeeId, weekStart } },

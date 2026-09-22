@@ -13,7 +13,7 @@ datasource db {
 
 enum UserRole {
   SUPER_ADMIN
-  MINISTRY          // Viloyat / Respublika vazirlik kuzatuvchisi
+  MINISTRY // Viloyat / Respublika vazirlik kuzatuvchisi
   ASSISTANT_ADMIN
   ADMIN
   DIRECTOR
@@ -33,7 +33,7 @@ enum Gender {
 }
 
 enum ShiftType {
-  DAYTIME   // 08:00 – 20:00
+  DAYTIME // 08:00 – 20:00
   NIGHTTIME // 20:00 – 08:00 (overnight)
   CUSTOM
 }
@@ -60,6 +60,33 @@ enum PayrollStatus {
   PAID
 }
 
+enum PayrollAdjustmentType {
+  OVERTIME_PAY
+  CONTRACTUAL_KPI_BONUS
+  ONE_TIME_AWARD
+  DISCIPLINARY_FINE
+  OTHER_LAWFUL_DEDUCTION
+}
+
+enum PayrollAdjustmentStatus {
+  PENDING_EXPLANATION
+  PENDING_APPROVAL
+  PENDING_ACKNOWLEDGEMENT
+  APPROVED
+  REJECTED
+  CANCELLED
+  APPLIED
+}
+
+enum SalaryAdvanceStatus {
+  REQUESTED
+  APPROVED
+  PAID
+  REJECTED
+  CANCELLED
+  APPLIED
+}
+
 enum Lang {
   uz
   ru
@@ -75,18 +102,18 @@ enum NotificationType {
 }
 
 enum LeaveType {
-  VACATION   // Yillik ta'til
-  SICK       // Kasallik (vaqtinchalik mehnatga layoqatsizlik)
-  PERSONAL   // Shaxsiy sabab
-  MATERNITY  // Tug'ruq ta'tili
-  UNPAID     // Haqsiz ta'til
+  VACATION // Yillik ta'til
+  SICK // Kasallik (vaqtinchalik mehnatga layoqatsizlik)
+  PERSONAL // Shaxsiy sabab
+  MATERNITY // Tug'ruq ta'tili
+  UNPAID // Haqsiz ta'til
 }
 
 enum LeaveStatus {
-  PENDING    // Kutilmoqda (direktor ko'rmagan)
-  APPROVED   // Tasdiqlandi
-  REJECTED   // Rad etildi
-  CANCELLED  // Xodim o'zi bekor qildi
+  PENDING // Kutilmoqda (direktor ko'rmagan)
+  APPROVED // Tasdiqlandi
+  REJECTED // Rad etildi
+  CANCELLED // Xodim o'zi bekor qildi
   COMPLETED
 }
 
@@ -127,15 +154,15 @@ enum TrialLeadStatus {
 // ─────────────────────────────────────────────
 
 enum TerminalEventType {
-  CHECK_IN       // Keldi (kirish)
-  CHECK_OUT      // Ketdi (chiqish)
-  LUNCH_OUT      // Tushlikka chiqdi
-  LUNCH_IN       // Tushlikdan qaytdi
-  COFFEE_OUT     // Coffee/tanaffusga chiqdi
-  COFFEE_IN      // Coffee/tanaffusdan qaytdi
-  OVERTIME_IN    // Qo'shimcha ishga kirdi
-  OVERTIME_OUT   // Qo'shimcha ishdan chiqdi
-  UNKNOWN        // Noma'lum / fallback
+  CHECK_IN // Keldi (kirish)
+  CHECK_OUT // Ketdi (chiqish)
+  LUNCH_OUT // Tushlikka chiqdi
+  LUNCH_IN // Tushlikdan qaytdi
+  COFFEE_OUT // Coffee/tanaffusga chiqdi
+  COFFEE_IN // Coffee/tanaffusdan qaytdi
+  OVERTIME_IN // Qo'shimcha ishga kirdi
+  OVERTIME_OUT // Qo'shimcha ishdan chiqdi
+  UNKNOWN // Noma'lum / fallback
 }
 
 // Break turi (tushlik, coffee, boshqa)
@@ -150,38 +177,40 @@ enum BreakType {
 // ─────────────────────────────────────────────
 
 model Hospital {
-  id       String  @id @default(uuid())
-  name     String                      // "1-son tug'ruq xona"
-  address  String?
-  phone    String?
-  code     String  @unique             // "TUG-01"
-  logoUrl  String?
+  id        String  @id @default(uuid())
+  name      String // "1-son tug'ruq xona"
+  address   String?
+  phone     String?
+  code      String  @unique // "TUG-01"
+  logoUrl   String?
   isActive  Boolean @default(true)
-  isBlocked Boolean @default(false)   // Manual admin blok
+  isBlocked Boolean @default(false) // Manual admin blok
 
   // GPS geofencing — mobil check-in uchun (ixtiyoriy)
-  gpsLat    Float?                     // Kasalxona kengligi
-  gpsLng    Float?                     // Kasalxona uzunligi
-  gpsRadius Int?   @default(200)       // Ruxsat etilgan radius (metr)
+  gpsLat    Float? // Kasalxona kengligi
+  gpsLng    Float? // Kasalxona uzunligi
+  gpsRadius Int?   @default(200) // Ruxsat etilgan radius (metr)
 
   // Avtomatik to'lov eslatmasi (FAZA 5, 2-bosqich, 2026-09-19) — oyiga bir
   // marta yuboriladi, shu ikkita maydon spam bo'lmasligi uchun nazorat qiladi
   lastPaymentReminderAt     DateTime?
-  lastPaymentReminderPeriod String?    // "YYYY-MM" — shu oy uchun eslatma yuborilganmi
+  lastPaymentReminderPeriod String? // "YYYY-MM" — shu oy uchun eslatma yuborilganmi
 
-  users         User[]
-  employees     Employee[]
-  departments   Department[]
-  positions     Position[]
-  shifts        ShiftTemplate[]
-  telegramSubs  TelegramSubscription[]
-  notifications Notification[]
-  payments      Payment[]
-  cameras       Camera[]
-  hikTerminals  HikTerminal[]
-  leaveRequests LeaveRequest[]
-  assistantAdmins HospitalAssistant[]
-  didoxCredential HospitalDidoxCredential?
+  users              User[]
+  employees          Employee[]
+  departments        Department[]
+  positions          Position[]
+  shifts             ShiftTemplate[]
+  telegramSubs       TelegramSubscription[]
+  notifications      Notification[]
+  payments           Payment[]
+  cameras            Camera[]
+  hikTerminals       HikTerminal[]
+  leaveRequests      LeaveRequest[]
+  assistantAdmins    HospitalAssistant[]
+  didoxCredential    HospitalDidoxCredential?
+  payrollAdjustments PayrollAdjustment[]
+  salaryAdvances     SalaryAdvance[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -212,20 +241,20 @@ model HospitalAssistant {
 // ─────────────────────────────────────────────
 
 model Camera {
-  id              String   @id @default(uuid())
-  hospitalId      String
-  hospital        Hospital @relation(fields: [hospitalId], references: [id], onDelete: Cascade)
+  id         String   @id @default(uuid())
+  hospitalId String
+  hospital   Hospital @relation(fields: [hospitalId], references: [id], onDelete: Cascade)
 
-  name            String   // "Qabul xonasi", "Koridor 1", "Kirish"
-  cameraIndexCode String?  // HikConnect unique camera code (keyinroq)
-  channelNo       Int      @default(1)
-  deviceSerial    String?  // HikConnect device serial (optional)
+  name            String // "Qabul xonasi", "Koridor 1", "Kirish"
+  cameraIndexCode String? // HikConnect unique camera code (keyinroq)
+  channelNo       Int     @default(1)
+  deviceSerial    String? // HikConnect device serial (optional)
 
   // MediaMTX stream path — FFmpeg agent pushes to VPS
   // e.g. "hospital1/cam1" → https://vps/hospital1/cam1/index.m3u8
-  streamPath      String?
+  streamPath String?
 
-  isActive        Boolean  @default(true)
+  isActive Boolean @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -246,23 +275,27 @@ model User {
   lang         Lang       @default(uz)
 
   // Email — ixtiyoriy, tasdiqlangach parolni tiklash va OTP uchun ishlatiladi
-  email           String?    @unique
+  email           String?   @unique
   emailVerifiedAt DateTime?
 
   // SUPER_ADMIN uchun null, boshqalari uchun majburiy
-  hospitalId   String?
-  hospital     Hospital?  @relation(fields: [hospitalId], references: [id])
+  hospitalId String?
+  hospital   Hospital? @relation(fields: [hospitalId], references: [id])
 
-  employee          Employee?
-  pushSubscriptions PushSubscription[]
-  liveLocations LiveLocation[]
-  notifications     Notification[]
-  emailOtpTokens      EmailOtpToken[]
-  passwordResetTokens PasswordResetToken[]
-  assignedHospitals   HospitalAssistant[]
-  permissionOverrides UserPermissionOverride[]
+  employee                  Employee?
+  pushSubscriptions         PushSubscription[]
+  liveLocations             LiveLocation[]
+  notifications             Notification[]
+  emailOtpTokens            EmailOtpToken[]
+  passwordResetTokens       PasswordResetToken[]
+  assignedHospitals         HospitalAssistant[]
+  permissionOverrides       UserPermissionOverride[]
+  createdPayrollAdjustments PayrollAdjustment[]      @relation("PayrollAdjustmentCreator")
+  decidedPayrollAdjustments PayrollAdjustment[]      @relation("PayrollAdjustmentDecider")
+  requestedSalaryAdvances   SalaryAdvance[]          @relation("SalaryAdvanceRequester")
+  approvedSalaryAdvances    SalaryAdvance[]          @relation("SalaryAdvanceApprover")
 
-  lastLoginAt DateTime? // Oxirgi muvaffaqiyatli login vaqti (auth.service.ts login()da yangilanadi)
+  lastLoginAt          DateTime? // Oxirgi muvaffaqiyatli login vaqti (auth.service.ts login()da yangilanadi)
   // Parol almashtirilsa yoki tiklansa, undan oldin berilgan barcha JWTlar
   // shu vaqt bilan solishtirib yaroqsiz qilinadi.
   credentialsChangedAt DateTime?
@@ -315,14 +348,14 @@ model PasswordResetToken {
 // ─────────────────────────────────────────────
 
 model PushSubscription {
-  id        String   @id @default(uuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  endpoint  String   @unique          // Browser push endpoint URL
-  p256dh    String                    // Encryption key
-  auth      String                    // Auth secret
-  userAgent String?                   // Browser info
+  endpoint  String  @unique // Browser push endpoint URL
+  p256dh    String // Encryption key
+  auth      String // Auth secret
+  userAgent String? // Browser info
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -340,10 +373,10 @@ model Department {
   description String?
   code        String
 
-  hospitalId  String
-  hospital    Hospital @relation(fields: [hospitalId], references: [id])
+  hospitalId String
+  hospital   Hospital @relation(fields: [hospitalId], references: [id])
 
-  employees   Employee[]
+  employees Employee[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -362,7 +395,7 @@ model Position {
   hospitalId String
   hospital   Hospital @relation(fields: [hospitalId], references: [id])
 
-  employees  Employee[]
+  employees Employee[]
 
   // Maktab hamshirasi uchun GPS geofence (ixtiyoriy)
   gpsLat    Float?
@@ -380,7 +413,7 @@ model Position {
 // ─────────────────────────────────────────────
 
 model Employee {
-  id         String  @id @default(uuid())
+  id String @id @default(uuid())
 
   // Hikvision terminal ID — rasm yuklananda auto-generate bo'ladi
   // null bo'lishi mumkin (hali enroll qilinmagan)
@@ -397,33 +430,35 @@ model Employee {
   gpsLng    Float?
   gpsRadius Int?   @default(100)
 
-  hospitalId   String
-  hospital     Hospital   @relation(fields: [hospitalId], references: [id])
+  hospitalId String
+  hospital   Hospital @relation(fields: [hospitalId], references: [id])
 
   departmentId String
   department   Department @relation(fields: [departmentId], references: [id])
 
-  positionId   String
-  position     Position   @relation(fields: [positionId], references: [id])
+  positionId String
+  position   Position @relation(fields: [positionId], references: [id])
 
-  userId         String?  @unique
-  user           User?    @relation(fields: [userId], references: [id])
+  userId String? @unique
+  user   User?   @relation(fields: [userId], references: [id])
 
   telegramChatId String?
 
-  hiredAt  DateTime  @default(now())
-  firedAt  DateTime?
-  fireReason  String?   // Ketish sababi: RESIGNED, FIRED, RETIRED, TRANSFERRED, OTHER
-  fireNote    String?   // Qo'shimcha izoh
+  hiredAt    DateTime       @default(now())
+  firedAt    DateTime?
+  fireReason String? // Ketish sababi: RESIGNED, FIRED, RETIRED, TRANSFERRED, OTHER
+  fireNote   String? // Qo'shimcha izoh
   birthDate  DateTime?
-  status   EmployeeStatus @default(ACTIVE)
+  status     EmployeeStatus @default(ACTIVE)
 
-  schedules       Schedule[]
-  attendances     AttendanceRecord[]
-  payrolls        PayrollRecord[]
-  weeklyStats     WeeklyAttendanceStat[]
-  terminalEvents  AttendanceEvent[]
-  leaveRequests   LeaveRequest[]
+  schedules          Schedule[]
+  attendances        AttendanceRecord[]
+  payrolls           PayrollRecord[]
+  weeklyStats        WeeklyAttendanceStat[]
+  terminalEvents     AttendanceEvent[]
+  leaveRequests      LeaveRequest[]
+  payrollAdjustments PayrollAdjustment[]
+  salaryAdvances     SalaryAdvance[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -445,17 +480,17 @@ model ShiftTemplate {
   isOvernight Boolean   @default(false)
   durationH   Int
 
-  graceMinutes  Int @default(15)
+  graceMinutes Int @default(15)
 
   // Tushlik vaqti (ixtiyoriy)
-  lunchStart    String?        // "12:00"
-  lunchEnd      String?        // "13:00"
-  lunchGraceMin Int @default(10) // tushlikdan qaytishda grace period
+  lunchStart    String? // "12:00"
+  lunchEnd      String? // "13:00"
+  lunchGraceMin Int     @default(10) // tushlikdan qaytishda grace period
 
   hospitalId String
   hospital   Hospital @relation(fields: [hospitalId], references: [id])
 
-  schedules  Schedule[]
+  schedules Schedule[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -468,16 +503,16 @@ model ShiftTemplate {
 // ─────────────────────────────────────────────
 
 model Schedule {
-  id         String         @id @default(uuid())
+  id         String   @id @default(uuid())
   employeeId String
-  employee   Employee       @relation(fields: [employeeId], references: [id])
+  employee   Employee @relation(fields: [employeeId], references: [id])
 
-  shiftId    String?
-  shift      ShiftTemplate? @relation(fields: [shiftId], references: [id])
+  shiftId String?
+  shift   ShiftTemplate? @relation(fields: [shiftId], references: [id])
 
-  date       DateTime
-  status     ScheduleStatus @default(WORKING)
-  note       String?
+  date   DateTime
+  status ScheduleStatus @default(WORKING)
+  note   String?
 
   attendance AttendanceRecord?
 
@@ -493,12 +528,12 @@ model Schedule {
 // ─────────────────────────────────────────────
 
 model AttendanceRecord {
-  id         String @id @default(uuid())
+  id String @id @default(uuid())
 
   employeeId String
   employee   Employee @relation(fields: [employeeId], references: [id])
 
-  scheduleId String? @unique
+  scheduleId String?   @unique
   schedule   Schedule? @relation(fields: [scheduleId], references: [id])
 
   deviceId        String?
@@ -513,37 +548,37 @@ model AttendanceRecord {
   // Tushlik break (ixtiyoriy)
   lunchOut     DateTime?
   lunchIn      DateTime?
-  lunchLateMin Int @default(0)
+  lunchLateMin Int       @default(0)
 
   // Coffee / tanaffus break (ixtiyoriy)
   coffeeOut     DateTime?
   coffeeIn      DateTime?
-  coffeeLateMin Int @default(0)
+  coffeeLateMin Int       @default(0)
 
   // Mobil self check-in ma'lumotlari
-  checkInSource  String?   @default("TERMINAL") // TERMINAL | MOBILE | MANUAL
-  selfieUrl      String?                         // Check-in selfie rasmi yo'li
-  gpsLat         Float?                          // Check-in paytidagi koordinata
-  gpsLng         Float?
-  gpsAccuracy    Float?                          // GPS aniqligi (metr)
-  gpsVerified  Boolean @default(false)
-  faceVerified Boolean @default(false)
+  checkInSource String? @default("TERMINAL") // TERMINAL | MOBILE | MANUAL
+  selfieUrl     String? // Check-in selfie rasmi yo'li
+  gpsLat        Float? // Check-in paytidagi koordinata
+  gpsLng        Float?
+  gpsAccuracy   Float? // GPS aniqligi (metr)
+  gpsVerified   Boolean @default(false)
+  faceVerified  Boolean @default(false)
 
   // Check-out selfie + GPS (mobil ilovadan)
-  checkOutSource       String?  // TERMINAL | MOBILE | MANUAL | AUTO
-  autoCheckOut         Boolean  @default(false)
-  checkOutSelfieUrl  String?
-  checkOutGpsLat     Float?
-  checkOutGpsLng     Float?
+  checkOutSource      String? // TERMINAL | MOBILE | MANUAL | AUTO
+  autoCheckOut        Boolean @default(false)
+  checkOutSelfieUrl   String?
+  checkOutGpsLat      Float?
+  checkOutGpsLng      Float?
   checkOutGpsAccuracy Float?
 
   status          AttendanceStatus @default(ABSENT)
-  lateMinutes     Int  @default(0)
-  earlyLeaveMin   Int  @default(0)
-  overtimeMinutes Int  @default(0)
+  lateMinutes     Int              @default(0)
+  earlyLeaveMin   Int              @default(0)
+  overtimeMinutes Int              @default(0)
 
   // Sof ish vaqti (tushlik ayirib tashlangan) — maosh hisoblash uchun
-  netWorkMin      Int  @default(0)
+  netWorkMin Int @default(0)
 
   workDate DateTime
   note     String?
@@ -614,9 +649,22 @@ model PayrollRecord {
   manualBonus     Decimal @default(0) @db.Decimal(12, 2)
   manualDeduction Decimal @default(0) @db.Decimal(12, 2)
 
-  netSalary  Decimal @db.Decimal(12, 2)
-  status     PayrollStatus @default(DRAFT)
-  note       String?
+  contractualKpiBonus  Decimal @default(0) @db.Decimal(12, 2)
+  oneTimeAward         Decimal @default(0) @db.Decimal(12, 2)
+  disciplinaryFine     Decimal @default(0) @db.Decimal(12, 2)
+  otherLawfulDeduction Decimal @default(0) @db.Decimal(12, 2)
+  deferredDeduction    Decimal @default(0) @db.Decimal(12, 2)
+  advancePaid          Decimal @default(0) @db.Decimal(12, 2)
+  advanceApplied       Decimal @default(0) @db.Decimal(12, 2)
+  deferredAdvance      Decimal @default(0) @db.Decimal(12, 2)
+  grossSalary          Decimal @default(0) @db.Decimal(12, 2)
+
+  netSalary Decimal       @db.Decimal(12, 2)
+  status    PayrollStatus @default(DRAFT)
+  note      String?
+
+  adjustments PayrollAdjustment[]
+  advances    SalaryAdvance[]
 
   approvedAt DateTime?
   paidAt     DateTime?
@@ -626,6 +674,90 @@ model PayrollRecord {
 
   @@unique([employeeId, month, year])
   @@index([month, year])
+}
+
+// KPI/mukofot va qonuniy ushlanmalar davomat faktidan alohida yuritiladi.
+model PayrollAdjustment {
+  id         String   @id @default(uuid())
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  hospitalId String
+  hospital   Hospital @relation(fields: [hospitalId], references: [id], onDelete: Cascade)
+
+  payrollRecordId String?
+  payrollRecord   PayrollRecord? @relation(fields: [payrollRecordId], references: [id], onDelete: SetNull)
+
+  month  Int
+  year   Int
+  type   PayrollAdjustmentType
+  status PayrollAdjustmentStatus @default(PENDING_APPROVAL)
+
+  proposedAmount  Decimal  @db.Decimal(12, 2)
+  approvedAmount  Decimal? @db.Decimal(12, 2)
+  reason          String
+  policyReference String?
+  evidence        Json?
+
+  explanationRequestedAt DateTime?
+  employeeExplanation    String?
+  explanationSubmittedAt DateTime?
+  explanationRefusedAt   DateTime?
+
+  orderNumber    String?
+  orderDate      DateTime?
+  acknowledgedAt DateTime?
+
+  calculationBaseAmount Decimal? @db.Decimal(12, 2)
+  finePercent           Decimal? @db.Decimal(5, 2)
+
+  createdById    String
+  createdBy      User      @relation("PayrollAdjustmentCreator", fields: [createdById], references: [id])
+  decidedById    String?
+  decidedBy      User?     @relation("PayrollAdjustmentDecider", fields: [decidedById], references: [id])
+  decidedAt      DateTime?
+  decisionReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([hospitalId, year, month])
+  @@index([employeeId, year, month])
+  @@index([status])
+}
+
+// Ish haqi hisobiga oldindan to'langan bo'nak; jarima yoki qarz emas.
+model SalaryAdvance {
+  id         String   @id @default(uuid())
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  hospitalId String
+  hospital   Hospital @relation(fields: [hospitalId], references: [id], onDelete: Cascade)
+
+  payrollRecordId String?
+  payrollRecord   PayrollRecord? @relation(fields: [payrollRecordId], references: [id], onDelete: SetNull)
+
+  month            Int
+  year             Int
+  status           SalaryAdvanceStatus @default(REQUESTED)
+  requestedAmount  Decimal             @db.Decimal(12, 2)
+  approvedAmount   Decimal?            @db.Decimal(12, 2)
+  paidAmount       Decimal?            @db.Decimal(12, 2)
+  note             String?
+  paymentReference String?
+
+  requestedById String
+  requestedBy   User      @relation("SalaryAdvanceRequester", fields: [requestedById], references: [id])
+  approvedById  String?
+  approvedBy    User?     @relation("SalaryAdvanceApprover", fields: [approvedById], references: [id])
+  approvedAt    DateTime?
+  paidAt        DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([hospitalId, year, month])
+  @@index([employeeId, year, month])
+  @@index([status])
 }
 
 // ─────────────────────────────────────────────
@@ -649,14 +781,14 @@ model SystemSettings {
 // in PostgreSQL prevents duplicate alerts while two backend replicas overlap
 // during a rolling deploy.
 model OperationalServiceMonitor {
-  serviceKey          String   @id
-  status              String   @default("HEALTHY")
-  consecutiveFailures Int      @default(0)
+  serviceKey          String    @id
+  status              String    @default("HEALTHY")
+  consecutiveFailures Int       @default(0)
   outageStartedAt     DateTime?
   alertedAt           DateTime?
   lastSuccessAt       DateTime?
   lastFailureAt       DateTime?
-  updatedAt           DateTime @updatedAt
+  updatedAt           DateTime  @updatedAt
 }
 
 model TrialLead {
@@ -734,24 +866,24 @@ model AuditLog {
 // ─────────────────────────────────────────────
 
 model Notification {
-  id         String           @id @default(uuid())
-  type       NotificationType @default(PAYMENT)
-  title      String
-  message    String
-  isRead     Boolean          @default(false)
+  id      String           @id @default(uuid())
+  type    NotificationType @default(PAYMENT)
+  title   String
+  message String
+  isRead  Boolean          @default(false)
 
   // Shaxsiy xabar (masalan: "ta'tilingiz tasdiqlandi") — set bo'lsa, faqat shu user ko'radi
-  userId     String?
-  user       User?            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   // Broadcast xabar (masalan: "yangi ta'til so'rovi") — userId=null, hospitalId=set bo'lsa,
   // shu kasalxonadagi tegishli userlar (DIRECTOR/ADMIN va h.k.) ko'radi.
   // userId=null va hospitalId=null bo'lsa — global (SUPER_ADMIN) broadcast.
   hospitalId String?
-  hospital   Hospital?        @relation(fields: [hospitalId], references: [id], onDelete: Cascade)
+  hospital   Hospital? @relation(fields: [hospitalId], references: [id], onDelete: Cascade)
 
-  metadata   Json?
-  createdAt  DateTime         @default(now())
+  metadata  Json?
+  createdAt DateTime @default(now())
 
   @@index([hospitalId, isRead])
   @@index([userId, isRead])
@@ -764,26 +896,26 @@ model Notification {
 // ─────────────────────────────────────────────
 
 model AttendanceEvent {
-  id         String            @id @default(uuid())
+  id String @id @default(uuid())
 
   employeeId String
-  employee   Employee          @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 
   // Qaysi AttendanceRecord ga bog'landi (null = ignore qilindi yoki hali bog'lanmagan)
-  recordId   String?
-  record     AttendanceRecord? @relation(fields: [recordId], references: [id], onDelete: SetNull)
+  recordId String?
+  record   AttendanceRecord? @relation(fields: [recordId], references: [id], onDelete: SetNull)
 
   eventType  TerminalEventType
   deviceId   String?
   deviceName String?
 
   // Terminal dan kelgan aniq vaqt (UTC)
-  rawTime    DateTime
+  rawTime DateTime
 
   // Hikvision dan kelgan to'liq payload — debug uchun
   rawPayload Json?
 
-  createdAt  DateTime @default(now())
+  createdAt DateTime @default(now())
 
   @@index([employeeId, rawTime])
   @@index([recordId])
@@ -795,10 +927,10 @@ model AttendanceEvent {
 // ─────────────────────────────────────────────
 
 model BreakRecord {
-  id        String    @id @default(uuid())
+  id String @id @default(uuid())
 
-  recordId  String
-  record    AttendanceRecord @relation(fields: [recordId], references: [id], onDelete: Cascade)
+  recordId String
+  record   AttendanceRecord @relation(fields: [recordId], references: [id], onDelete: Cascade)
 
   type      BreakType
   startTime DateTime
@@ -815,23 +947,23 @@ model BreakRecord {
 // ─────────────────────────────────────────────
 
 model Payment {
-  id                  String        @id @default(uuid())
-  hospitalId          String
-  hospital            Hospital      @relation(fields: [hospitalId], references: [id], onDelete: Cascade)
-  payerName           String
-  amount              Decimal       @db.Decimal(12, 2)
-  type                PaymentType   @default(MONTHLY)
-  period              String?                           // "2026-03" — YYYY-MM
-  status              PaymentStatus @default(PAID)
-  paidAt              DateTime      @default(now())
-  note                String?
+  id                String        @id @default(uuid())
+  hospitalId        String
+  hospital          Hospital      @relation(fields: [hospitalId], references: [id], onDelete: Cascade)
+  payerName         String
+  amount            Decimal       @db.Decimal(12, 2)
+  type              PaymentType   @default(MONTHLY)
+  period            String? // "2026-03" — YYYY-MM
+  status            PaymentStatus @default(PAID)
+  paidAt            DateTime      @default(now())
+  note              String?
   // Telegram to'lov uchun qo'shimcha fieldlar
-  employeeCount       Int?                              // To'lov vaqtidagi xodimlar soni
-  validUntil          DateTime?                         // Obuna tugash sanasi
-  telegramPaymentId   String?                           // Telegram charge_id
-  paidByChatId        String?                           // Kim to'ladi (chatId)
-  createdAt           DateTime      @default(now())
-  updatedAt           DateTime      @updatedAt
+  employeeCount     Int? // To'lov vaqtidagi xodimlar soni
+  validUntil        DateTime? // Obuna tugash sanasi
+  telegramPaymentId String? // Telegram charge_id
+  paidByChatId      String? // Kim to'ladi (chatId)
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
 
   @@index([hospitalId, period])
   @@index([hospitalId, validUntil])
@@ -842,27 +974,27 @@ model Payment {
 // ─────────────────────────────────────────────
 
 model LeaveRequest {
-  id         String      @id @default(uuid())
+  id String @id @default(uuid())
 
   employeeId String
-  employee   Employee    @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 
   hospitalId String
-  hospital   Hospital    @relation(fields: [hospitalId], references: [id], onDelete: Cascade)
+  hospital   Hospital @relation(fields: [hospitalId], references: [id], onDelete: Cascade)
 
-  type       LeaveType   @default(VACATION)
-  startDate  DateTime    // Boshlanish sanasi (UTC midnight)
-  endDate    DateTime    // Tugash sanasi (UTC midnight)
-  daysCount  Int         @default(1)  // Kalendar kunlar soni
-  reason     String?     // Sababni izohlash (ixtiyoriy)
+  type      LeaveType @default(VACATION)
+  startDate DateTime // Boshlanish sanasi (UTC midnight)
+  endDate   DateTime // Tugash sanasi (UTC midnight)
+  daysCount Int       @default(1) // Kalendar kunlar soni
+  reason    String? // Sababni izohlash (ixtiyoriy)
 
-  status     LeaveStatus @default(PENDING)
+  status LeaveStatus @default(PENDING)
 
-  reviewedBy String?     // User.id — kim tasdiqladi/rad etdi
-  reviewNote String?     // Direktor izohi
+  reviewedBy String? // User.id — kim tasdiqladi/rad etdi
+  reviewNote String? // Direktor izohi
   reviewedAt DateTime?
 
-  documentUrl String?    // Kasallik uchun hujjat (fayl)
+  documentUrl String? // Kasallik uchun hujjat (fayl)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -874,15 +1006,15 @@ model LeaveRequest {
 
 model HikTerminal {
   id                 String    @id @default(uuid())
-  name               String                         // "Kirish terminali"
-  devIndex           String    @unique              // Gateway UUID
+  name               String // "Kirish terminali"
+  devIndex           String    @unique // Gateway UUID
   hospitalId         String
   password           String?
   hospital           Hospital  @relation(fields: [hospitalId], references: [id])
   isActive           Boolean   @default(true)
-  lastSeenAt         DateTime?                      // Gateway oxirgi marta online ko'rsatgan vaqt
-  offlineSince       DateTime?                      // Uzluksiz offline holat boshlangan vaqt
-  lastOfflineAlertAt DateTime?                      // Shu uzilish uchun ogohlantirish yuborilgan vaqt
+  lastSeenAt         DateTime? // Gateway oxirgi marta online ko'rsatgan vaqt
+  offlineSince       DateTime? // Uzluksiz offline holat boshlangan vaqt
+  lastOfflineAlertAt DateTime? // Shu uzilish uchun ogohlantirish yuborilgan vaqt
   createdAt          DateTime  @default(now())
 }
 
@@ -911,9 +1043,9 @@ model LiveLocation {
 // payroll.approve = false").
 // ─────────────────────────────────────────────
 model UserPermissionOverride {
-  id         String   @id @default(uuid())
+  id         String  @id @default(uuid())
   userId     String
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user       User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   permission String // masalan "payroll.view", "payments.edit" — src/common/permissions.ts dagi katalogga mos
   granted    Boolean // true = standartdan tashqari ruxsat berilgan, false = standartdan tortib olingan
 
@@ -933,15 +1065,15 @@ model UserPermissionOverride {
 // orqali brauzerda amalga oshiriladi, bizning serverimiz faqat NATIJA
 // (pkcs7 imzo va undan olingan token)ni qabul qiladi/saqlaydi.
 model HospitalDidoxCredential {
-  id             String    @id @default(uuid())
-  hospitalId     String    @unique
-  hospital       Hospital  @relation(fields: [hospitalId], references: [id], onDelete: Cascade)
+  id         String   @id @default(uuid())
+  hospitalId String   @unique
+  hospital   Hospital @relation(fields: [hospitalId], references: [id], onDelete: Cascade)
 
-  serialNumber   String    // ЭЦП kalitining seriya raqami (shifoxona buxgalteri/rahbari)
-  authToken      String?   // Didox'dan olingan bearer token
+  serialNumber   String // ЭЦП kalitining seriya raqami (shifoxona buxgalteri/rahbari)
+  authToken      String? // Didox'dan olingan bearer token
   tokenExpiresAt DateTime? // authToken muddati (odatda 24 soat)
-  lastAuthId     String?   // eng oxirgi olingan authId (challenge bosqichi uchun)
+  lastAuthId     String? // eng oxirgi olingan authId (challenge bosqichi uchun)
 
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }

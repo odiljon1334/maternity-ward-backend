@@ -32,7 +32,7 @@ export class AttendanceController {
     @Query('departmentId') departmentId?: string,
     @Query('targetHospitalId') targetHospitalId?: string,
   ) {
-    const hospitalId = targetHospitalId || jwtHospitalId || undefined;
+    const hospitalId = jwtHospitalId || targetHospitalId || undefined;
     return this.service.getDailyAttendance(
       date || new Date().toISOString().slice(0, 10),
       departmentId,

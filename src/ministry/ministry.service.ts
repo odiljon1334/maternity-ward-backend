@@ -244,6 +244,12 @@ export class MinistryService {
               manualDeduction: true,
               manualBonus: true,
               overtimeBonus: true,
+              contractualKpiBonus: true,
+              oneTimeAward: true,
+              disciplinaryFine: true,
+              otherLawfulDeduction: true,
+              advancePaid: true,
+              advanceApplied: true,
             },
           }),
           this.prisma.employee.count({
@@ -263,13 +269,20 @@ export class MinistryService {
           (s, p) =>
             s +
             Number(p.absenceDeduction) +
-            Number(p.lateDeduction) +
             Number(p.earlyLeaveDeduction) +
-            Number(p.manualDeduction),
+            Number(p.manualDeduction) +
+            Number(p.disciplinaryFine) +
+            Number(p.otherLawfulDeduction) +
+            Number(p.advanceApplied),
           0,
         );
         const totalBonuses = payrolls.reduce(
-          (s, p) => s + Number(p.manualBonus) + Number(p.overtimeBonus),
+          (s, p) =>
+            s +
+            Number(p.manualBonus) +
+            Number(p.overtimeBonus) +
+            Number(p.contractualKpiBonus) +
+            Number(p.oneTimeAward),
           0,
         );
 
@@ -411,6 +424,10 @@ export class MinistryService {
           lateDeduction: true,
           earlyLeaveDeduction: true,
           manualDeduction: true,
+          disciplinaryFine: true,
+          otherLawfulDeduction: true,
+          advancePaid: true,
+          advanceApplied: true,
         },
       }),
     ]);
@@ -424,9 +441,11 @@ export class MinistryService {
 
     const monthlyFines =
       Number(monthlyFinesAgg._sum.absenceDeduction ?? 0) +
-      Number(monthlyFinesAgg._sum.lateDeduction ?? 0) +
       Number(monthlyFinesAgg._sum.earlyLeaveDeduction ?? 0) +
-      Number(monthlyFinesAgg._sum.manualDeduction ?? 0);
+      Number(monthlyFinesAgg._sum.manualDeduction ?? 0) +
+      Number(monthlyFinesAgg._sum.disciplinaryFine ?? 0) +
+      Number(monthlyFinesAgg._sum.otherLawfulDeduction ?? 0) +
+      Number(monthlyFinesAgg._sum.advanceApplied ?? 0);
 
     return {
       id: hospital.id,

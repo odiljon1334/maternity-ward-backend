@@ -17,7 +17,7 @@ export class DashboardController {
     @Query('targetHospitalId') targetHospitalId?: string,
   ) {
     // SUPER_ADMIN sends targetHospitalId; others use JWT hospitalId
-    const hospitalId = targetHospitalId || jwtHospitalId || undefined;
+    const hospitalId = jwtHospitalId || targetHospitalId || undefined;
     return this.service.getOverview({ date, hospitalId });
   }
 
@@ -27,7 +27,7 @@ export class DashboardController {
     @Query('days') days?: string,
     @Query('targetHospitalId') targetHospitalId?: string,
   ) {
-    const hospitalId = targetHospitalId || jwtHospitalId || undefined;
+    const hospitalId = jwtHospitalId || targetHospitalId || undefined;
     return this.service.getAttendanceTrend(+(days || 14), hospitalId);
   }
 
@@ -39,7 +39,7 @@ export class DashboardController {
     @Query('targetHospitalId') targetHospitalId?: string,
   ) {
     const now = new Date();
-    const hospitalId = targetHospitalId || jwtHospitalId || undefined;
+    const hospitalId = jwtHospitalId || targetHospitalId || undefined;
     return this.service.getDepartmentStats(
       +(month || now.getMonth() + 1),
       +(year || now.getFullYear()),
@@ -53,7 +53,7 @@ export class DashboardController {
     @Query('limit') limit?: string,
     @Query('targetHospitalId') targetHospitalId?: string,
   ) {
-    const hospitalId = targetHospitalId || jwtHospitalId || undefined;
+    const hospitalId = jwtHospitalId || targetHospitalId || undefined;
     return this.service.getTopLateEmployees(+(limit || 5), hospitalId);
   }
 
@@ -65,7 +65,7 @@ export class DashboardController {
     @Query('months') months?: string,
     @Query('targetHospitalId') targetHospitalId?: string,
   ) {
-    const hospitalId = targetHospitalId || jwtHospitalId || undefined;
+    const hospitalId = jwtHospitalId || targetHospitalId || undefined;
     return this.service.getMonthlyAttendanceSummary(+(months || 6), hospitalId);
   }
 
@@ -78,7 +78,7 @@ export class DashboardController {
     @Query('targetHospitalId') targetHospitalId?: string,
   ) {
     const now = new Date();
-    const hospitalId = targetHospitalId || jwtHospitalId || undefined;
+    const hospitalId = jwtHospitalId || targetHospitalId || undefined;
     return this.service.getEmployeePerformanceRanking(
       +(month || now.getMonth() + 1),
       +(year || now.getFullYear()),
@@ -93,7 +93,7 @@ export class DashboardController {
     @Query('months') months?: string,
     @Query('targetHospitalId') targetHospitalId?: string,
   ) {
-    const hospitalId = targetHospitalId || jwtHospitalId || undefined;
+    const hospitalId = jwtHospitalId || targetHospitalId || undefined;
     return this.service.getPayrollTrend(+(months || 6), hospitalId);
   }
 
@@ -103,7 +103,7 @@ export class DashboardController {
     @Query('year') year?: string,
     @Query('targetHospitalId') targetHospitalId?: string,
   ) {
-    const hospitalId = targetHospitalId || jwtHospitalId || undefined;
+    const hospitalId = jwtHospitalId || targetHospitalId || undefined;
     return this.service.getLeaveStats(
       +(year || new Date().getFullYear()),
       hospitalId,
@@ -116,7 +116,7 @@ export class DashboardController {
     @Query('days') days?: string,
     @Query('targetHospitalId') targetHospitalId?: string,
   ) {
-    const hospitalId = targetHospitalId || jwtHospitalId || undefined;
+    const hospitalId = jwtHospitalId || targetHospitalId || undefined;
     return this.service.getCheckinHeatmap(+(days || 30), hospitalId);
   }
 }

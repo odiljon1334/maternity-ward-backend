@@ -1354,13 +1354,10 @@ export class TelegramService implements OnModuleInit {
 
     if (stats.length) {
       const list = stats
-        .map((s, i) => {
-          const deduct =
-            Number(s.deductionAmount) > 0
-              ? ` | 💰 -${Math.round(Number(s.deductionAmount)).toLocaleString()} so'm`
-              : '';
-          return `${i + 1}. <b>${s.employee.fullName}</b>\n   ⏱ ${s.totalLateMin} min kech | 🚶 ${s.totalEarlyMin} min erta${deduct}`;
-        })
+        .map(
+          (s, i) =>
+            `${i + 1}. <b>${s.employee.fullName}</b>\n   ⏱ ${s.totalLateMin} min kech | 🚶 ${s.totalEarlyMin} min erta`,
+        )
         .join('\n\n');
       return `📈 <b>Haftalik hisobot</b>\n\n${list}`;
     }

@@ -77,7 +77,7 @@ export class PayrollController {
     @Query('departmentId') departmentId?: string,
   ) {
     const now = new Date();
-    const hospitalId = targetHospitalId || jwtHospitalId || undefined;
+    const hospitalId = jwtHospitalId || targetHospitalId || undefined;
     return this.service.findAll(
       +month || now.getMonth() + 1,
       +year || now.getFullYear(),
@@ -98,7 +98,7 @@ export class PayrollController {
     @Body() body: { month: number; year: number; departmentId?: string },
     @Query('targetHospitalId') targetHospitalId?: string,
   ) {
-    const hospitalId = targetHospitalId || jwtHospitalId || undefined;
+    const hospitalId = jwtHospitalId || targetHospitalId || undefined;
     return this.service.generateMonthlyPayroll(
       body.month,
       body.year,
@@ -126,7 +126,7 @@ export class PayrollController {
     const now = new Date();
     const m = +month || now.getMonth() + 1;
     const y = +year || now.getFullYear();
-    const hospitalId = targetHospitalId || jwtHospitalId || undefined;
+    const hospitalId = jwtHospitalId || targetHospitalId || undefined;
     const buffer = await this.service.exportExcel(
       m,
       y,

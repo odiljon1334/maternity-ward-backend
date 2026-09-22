@@ -429,20 +429,31 @@ export class DashboardService {
           lateDeduction: true,
           earlyLeaveDeduction: true,
           manualDeduction: true,
+          disciplinaryFine: true,
+          otherLawfulDeduction: true,
+          advancePaid: true,
+          advanceApplied: true,
           overtimeBonus: true,
           manualBonus: true,
+          contractualKpiBonus: true,
+          oneTimeAward: true,
         },
         _count: { _all: true },
       });
 
       const totalDeductions =
         Number(agg._sum.absenceDeduction ?? 0) +
-        Number(agg._sum.lateDeduction ?? 0) +
         Number(agg._sum.earlyLeaveDeduction ?? 0) +
-        Number(agg._sum.manualDeduction ?? 0);
+        Number(agg._sum.manualDeduction ?? 0) +
+        Number(agg._sum.disciplinaryFine ?? 0) +
+        Number(agg._sum.otherLawfulDeduction ?? 0) +
+        Number(agg._sum.advanceApplied ?? 0);
 
       const totalBonuses =
-        Number(agg._sum.overtimeBonus ?? 0) + Number(agg._sum.manualBonus ?? 0);
+        Number(agg._sum.overtimeBonus ?? 0) +
+        Number(agg._sum.manualBonus ?? 0) +
+        Number(agg._sum.contractualKpiBonus ?? 0) +
+        Number(agg._sum.oneTimeAward ?? 0);
 
       result.push({
         month: `${y}-${String(m).padStart(2, '0')}`,

@@ -35,6 +35,7 @@ import { DidoxModule } from './didox/didox.module';
 import { PublicModule } from './public/public.module';
 import { SupportBotModule } from './support-bot/support-bot.module';
 import { TrialLeadsModule } from './trial-leads/trial-leads.module';
+import { CompensationModule } from './compensation/compensation.module';
 
 @Module({
   imports: [
@@ -89,6 +90,7 @@ import { TrialLeadsModule } from './trial-leads/trial-leads.module';
     LocationModule,
     UsersModule,
     DidoxModule,
+    CompensationModule,
   ],
   providers: [],
 })
