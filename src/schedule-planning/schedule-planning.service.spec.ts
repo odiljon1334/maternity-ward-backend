@@ -26,6 +26,8 @@ describe('SchedulePlanningService', () => {
         }),
         findUnique: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockImplementation(({ data }) => data),
+        update: jest.fn().mockImplementation(({ data }) => data),
+        delete: jest.fn().mockResolvedValue({ id: 'post-1' }),
       },
       monthlySchedulePlan: {
         findMany: jest.fn().mockResolvedValue([]),
@@ -37,6 +39,20 @@ describe('SchedulePlanningService', () => {
           id: 'plan-1',
           ...data,
         })),
+      },
+      monthlyScheduleEntry: {
+        findFirst: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      employee: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      user: {
+        findUnique: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      scheduleChangeRequest: {
+        findMany: jest.fn().mockResolvedValue([]),
       },
     };
 
@@ -103,5 +119,54 @@ describe('SchedulePlanningService', () => {
 
     expect(result.version).toBe(1);
     expect(result.targetCoverageHours).toBe(720);
+  });
+
+  it('archives a post without deleting its schedule history', async () => {
+    const { prisma, service } = setup(SchedulePlanningMode.POST_COVERAGE);
+    prisma.schedulePost.findFirst.mockResolvedValue({ id: 'post-1' });
+
+    await service.setPostStatus('hospital-1', 'post-1', false);
+
+    expect(prisma.schedulePost.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'post-1' },
+        data: { isActive: false },
+      }),
+    );
+  });
+
+  it('does not delete a post that already has plans', async () => {
+    const { prisma, service } = setup(SchedulePlanningMode.POST_COVERAGE);
+    prisma.schedulePost.findFirst.mockResolvedValue({
+      id: 'post-1',
+      _count: { plans: 1 },
+    });
+
+    await expect(
+      service.removePost('hospital-1', 'post-1'),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.schedulePost.delete).not.toHaveBeenCalled();
+  });
+
+  it('does not expose another employee shift-change options', async () => {
+    const { prisma, service } = setup(SchedulePlanningMode.POST_COVERAGE);
+    prisma.monthlyScheduleEntry.findFirst.mockResolvedValue({
+      id: 'entry-1',
+      employeeId: 'employee-2',
+      entryType: 'WORKING',
+      plan: { status: 'APPROVED' },
+      employee: {
+        id: 'employee-2',
+        userId: 'user-2',
+        departmentId: 'department-1',
+        fullName: 'Boshqa xodim',
+      },
+      shift: { id: 'shift-1' },
+    });
+
+    await expect(
+      service.getMyChangeOptions('hospital-1', 'user-1', 'entry-1'),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.employee.findMany).not.toHaveBeenCalled();
   });
 });

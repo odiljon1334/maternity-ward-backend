@@ -3,9 +3,11 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import {
   MonthlySchedulePlanStatus,
+  NotificationType,
   Prisma,
   ScheduleChangeStatus,
   ScheduleChangeType,
@@ -25,6 +27,7 @@ import {
   splitIntervalByCalendarDate,
 } from './schedule-planning-calculator';
 import { DateUtil } from '../common/utils/date.util';
+import { NotificationsService } from '../notifications/notifications.service';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
@@ -46,7 +49,10 @@ export function calculateMonthlyCoverageMinutes(
 
 @Injectable()
 export class SchedulePlanningService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly notifications?: NotificationsService,
+  ) {}
 
   async getConfig(hospitalId: string) {
     const hospital = await this.prisma.hospital.findUnique({
@@ -61,16 +67,53 @@ export class SchedulePlanningService {
     };
   }
 
-  async listPosts(hospitalId: string, departmentId?: string) {
+  async listPosts(
+    hospitalId: string,
+    departmentId?: string,
+    includeArchived = false,
+  ) {
     await this.requirePostCoverage(hospitalId);
     return this.prisma.schedulePost.findMany({
       where: {
         hospitalId,
         ...(departmentId && { departmentId }),
+        ...(!includeArchived && { isActive: true }),
       },
       include: { department: true },
       orderBy: [{ department: { name: 'asc' } }, { name: 'asc' }],
     });
+  }
+
+  async setPostStatus(hospitalId: string, postId: string, isActive: boolean) {
+    await this.requirePostCoverage(hospitalId);
+    const post = await this.prisma.schedulePost.findFirst({
+      where: { id: postId, hospitalId },
+      select: { id: true },
+    });
+    if (!post) throw new NotFoundException('Post topilmadi');
+
+    return this.prisma.schedulePost.update({
+      where: { id: post.id },
+      data: { isActive },
+      include: { department: true },
+    });
+  }
+
+  async removePost(hospitalId: string, postId: string) {
+    await this.requirePostCoverage(hospitalId);
+    const post = await this.prisma.schedulePost.findFirst({
+      where: { id: postId, hospitalId },
+      select: { id: true, _count: { select: { plans: true } } },
+    });
+    if (!post) throw new NotFoundException('Post topilmadi');
+    if (post._count.plans > 0) {
+      throw new BadRequestException(
+        'Bu postda grafik tarixi mavjud. Uni o‘chirish o‘rniga arxivlang.',
+      );
+    }
+
+    await this.prisma.schedulePost.delete({ where: { id: post.id } });
+    return { deleted: true };
   }
 
   async createPost(hospitalId: string, dto: CreateSchedulePostDto) {
@@ -801,7 +844,7 @@ export class SchedulePlanningService {
       where: { id: dto.primaryEntryId, hospitalId },
       include: {
         plan: true,
-        employee: { select: { id: true, userId: true } },
+        employee: { select: { id: true, userId: true, departmentId: true } },
       },
     });
     if (
@@ -820,6 +863,13 @@ export class SchedulePlanningService {
     ) {
       throw new BadRequestException(
         'Faqat ish smenasi o‘rnini bosiladi yoki almashtiriladi',
+      );
+    }
+    if (
+      dayjs(primary.workDate).tz(TZ).isBefore(dayjs().tz(TZ).startOf('day'))
+    ) {
+      throw new BadRequestException(
+        'O‘tib ketgan smenani o‘zgartirib bo‘lmaydi',
       );
     }
 
@@ -855,7 +905,11 @@ export class SchedulePlanningService {
         );
       }
       counterpart = await this.prisma.monthlyScheduleEntry.findFirst({
-        where: { id: dto.counterpartEntryId, hospitalId },
+        where: {
+          id: dto.counterpartEntryId,
+          hospitalId,
+          planId: primary.planId,
+        },
         include: { plan: true, employee: true },
       });
       if (
@@ -863,6 +917,9 @@ export class SchedulePlanningService {
         counterpart.plan.status !== MonthlySchedulePlanStatus.APPROVED ||
         counterpart.entryType !== SchedulePlanEntryType.WORKING ||
         !counterpart.shiftId ||
+        dayjs(counterpart.workDate)
+          .tz(TZ)
+          .isBefore(dayjs().tz(TZ).startOf('day')) ||
         counterpart.employeeId === primary.employeeId
       ) {
         throw new BadRequestException('Almashiladigan smena noto‘g‘ri');
@@ -898,15 +955,20 @@ export class SchedulePlanningService {
 
     if (replacementEmployeeId) {
       const replacement = await this.prisma.employee.findFirst({
-        where: { id: replacementEmployeeId, hospitalId, firedAt: null },
-        select: { id: true },
+        where: {
+          id: replacementEmployeeId,
+          hospitalId,
+          departmentId: primary.employee.departmentId,
+          firedAt: null,
+        },
+        select: { id: true, userId: true },
       });
       if (!replacement || replacement.id === primary.employeeId) {
         throw new BadRequestException('O‘rnini bosadigan xodim noto‘g‘ri');
       }
     }
 
-    return this.prisma.scheduleChangeRequest.create({
+    const created = await this.prisma.scheduleChangeRequest.create({
       data: {
         hospitalId,
         planId: primary.planId,
@@ -924,6 +986,154 @@ export class SchedulePlanningService {
         replacementEmployee: true,
       },
     });
+
+    const targetUserId =
+      dto.type === ScheduleChangeType.SWAP
+        ? counterpart?.employee?.userId
+        : created.replacementEmployee?.userId;
+    const supervisors = await this.prisma.user.findMany({
+      where: {
+        hospitalId,
+        role: { in: [UserRole.DIRECTOR, UserRole.ADMIN] },
+        status: 'ACTIVE',
+      },
+      select: { id: true },
+    });
+    await this.notifications?.createForUsers(
+      [targetUserId, ...supervisors.map((user) => user.id)].filter(
+        (id): id is string => Boolean(id),
+      ),
+      {
+        type: NotificationType.SYSTEM,
+        title: 'Smena o‘zgarishi so‘rovi',
+        message: `${created.primaryEntry.employee.fullName}: ${created.reason}`,
+        metadata: { scheduleChangeRequestId: created.id },
+      },
+    );
+    await this.notifications?.sendWorkflowTelegram(
+      hospitalId,
+      [targetUserId].filter((id): id is string => Boolean(id)),
+      'Yangi smena almashish yoki o‘rinbosarlik so‘rovi yaratildi. Tafsilotlarni StaffPlusPRO ilovasida ko‘ring.',
+    );
+
+    return created;
+  }
+
+  async listMyChangeRequests(hospitalId: string, userId: string) {
+    await this.requirePostCoverage(hospitalId);
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { employee: { select: { id: true } } },
+    });
+    const employeeId = user?.employee?.id;
+    if (!employeeId) {
+      throw new NotFoundException('Xodim profili topilmadi');
+    }
+
+    const requests = await this.prisma.scheduleChangeRequest.findMany({
+      where: {
+        hospitalId,
+        OR: [
+          { requestedById: userId },
+          { replacementEmployeeId: employeeId },
+          { primaryEntry: { employeeId } },
+          { counterpartEntry: { employeeId } },
+        ],
+      },
+      include: {
+        primaryEntry: { include: { employee: true, shift: true } },
+        counterpartEntry: { include: { employee: true, shift: true } },
+        replacementEmployee: true,
+        requestedBy: { select: { id: true, username: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+    });
+
+    return requests.map((request) => ({
+      ...request,
+      canAccept:
+        request.status === ScheduleChangeStatus.REQUESTED &&
+        (request.type === ScheduleChangeType.SWAP
+          ? request.counterpartEntry?.employeeId === employeeId
+          : request.type === ScheduleChangeType.SUBSTITUTION
+            ? request.replacementEmployeeId === employeeId
+            : false),
+    }));
+  }
+
+  async getMyChangeOptions(
+    hospitalId: string,
+    userId: string,
+    entryId: string,
+  ) {
+    await this.requirePostCoverage(hospitalId);
+    const primary = await this.prisma.monthlyScheduleEntry.findFirst({
+      where: { id: entryId, hospitalId },
+      include: {
+        plan: true,
+        employee: {
+          select: {
+            id: true,
+            userId: true,
+            departmentId: true,
+            fullName: true,
+          },
+        },
+        shift: true,
+      },
+    });
+    if (!primary || primary.employee.userId !== userId) {
+      throw new BadRequestException('Faqat o‘z smenangizni tanlang');
+    }
+    if (
+      primary.plan.status !== MonthlySchedulePlanStatus.APPROVED ||
+      primary.entryType !== SchedulePlanEntryType.WORKING
+    ) {
+      throw new BadRequestException(
+        'Faqat tasdiqlangan ish smenasi uchun so‘rov yuboriladi',
+      );
+    }
+    if (
+      dayjs(primary.workDate).tz(TZ).isBefore(dayjs().tz(TZ).startOf('day'))
+    ) {
+      throw new BadRequestException(
+        'O‘tib ketgan smenani o‘zgartirib bo‘lmaydi',
+      );
+    }
+
+    const [replacementEmployees, counterpartEntries] = await Promise.all([
+      this.prisma.employee.findMany({
+        where: {
+          hospitalId,
+          departmentId: primary.employee.departmentId,
+          firedAt: null,
+          id: { not: primary.employeeId },
+          userId: { not: null },
+        },
+        select: {
+          id: true,
+          fullName: true,
+          position: { select: { name: true } },
+        },
+        orderBy: { fullName: 'asc' },
+      }),
+      this.prisma.monthlyScheduleEntry.findMany({
+        where: {
+          planId: primary.planId,
+          employeeId: { not: primary.employeeId },
+          entryType: SchedulePlanEntryType.WORKING,
+          workDate: { gte: DateUtil.startOfDay(new Date()) },
+        },
+        include: {
+          employee: { select: { id: true, fullName: true } },
+          shift: true,
+        },
+        orderBy: [{ workDate: 'asc' }, { employee: { fullName: 'asc' } }],
+      }),
+    ]);
+
+    return { primary, replacementEmployees, counterpartEntries };
   }
 
   async acceptChangeRequest(
@@ -954,7 +1164,7 @@ export class SchedulePlanningService {
         'Bu smena o‘zgarishini faqat tanlangan xodim qabul qiladi',
       );
     }
-    return this.prisma.scheduleChangeRequest.update({
+    const updated = await this.prisma.scheduleChangeRequest.update({
       where: { id: request.id },
       data: {
         status: ScheduleChangeStatus.ACCEPTED,
@@ -962,6 +1172,30 @@ export class SchedulePlanningService {
         acceptedAt: new Date(),
       },
     });
+    const supervisors = await this.prisma.user.findMany({
+      where: {
+        hospitalId,
+        role: { in: [UserRole.DIRECTOR, UserRole.ADMIN] },
+        status: 'ACTIVE',
+      },
+      select: { id: true },
+    });
+    await this.notifications?.createForUsers(
+      [request.requestedById, ...supervisors.map((user) => user.id)],
+      {
+        type: NotificationType.SYSTEM,
+        title: 'Smena so‘rovi qabul qilindi',
+        message:
+          'Tanlangan xodim so‘rovni qabul qildi. Rahbar tasdig‘i kutilmoqda.',
+        metadata: { scheduleChangeRequestId: request.id },
+      },
+    );
+    await this.notifications?.sendWorkflowTelegram(
+      hospitalId,
+      [request.requestedById],
+      'Tanlangan xodim so‘rovni qabul qildi. Endi rahbar tasdig‘i kutilmoqda.',
+    );
+    return updated;
   }
 
   async approveChangeRequest(
@@ -974,7 +1208,11 @@ export class SchedulePlanningService {
       where: { id: requestId, hospitalId },
       include: {
         primaryEntry: true,
-        counterpartEntry: true,
+        counterpartEntry: {
+          include: { employee: { select: { userId: true } } },
+        },
+        replacementEmployee: { select: { userId: true } },
+        requestedBy: { select: { role: true } },
       },
     });
     if (!request) throw new NotFoundException('Smena o‘zgarishi topilmadi');
@@ -986,8 +1224,17 @@ export class SchedulePlanningService {
         'So‘rov holati rahbar tasdig‘i uchun tayyor emas',
       );
     }
+    if (
+      request.requestedBy.role === UserRole.EMPLOYEE &&
+      request.type !== ScheduleChangeType.ABSENCE &&
+      request.status !== ScheduleChangeStatus.ACCEPTED
+    ) {
+      throw new BadRequestException(
+        'Avval tanlangan xodim smena o‘zgarishini qabul qilishi kerak',
+      );
+    }
 
-    return this.prisma.$transaction(async (tx) => {
+    const updated = await this.prisma.$transaction(async (tx) => {
       if (request.type === ScheduleChangeType.SWAP) {
         if (!request.counterpartEntry) {
           throw new BadRequestException('Ikkinchi smena topilmadi');
@@ -1011,6 +1258,30 @@ export class SchedulePlanningService {
         },
       });
     });
+    await this.notifications?.createForUsers(
+      [
+        request.requestedById,
+        request.replacementEmployee?.userId,
+        request.counterpartEntry?.employee?.userId,
+      ].filter((id): id is string => Boolean(id)),
+      {
+        type: NotificationType.SYSTEM,
+        title: 'Smena o‘zgarishi tasdiqlandi',
+        message:
+          'Rahbar smena o‘zgarishini tasdiqladi. Amaldagi grafik yangilandi.',
+        metadata: { scheduleChangeRequestId: request.id },
+      },
+    );
+    await this.notifications?.sendWorkflowTelegram(
+      hospitalId,
+      [
+        request.requestedById,
+        request.replacementEmployee?.userId,
+        request.counterpartEntry?.employee?.userId,
+      ].filter((id): id is string => Boolean(id)),
+      'Rahbar smena o‘zgarishini tasdiqladi. Amaldagi ish grafigi yangilandi.',
+    );
+    return updated;
   }
 
   async rejectChangeRequest(
@@ -1022,7 +1293,12 @@ export class SchedulePlanningService {
     await this.requirePostCoverage(hospitalId);
     const request = await this.prisma.scheduleChangeRequest.findFirst({
       where: { id: requestId, hospitalId },
-      select: { id: true, status: true },
+      include: {
+        replacementEmployee: { select: { userId: true } },
+        counterpartEntry: {
+          include: { employee: { select: { userId: true } } },
+        },
+      },
     });
     if (!request) throw new NotFoundException('Smena o‘zgarishi topilmadi');
     if (
@@ -1035,7 +1311,7 @@ export class SchedulePlanningService {
     ) {
       throw new BadRequestException('Bu so‘rovni rad etib bo‘lmaydi');
     }
-    return this.prisma.scheduleChangeRequest.update({
+    const updated = await this.prisma.scheduleChangeRequest.update({
       where: { id: request.id },
       data: {
         status: ScheduleChangeStatus.REJECTED,
@@ -1044,6 +1320,29 @@ export class SchedulePlanningService {
         decisionNote: reason.trim(),
       },
     });
+    await this.notifications?.createForUsers(
+      [
+        request.requestedById,
+        request.replacementEmployee?.userId,
+        request.counterpartEntry?.employee?.userId,
+      ].filter((id): id is string => Boolean(id)),
+      {
+        type: NotificationType.SYSTEM,
+        title: 'Smena o‘zgarishi rad etildi',
+        message: `Rahbar so‘rovni rad etdi: ${reason.trim()}`,
+        metadata: { scheduleChangeRequestId: request.id },
+      },
+    );
+    await this.notifications?.sendWorkflowTelegram(
+      hospitalId,
+      [
+        request.requestedById,
+        request.replacementEmployee?.userId,
+        request.counterpartEntry?.employee?.userId,
+      ].filter((id): id is string => Boolean(id)),
+      'Rahbar smena o‘zgarishi so‘rovini rad etdi. Tafsilotlarni StaffPlusPRO ilovasida ko‘ring.',
+    );
+    return updated;
   }
 
   private async getPlanForWorkflow(hospitalId: string, planId: string) {

@@ -305,7 +305,14 @@ export class SchedulesService {
 
     const existingList = await this.prisma.schedule.findMany({
       where: { employeeId, date: { in: entries.map((e) => e.date) } },
-      select: { id: true, date: true, shiftId: true, status: true, note: true },
+      select: {
+        id: true,
+        date: true,
+        shiftId: true,
+        status: true,
+        note: true,
+        sourcePlanId: true,
+      },
     });
 
     const existingByTime = new Map(
@@ -352,6 +359,12 @@ export class SchedulesService {
         data.note = entry.note;
       }
       if (Object.keys(data).length === 0) continue; // o'zgarish yo'q — DB ga tegmaymiz
+
+      if (existing.sourcePlanId) {
+        throw new BadRequestException(
+          'Tasdiqlangan post rejasidan kelgan grafikni bu yerdan o‘zgartirib bo‘lmaydi. Post rejasidagi o‘zgarish jarayonidan foydalaning.',
+        );
+      }
 
       const key = JSON.stringify(data);
       const group = updateGroups.get(key);
@@ -673,6 +686,11 @@ export class SchedulesService {
       where: { id, ...(hospitalId && { employee: { hospitalId } }) },
     });
     if (!entry) throw new NotFoundException('Grafik yozuvi topilmadi');
+    if (entry.sourcePlanId) {
+      throw new BadRequestException(
+        'Tasdiqlangan post rejasidan kelgan grafikni bu yerdan o‘zgartirib bo‘lmaydi. Post rejasidagi o‘zgarish jarayonidan foydalaning.',
+      );
+    }
     return this.prisma.schedule.update({ where: { id }, data });
   }
 

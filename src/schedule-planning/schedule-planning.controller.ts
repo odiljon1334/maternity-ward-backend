@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -48,7 +49,7 @@ export class SchedulePlanningController {
   constructor(private readonly service: SchedulePlanningService) {}
 
   @Get('config')
-  @Roles(...READ_ROLES)
+  @Roles(...READ_ROLES, UserRole.EMPLOYEE)
   getConfig(
     @CurrentUser('hospitalId') hospitalId: string | null,
     @Query('targetHospitalId') targetHospitalId?: string,
@@ -64,10 +65,12 @@ export class SchedulePlanningController {
     @CurrentUser('hospitalId') hospitalId: string | null,
     @Query('targetHospitalId') targetHospitalId?: string,
     @Query('departmentId') departmentId?: string,
+    @Query('includeArchived') includeArchived?: string,
   ) {
     return this.service.listPosts(
       this.resolveHospitalId(hospitalId, targetHospitalId),
       departmentId,
+      includeArchived === 'true',
     );
   }
 
@@ -81,6 +84,37 @@ export class SchedulePlanningController {
     return this.service.createPost(
       this.resolveHospitalId(hospitalId, targetHospitalId),
       dto,
+    );
+  }
+
+  @Patch('posts/:id/status')
+  @Roles(...WRITE_ROLES)
+  setPostStatus(
+    @Param('id') id: string,
+    @CurrentUser('hospitalId') hospitalId: string | null,
+    @Query('targetHospitalId') targetHospitalId: string | undefined,
+    @Body('isActive') isActive: boolean,
+  ) {
+    if (typeof isActive !== 'boolean') {
+      throw new BadRequestException('isActive boolean bo‘lishi kerak');
+    }
+    return this.service.setPostStatus(
+      this.resolveHospitalId(hospitalId, targetHospitalId),
+      id,
+      isActive,
+    );
+  }
+
+  @Delete('posts/:id')
+  @Roles(...WRITE_ROLES)
+  removePost(
+    @Param('id') id: string,
+    @CurrentUser('hospitalId') hospitalId: string | null,
+    @Query('targetHospitalId') targetHospitalId?: string,
+  ) {
+    return this.service.removePost(
+      this.resolveHospitalId(hospitalId, targetHospitalId),
+      id,
     );
   }
 
@@ -231,6 +265,33 @@ export class SchedulePlanningController {
       userId,
       role,
       dto,
+    );
+  }
+
+  @Get('changes/my')
+  @Roles(...CHANGE_REQUEST_ROLES)
+  listMyChangeRequests(
+    @CurrentUser('hospitalId') hospitalId: string | null,
+    @CurrentUser('sub') userId: string,
+    @Query('targetHospitalId') targetHospitalId?: string,
+  ) {
+    return this.service.listMyChangeRequests(
+      this.resolveHospitalId(hospitalId, targetHospitalId),
+      userId,
+    );
+  }
+
+  @Get('changes/options/:entryId')
+  @Roles(UserRole.EMPLOYEE)
+  getMyChangeOptions(
+    @Param('entryId') entryId: string,
+    @CurrentUser('hospitalId') hospitalId: string | null,
+    @CurrentUser('sub') userId: string,
+  ) {
+    return this.service.getMyChangeOptions(
+      this.resolveHospitalId(hospitalId),
+      userId,
+      entryId,
     );
   }
 

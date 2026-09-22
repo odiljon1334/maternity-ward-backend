@@ -78,7 +78,39 @@ export class NotificationsService {
     });
   }
 
-  async remove(id: string) {
+  async remove(id: string, scope: NotificationScope) {
+    const notification = await this.prisma.notification.findUnique({
+      where: { id },
+      select: { id: true, userId: true, hospitalId: true },
+    });
+    if (!notification) throw new NotFoundException('Notification topilmadi');
+
+    if (scope.role === UserRole.ASSISTANT_ADMIN) {
+      const assignments = await this.prisma.hospitalAssistant.findMany({
+        where: { userId: scope.userId },
+        select: { hospitalId: true },
+      });
+      const allowedIds = new Set(
+        assignments.map((assignment) => assignment.hospitalId),
+      );
+      let allowed = Boolean(
+        notification.hospitalId && allowedIds.has(notification.hospitalId),
+      );
+      if (!allowed && notification.userId) {
+        const owner = await this.prisma.user.findUnique({
+          where: { id: notification.userId },
+          select: { hospitalId: true },
+        });
+        allowed = Boolean(
+          owner?.hospitalId && allowedIds.has(owner.hospitalId),
+        );
+      }
+      if (!allowed) {
+        throw new ForbiddenException(
+          'Bu bildirishnoma sizga biriktirilgan muassasaga tegishli emas',
+        );
+      }
+    }
     return this.prisma.notification.delete({ where: { id } });
   }
 
@@ -112,6 +144,48 @@ export class NotificationsService {
     });
   }
 
+  /** Xodimlarning shaxsiy Telegram'i va muassasa obunachilariga workflow xabari. */
+  async sendWorkflowTelegram(
+    hospitalId: string,
+    userIds: string[],
+    message: string,
+  ) {
+    const uniqueUserIds = [...new Set(userIds)];
+    const [employees, subscriptions] = await Promise.all([
+      uniqueUserIds.length
+        ? this.prisma.employee.findMany({
+            where: {
+              userId: { in: uniqueUserIds },
+              telegramChatId: { not: null },
+            },
+            select: { telegramChatId: true },
+          })
+        : [],
+      this.prisma.telegramSubscription.findMany({
+        where: { hospitalId, isActive: true },
+        select: { chatId: true },
+      }),
+    ]);
+    const chatIds = [
+      ...employees.map((employee) => employee.telegramChatId),
+      ...subscriptions.map((subscription) => subscription.chatId),
+    ].filter((chatId): chatId is string => Boolean(chatId));
+
+    let sentCount = 0;
+    for (const chatId of [...new Set(chatIds)]) {
+      try {
+        await this.telegram.sendToChat(
+          chatId,
+          `🔄 <b>Smena o‘zgarishi</b>\n\n${message}`,
+        );
+        sentCount++;
+      } catch {
+        // Telegram vaqtincha ishlamasa, in-app notification saqlanib qoladi.
+      }
+    }
+    return { sentCount };
+  }
+
   private assertVisible(
     notif: { userId: string | null; hospitalId: string | null },
     scope: NotificationScope,
@@ -138,8 +212,32 @@ export class NotificationsService {
    * SUPER_ADMIN tomonidan Telegram xabar yuborish
    * hospitalIds: konket ID lar | 'all' — hamma kasalxonalar
    */
-  async sendTelegram(data: { hospitalIds: string[] | 'all'; message: string }) {
-    const { hospitalIds, message } = data;
+  async sendTelegram(
+    data: { hospitalIds: string[] | 'all'; message: string },
+    actor: { userId: string; role: UserRole },
+  ) {
+    let { hospitalIds } = data;
+    const { message } = data;
+
+    if (actor.role === UserRole.ASSISTANT_ADMIN) {
+      const assignments = await this.prisma.hospitalAssistant.findMany({
+        where: { userId: actor.userId },
+        select: { hospitalId: true },
+      });
+      const allowedIds = assignments.map((assignment) => assignment.hospitalId);
+      if (!allowedIds.length) {
+        throw new ForbiddenException(
+          'Sizga hali birorta muassasa biriktirilmagan',
+        );
+      }
+      if (hospitalIds === 'all') {
+        hospitalIds = allowedIds;
+      } else if (hospitalIds.some((id) => !allowedIds.includes(id))) {
+        throw new ForbiddenException(
+          'Xabar faqat sizga biriktirilgan muassasalarga yuboriladi',
+        );
+      }
+    }
 
     let subs: { chatId: string; hospitalId: string | null }[];
 
@@ -178,7 +276,7 @@ export class NotificationsService {
       type: NotificationType.SYSTEM,
       title: 'Telegram xabar yuborildi',
       message: `${sentCount} ta direktorga: "${message.slice(0, 80)}${message.length > 80 ? '...' : ''}"`,
-      userId: null,
+      userId: actor.role === UserRole.ASSISTANT_ADMIN ? actor.userId : null,
       hospitalId: null,
     });
 

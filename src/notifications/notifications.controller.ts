@@ -83,18 +83,30 @@ export class NotificationsController {
   @Delete(':id')
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN, UserRole.ASSISTANT_ADMIN)
-  remove(@Param('id') id: string) {
-    return this.service.remove(id);
+  remove(
+    @Param('id') id: string,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('hospitalId') hospitalId: string | null,
+    @CurrentUser('role') role: UserRole,
+  ) {
+    return this.service.remove(id, { userId, hospitalId, role });
   }
 
   // Telegram broadcast — faqat SUPER_ADMIN/ASSISTANT_ADMIN
   @Post('send-telegram')
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN, UserRole.ASSISTANT_ADMIN)
-  sendTelegram(@Body() dto: SendTelegramDto) {
-    return this.service.sendTelegram({
-      hospitalIds: dto.hospitalIds || 'all',
-      message: dto.message,
-    });
+  sendTelegram(
+    @Body() dto: SendTelegramDto,
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('role') role: UserRole,
+  ) {
+    return this.service.sendTelegram(
+      {
+        hospitalIds: dto.hospitalIds || 'all',
+        message: dto.message,
+      },
+      { userId, role },
+    );
   }
 }

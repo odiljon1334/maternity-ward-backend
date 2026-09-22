@@ -1,4 +1,5 @@
 import { SchedulesService } from './schedules.service';
+import { BadRequestException } from '@nestjs/common';
 
 describe('SchedulesService monthly pagination filters', () => {
   function setup() {
@@ -66,5 +67,65 @@ describe('SchedulesService monthly pagination filters', () => {
       firedAt: null,
       hospitalId: 'hospital-1',
     });
+  });
+
+  it('blocks direct edits for schedules published from a post plan', async () => {
+    const prisma = {
+      schedule: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'schedule-1',
+          sourcePlanId: 'plan-1',
+        }),
+        update: jest.fn(),
+      },
+    };
+    const service = new SchedulesService(prisma as never);
+
+    await expect(
+      service.updateEntry('schedule-1', { status: 'DAY_OFF' }, 'hospital-1'),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.schedule.update).not.toHaveBeenCalled();
+  });
+
+  it('blocks bulk changes that would overwrite a post-plan schedule', async () => {
+    const prisma = {
+      employee: {
+        findMany: jest.fn().mockResolvedValue([{ id: 'employee-1' }]),
+      },
+      schedule: {
+        findMany: jest.fn().mockImplementation(({ where }) =>
+          Promise.resolve([
+            {
+              id: 'schedule-1',
+              date: where.date.in[0],
+              shiftId: 'shift-1',
+              status: 'WORKING',
+              note: null,
+              sourcePlanId: 'plan-1',
+            },
+          ]),
+        ),
+        createMany: jest.fn(),
+        updateMany: jest.fn(),
+      },
+    };
+    const service = new SchedulesService(prisma as never);
+
+    await expect(
+      service.bulkManual(
+        {
+          employeeId: 'employee-1',
+          entries: [
+            {
+              date: '2026-09-01',
+              shiftId: 'shift-2',
+              status: 'WORKING',
+            },
+          ],
+        },
+        'hospital-1',
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.schedule.updateMany).not.toHaveBeenCalled();
   });
 });
