@@ -440,6 +440,42 @@ export class CronService {
   }
 
   /**
+   * 23:50 da check-out qilinmagan kunduzgi smenalarni grafik tugash vaqtida
+   * avtomatik yopadi va muassasa direktorini ogohlantiradi.
+   */
+  @Cron('50 23 * * *', { timeZone: TZ })
+  async autoCloseMissingCheckoutsCron() {
+    try {
+      const closed = await this.attendanceService.autoCloseMissingCheckouts();
+
+      for (const record of closed) {
+        await Promise.allSettled([
+          this.pushService.notifyMissedCheckout(
+            record.hospitalId,
+            record.employeeId,
+            record.employeeName,
+            record.recordId,
+            record.expectedCheckOut,
+          ),
+          this.telegramService.notifyMissedCheckout(
+            record.hospitalId,
+            record.employeeName,
+            record.expectedCheckOut,
+          ),
+        ]);
+
+        this.logger.warn(
+          `AUTO CHECK_OUT: ${record.employeeName} — ${dayjs(record.expectedCheckOut).tz(TZ).format('HH:mm')}`,
+        );
+      }
+    } catch (err) {
+      this.logger.error(
+        `autoCloseMissingCheckoutsCron failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
    * Har oyning 25-sanasida, ertalab 09:00'da — qarzdor shifoxonalarning
    * direktorlariga Telegram orqali to'lov eslatmasi (FAZA 5, 2-bosqich,
    * 2026-09-19). Oyiga faqat BIR MARTA yuboriladi — `Hospital.

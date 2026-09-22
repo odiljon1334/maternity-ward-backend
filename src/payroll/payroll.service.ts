@@ -12,6 +12,7 @@ import { OVERTIME_RATE } from '../common/constants';
 import * as ExcelJS from 'exceljs';
 import PDFDocument from 'pdfkit';
 import { PushService } from '../push/push.service';
+import { calcShiftNetMinutes } from '../common/utils/shift.util';
 
 @Injectable()
 export class PayrollService {
@@ -55,7 +56,9 @@ export class PayrollService {
 
     const baseSalary = Number(emp.baseSalary);
     const workDays = records.filter((r) => r.status !== 'ABSENT').length;
-    const absences = records.filter((r) => r.status === 'ABSENT').length;
+    const explicitAbsences = records.filter(
+      (r) => r.status === 'ABSENT',
+    ).length;
     const totalLateMin = records.reduce((s, r) => s + r.lateMinutes, 0);
     const totalEarlyMin = records.reduce((s, r) => s + r.earlyLeaveMin, 0);
     const totalOvertimeMin = records.reduce((s, r) => s + r.overtimeMinutes, 0);
@@ -66,17 +69,40 @@ export class PayrollService {
     );
 
     // Scheduled work days in this month
-    const scheduledDays = await this.prisma.schedule.count({
+    const schedules = await this.prisma.schedule.findMany({
       where: {
         employeeId,
         date: { gte: start, lte: end },
         status: 'WORKING',
       },
+      include: { shift: true },
     });
+    const scheduledDays = schedules.length;
+    const scheduledMinutes = schedules.reduce(
+      (sum, schedule) =>
+        sum + (schedule.shift ? calcShiftNetMinutes(schedule.shift) : 12 * 60), // eski, shiftsiz grafiklar uchun moslik
+      0,
+    );
+    const attendedScheduleIds = new Set(
+      records.map((record) => record.scheduleId).filter(Boolean),
+    );
+    const attendedDays = new Set(
+      records
+        .map((record) => record.workDate)
+        .filter(Boolean)
+        .map((date) => DateUtil.startOfDay(date).getTime()),
+    );
+    const todayStart = DateUtil.startOfDay(new Date()).getTime();
+    const inferredAbsences = schedules.filter((schedule) => {
+      if (!schedule.date) return false; // eski/test ma'lumotlarida sana bo'lmasligi mumkin
+      const day = DateUtil.startOfDay(schedule.date).getTime();
+      if (day >= todayStart) return false;
+      return !attendedScheduleIds.has(schedule.id) && !attendedDays.has(day);
+    }).length;
+    const absences = explicitAbsences + inferredAbsences;
 
     const dailyRate = scheduledDays > 0 ? baseSalary / scheduledDays : 0;
-    const minuteRate =
-      scheduledDays > 0 ? baseSalary / (scheduledDays * 12 * 60) : 0;
+    const minuteRate = scheduledMinutes > 0 ? baseSalary / scheduledMinutes : 0;
 
     // Deductions
     const absenceDeduction = absences * dailyRate;

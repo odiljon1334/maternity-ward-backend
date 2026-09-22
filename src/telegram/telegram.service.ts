@@ -1741,4 +1741,41 @@ export class TelegramService implements OnModuleInit {
       ),
     );
   }
+
+  async notifyMissedCheckout(
+    hospitalId: string,
+    employeeName: string,
+    expectedCheckOut: Date,
+  ) {
+    if (!this.bot) return;
+
+    const subscribers = await this.prisma.telegramSubscription.findMany({
+      where: {
+        isActive: true,
+        hospitalId,
+        role: 'DIRECTOR',
+      },
+    });
+    if (!subscribers.length) return;
+
+    const escapeHtml = (value: string) =>
+      value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const time = expectedCheckOut.toLocaleTimeString('uz-UZ', {
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: TZ,
+    });
+    const message =
+      `⚠️ <b>Check-out qilinmadi</b>\n\n` +
+      `👤 ${escapeHtml(employeeName)} bugun check-out qilmadi.\n` +
+      `🕐 Davomat grafik bo‘yicha <b>${time}</b> da avtomatik yakunlandi.`;
+
+    await Promise.allSettled(
+      subscribers.map((sub) =>
+        this.bot!.telegram.sendMessage(sub.chatId, message, {
+          parse_mode: 'HTML',
+        }),
+      ),
+    );
+  }
 }

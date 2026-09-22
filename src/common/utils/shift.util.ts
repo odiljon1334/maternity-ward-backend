@@ -97,3 +97,25 @@ export function calcNetWorkMin(
 
   return grossMin;
 }
+
+/** Grafikdagi smenaning rejalashtirilgan sof ish daqiqalari. */
+export function calcShiftNetMinutes(shift: {
+  startTime: string;
+  endTime: string;
+  isOvernight?: boolean;
+  lunchStart?: string | null;
+  lunchEnd?: string | null;
+}): number {
+  const start = toMin(shift.startTime);
+  const end = toMin(shift.endTime);
+  let gross = end - start;
+  if (shift.isOvernight || gross <= 0) gross += 24 * 60;
+
+  let lunch = 0;
+  if (shift.lunchStart && shift.lunchEnd) {
+    lunch = toMin(shift.lunchEnd) - toMin(shift.lunchStart);
+    if (lunch < 0) lunch += 24 * 60;
+  }
+
+  return Math.max(0, gross - lunch);
+}

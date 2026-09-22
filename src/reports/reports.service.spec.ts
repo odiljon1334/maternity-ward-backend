@@ -161,3 +161,70 @@ describe('ReportsService.generateT13Excel', () => {
     expect(sheet.getCell(6, totalsStart + 1).value).toBe(3); // 3 kun ham "ishladi" deb hisoblanadi
   });
 });
+
+describe('ReportsService.generateAttendanceExcel', () => {
+  it('ish kunlari kelgan va kelmagan kunlar yig‘indisiga teng bo‘ladi', async () => {
+    const attendances = [
+      ...Array.from({ length: 13 }, (_, index) => ({
+        workDate: new Date(2026, 8, index + 1),
+        status: 'PRESENT',
+      })),
+      { workDate: new Date(2026, 8, 14), status: 'ABSENT' },
+    ];
+    const employee = {
+      id: 'emp-1',
+      fullName: 'Test Xodim',
+      department: { name: 'Test bo‘lim' },
+      position: { name: 'Test lavozim' },
+      attendances,
+    };
+    const svc = new ReportsService(
+      makeFakePrisma([employee]) as any,
+      makeFakeAttendanceService({}) as any,
+    );
+
+    const buffer = await svc.generateAttendanceExcel({
+      month: 9,
+      year: 2026,
+      hospitalId: 'hospital-1',
+    });
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(buffer as any);
+    const row = workbook.worksheets[0].getRow(3);
+
+    expect(row.getCell(5).value).toBe(14); // jami ish kuni
+    expect(row.getCell(6).value).toBe(13); // keldi
+    expect(row.getCell(7).value).toBe(1); // kelmadi
+  });
+});
+
+describe('ReportsService.generateWeeklyExcel', () => {
+  it('grafik bo‘lmagan ish kunlarini kelmadi deb hisoblamaydi', async () => {
+    const prisma = {
+      employee: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'emp-1',
+            fullName: 'Test Xodim',
+            department: { name: 'Test bo‘lim' },
+            position: { name: 'Test lavozim' },
+          },
+        ]),
+      },
+      attendanceRecord: { findMany: jest.fn().mockResolvedValue([]) },
+      schedule: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const svc = new ReportsService(prisma as any, {} as any);
+
+    const buffer = await svc.generateWeeklyExcel({
+      weekStart: '2026-09-21',
+      hospitalId: 'hospital-1',
+    });
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(buffer as any);
+    const row = workbook.worksheets[0].getRow(2);
+
+    expect(row.getCell(12).value).toBe(0); // keldi
+    expect(row.getCell(13).value).toBe(0); // kelmadi
+  });
+});

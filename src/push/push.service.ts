@@ -383,6 +383,46 @@ export class PushService {
       );
   }
 
+  async notifyMissedCheckout(
+    hospitalId: string,
+    employeeId: string,
+    employeeName: string,
+    recordId: string,
+    expectedCheckOut: Date,
+  ) {
+    const time = expectedCheckOut.toLocaleTimeString('uz-UZ', {
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: process.env.TIMEZONE || 'Asia/Tashkent',
+    });
+    const title = 'Check-out qilinmadi ⚠️';
+    const body = `${employeeName} bugun check-out qilmadi. Davomat grafik bo‘yicha ${time} da avtomatik yakunlandi.`;
+    const url = `/dashboard/attendance?highlight=${recordId}`;
+
+    const recipientIds = await this.sendToHospital(
+      hospitalId,
+      { title, body, url, tag: `missed-checkout-${recordId}` },
+      ['DIRECTOR'],
+    );
+
+    await this.notifications
+      .createForUsers(recipientIds, {
+        type: NotificationType.ALERT,
+        title,
+        message: body,
+        metadata: {
+          kind: 'missed-checkout',
+          hospitalId,
+          employeeId,
+          recordId,
+          expectedCheckOut: expectedCheckOut.toISOString(),
+        },
+      })
+      .catch((e) =>
+        this.logger.warn(`Notification persist failed: ${e?.message ?? e}`),
+      );
+  }
+
   async notifyTerminalConnectivity(
     hospitalId: string,
     terminalId: string,

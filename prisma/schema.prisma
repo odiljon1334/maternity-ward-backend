@@ -530,6 +530,8 @@ model AttendanceRecord {
   faceVerified Boolean @default(false)
 
   // Check-out selfie + GPS (mobil ilovadan)
+  checkOutSource       String?  // TERMINAL | MOBILE | MANUAL | AUTO
+  autoCheckOut         Boolean  @default(false)
   checkOutSelfieUrl  String?
   checkOutGpsLat     Float?
   checkOutGpsLng     Float?

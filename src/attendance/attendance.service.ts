@@ -88,6 +88,14 @@ export interface ProcessResult {
   notifyTelegram: boolean;
 }
 
+export interface AutoClosedAttendance {
+  recordId: string;
+  employeeId: string;
+  employeeName: string;
+  hospitalId: string;
+  expectedCheckOut: Date;
+}
+
 // ─── SERVICE ──────────────────────────────────────────────────────────────────
 
 @Injectable()
@@ -101,6 +109,85 @@ export class AttendanceService {
     private readonly faceMatch: FaceMatchService,
     private readonly auditLog: AuditLogService,
   ) {}
+
+  /**
+   * Kun oxirigacha check-out qilinmagan, smenasi tugagan davomatlarni yopadi.
+   * Haqiqiy chiqish vaqti noma'lum bo'lgani uchun grafik tugash vaqti olinadi
+   * va overtime hisoblanmaydi. updateMany terminal bilan bir vaqtda kelgan
+   * check-outni ustidan yozib yubormaslik uchun ishlatiladi.
+   */
+  async autoCloseMissingCheckouts(
+    at: Date = new Date(),
+  ): Promise<AutoClosedAttendance[]> {
+    const records = await this.prisma.attendanceRecord.findMany({
+      where: {
+        expectedCheckOut: {
+          gte: DateUtil.startOfDay(at),
+          lte: at,
+        },
+        checkIn: { not: null },
+        checkOut: null,
+        status: { not: AttendanceStatus.ABSENT },
+      },
+      include: {
+        schedule: { include: { shift: true } },
+        employee: {
+          include: {
+            department: true,
+            position: true,
+            hospital: true,
+          },
+        },
+      },
+    });
+
+    const closed: AutoClosedAttendance[] = [];
+
+    for (const record of records) {
+      const shift = record.schedule?.shift;
+      const netWorkMin = calcNetWorkMin(
+        record.checkIn!,
+        record.expectedCheckOut,
+        record.lunchOut,
+        record.lunchIn,
+        shift?.lunchStart,
+        shift?.lunchEnd,
+      );
+      const status = this.recalcStatus(record.status, record.lateMinutes, 0);
+
+      const updated = await this.prisma.attendanceRecord.updateMany({
+        where: { id: record.id, checkOut: null },
+        data: {
+          checkOut: record.expectedCheckOut,
+          earlyLeaveMin: 0,
+          overtimeMinutes: 0,
+          netWorkMin,
+          status,
+          checkOutSource: 'AUTO',
+          autoCheckOut: true,
+        },
+      });
+
+      if (updated.count === 0) continue;
+
+      if (record.employee.userId) {
+        this.locationGateway.broadcastLocationRemoved(
+          record.employee.hospitalId,
+          record.employee.userId,
+        );
+      }
+
+      closed.push({
+        recordId: record.id,
+        employeeId: record.employeeId,
+        employeeName: record.employee.fullName,
+        hospitalId: record.employee.hospitalId,
+        expectedCheckOut: record.expectedCheckOut,
+      });
+    }
+
+    return closed;
+  }
 
   // ──────────────────────────────────────────────────────────────────────────────
   // PUBLIC: HIKVISION WEBHOOK — asosiy kirish nuqtasi
@@ -489,6 +576,8 @@ export class AttendanceService {
       data: {
         rawCheckOutTime: eventDate,
         checkOut: eventDate,
+        checkOutSource: 'TERMINAL',
+        autoCheckOut: false,
         earlyLeaveMin,
         overtimeMinutes,
         netWorkMin,
@@ -1673,6 +1762,8 @@ export class AttendanceService {
         data: {
           checkOut: eventDate,
           rawCheckOutTime: eventDate,
+          checkOutSource: 'MOBILE',
+          autoCheckOut: false,
           earlyLeaveMin,
           overtimeMinutes,
           netWorkMin,
@@ -1779,12 +1870,18 @@ export class AttendanceService {
       if (diff > 720) diff -= 1440;
       if (diff < -720) diff += 1440;
 
-      // Xodim smenadan bir necha SOAT oldin kelmaydi — lekin smena
-      // boshlangandan keyin skanerlash odatiy holat (kech kelish yoki
-      // smena o'rtasida qayta o'tish). Shuning uchun "kech" tomon arzonroq
-      // baholanadi: masalan 02:00 dagi o'tish 20:00 da boshlangan tungi
-      // smenaga tegishli, 08:00 kunduzgiga 6 soat erta kelish emas.
-      const score = diff >= 0 ? diff * 0.5 : Math.abs(diff);
+      // Smenadan 2 soatgacha erta kelish odatiy: 08:30 kelgan xodim uchun
+      // 09:00 smena 08:00 smenadan ustun bo'lishi kerak. Aks holda u
+      // noto'g'ri "kechikdi" bo'lib qoladi. 2 soatdan uzoq kelgusi smena esa
+      // tanlanmaydi (masalan 02:00 hodisasi 20:00 tungi smenaga tegishli).
+      let score: number;
+      if (diff >= -120 && diff <= 0) {
+        score = Math.abs(diff);
+      } else if (diff > 0) {
+        score = diff + 60;
+      } else {
+        score = Math.abs(diff) + 720;
+      }
 
       if (score < bestScore) {
         bestScore = score;

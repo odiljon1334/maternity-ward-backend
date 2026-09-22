@@ -156,9 +156,10 @@ export class ReportsService {
         if (a.status === 'LATE' || a.status === 'LATE_EARLY') daysLate++;
       });
 
-      const totalWorkDays = emp.attendances.filter(
-        (a) => a.status !== 'ABSENT',
-      ).length;
+      // AttendanceRecord faqat ish kuni uchun yaratiladi; ABSENT ham ish kuni.
+      // Shu sabab jami = kelgan + kelmagan, aks holda 13 kelgan + 1 kelmagan
+      // holati noto'g'ri ravishda "13 ish kuni" bo'lib chiqardi.
+      const totalWorkDays = daysWorked + daysAbsent;
 
       row.getCell(1).value = idx + 1;
       row.getCell(2).value = emp.fullName;
@@ -501,12 +502,31 @@ export class ReportsService {
       orderBy: [{ employee: { fullName: 'asc' } }, { workDate: 'asc' }],
     });
 
+    // Davomat yo'q kunni faqat haqiqiy WORKING grafik mavjud bo'lsa
+    // "kelmadi" deyish mumkin. Grafikning o'zi bo'lmasa taxmin qilmaymiz.
+    const schedules = await this.prisma.schedule.findMany({
+      where: {
+        date: { gte: start, lte: end },
+        employee: empWhere,
+      },
+      orderBy: [{ employeeId: 'asc' }, { date: 'asc' }],
+    });
+
     // Map: employeeId → Map<dateStr, record>
     const recMap = new Map<string, Map<string, (typeof records)[0]>>();
     for (const r of records) {
       const ds = dayjs(r.workDate).format('YYYY-MM-DD');
       if (!recMap.has(r.employeeId)) recMap.set(r.employeeId, new Map());
       recMap.get(r.employeeId)!.set(ds, r);
+    }
+
+    const scheduleMap = new Map<string, Map<string, (typeof schedules)[0]>>();
+    for (const schedule of schedules) {
+      const ds = dayjs(schedule.date).format('YYYY-MM-DD');
+      if (!scheduleMap.has(schedule.employeeId)) {
+        scheduleMap.set(schedule.employeeId, new Map());
+      }
+      scheduleMap.get(schedule.employeeId)!.set(ds, schedule);
     }
 
     const workbook = new ExcelJS.Workbook();
@@ -558,6 +578,10 @@ export class ReportsService {
       ABSENT: '—',
       EARLY_LEAVE: 'E',
       LATE_EARLY: 'KE',
+      DAY_OFF: '○',
+      VACATION: 'T',
+      SICK: 'KAS',
+      HOLIDAY: 'B',
     };
     const statusColor: Record<string, string> = {
       PRESENT: 'FFE8F5E9',
@@ -569,17 +593,36 @@ export class ReportsService {
 
     employees.forEach((emp, idx) => {
       const dayMap = recMap.get(emp.id) ?? new Map();
+      const employeeSchedules = scheduleMap.get(emp.id) ?? new Map();
       let came = 0,
         absent = 0,
         late = 0;
 
       const dayCells = weekDays.map((ds) => {
         const dow = dayjs(ds).day(); // 0=Sun, 6=Sat
-        if (dow === 0 || dow === 6) return { val: '○', color: 'FFF5F5F5' };
         const rec = dayMap.get(ds);
+        const schedule = employeeSchedules.get(ds);
         if (!rec) {
-          absent++;
-          return { val: '—', color: 'FFFFEBEE' };
+          if (!schedule) {
+            return dow === 0 || dow === 6
+              ? { val: '○', color: 'FFF5F5F5' }
+              : { val: '', color: 'FFFFFFFF' };
+          }
+
+          if (schedule.status !== 'WORKING') {
+            return {
+              val: statusSymbol[schedule.status] || '',
+              color: 'FFF5F5F5',
+            };
+          }
+
+          // Faqat o'tib ketgan rejalashtirilgan ish kuni "kelmadi".
+          // Bugungi/kelgusi smena hali yakunlanmagan bo'lishi mumkin.
+          if (dayjs(ds).endOf('day').isBefore(dayjs())) {
+            absent++;
+            return { val: '—', color: 'FFFFEBEE' };
+          }
+          return { val: '·', color: 'FFFFFFFF' };
         }
         if (
           rec.status === 'PRESENT' ||

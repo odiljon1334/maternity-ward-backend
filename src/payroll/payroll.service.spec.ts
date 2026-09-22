@@ -26,8 +26,9 @@ function makeFakePrisma() {
     __state: { employees, attendanceRecords, weeklyStats, schedules },
 
     employee: {
-      findUnique: jest.fn(async ({ where }: any) =>
-        employees.find((e) => e.id === where.id) ?? null,
+      findUnique: jest.fn(
+        async ({ where }: any) =>
+          employees.find((e) => e.id === where.id) ?? null,
       ),
     },
 
@@ -44,10 +45,10 @@ function makeFakePrisma() {
     },
 
     schedule: {
-      count: jest.fn(async ({ where }: any) =>
+      findMany: jest.fn(async ({ where }: any) =>
         schedules.filter(
           (s) => s.employeeId === where.employeeId && s.status === 'WORKING',
-        ).length,
+        ),
       ),
     },
   };
@@ -69,6 +70,13 @@ describe('PayrollService', () => {
       prisma.__state.schedules.push({
         employeeId: EMPLOYEE_ID,
         status: 'WORKING',
+        shift: {
+          startTime: '08:00',
+          endTime: '20:00',
+          isOvernight: false,
+          lunchStart: null,
+          lunchEnd: null,
+        },
       });
     }
   }
@@ -122,7 +130,7 @@ describe('PayrollService', () => {
     expect(preview.netSalary).toBe(BASE_SALARY);
   });
 
-  it("kelmagan har bir kun uchun kunlik stavka (baseSalary / scheduledDays) ushlab qolinadi", async () => {
+  it('kelmagan har bir kun uchun kunlik stavka (baseSalary / scheduledDays) ushlab qolinadi', async () => {
     const ABSENCES = 3;
     for (let i = 0; i < SCHEDULED_DAYS - ABSENCES; i++) {
       prisma.__state.attendanceRecords.push({
@@ -151,9 +159,51 @@ describe('PayrollService', () => {
 
     expect(preview.totalAbsences).toBe(ABSENCES);
     expect(preview.absenceDeduction).toBe(expectedDeduction);
-    expect(preview.netSalary).toBe(
-      Math.round(BASE_SALARY - expectedDeduction),
+    expect(preview.netSalary).toBe(Math.round(BASE_SALARY - expectedDeduction));
+  });
+
+  it('o‘tgan WORKING grafikda davomat yozuvi bo‘lmasa ham kelmagan kunni hisoblaydi', async () => {
+    prisma.__state.schedules.length = 0;
+    const shift = {
+      startTime: '09:00',
+      endTime: '18:00',
+      isOvernight: false,
+      lunchStart: '12:00',
+      lunchEnd: '13:00',
+    };
+    prisma.__state.schedules.push(
+      {
+        id: 'schedule-1',
+        employeeId: EMPLOYEE_ID,
+        status: 'WORKING',
+        date: new Date('2026-03-02T00:00:00+05:00'),
+        shift,
+      },
+      {
+        id: 'schedule-2',
+        employeeId: EMPLOYEE_ID,
+        status: 'WORKING',
+        date: new Date('2026-03-03T00:00:00+05:00'),
+        shift,
+      },
     );
+    prisma.__state.attendanceRecords.push({
+      employeeId: EMPLOYEE_ID,
+      scheduleId: 'schedule-1',
+      workDate: new Date('2026-03-02T00:00:00+05:00'),
+      status: 'PRESENT',
+      lateMinutes: 0,
+      earlyLeaveMin: 0,
+      overtimeMinutes: 0,
+      netWorkMin: 480,
+    });
+
+    const { preview } = await service.calculate(EMPLOYEE_ID, MONTH, YEAR);
+
+    expect(preview.scheduledDays).toBe(2);
+    expect(preview.totalWorkDays).toBe(1);
+    expect(preview.totalAbsences).toBe(1);
+    expect(preview.absenceDeduction).toBe(Math.round(BASE_SALARY / 2));
   });
 
   it('haftalik statistikadagi deductionAmount yig‘indisi lateDeduction sifatida qo‘llanadi', async () => {
@@ -188,6 +238,33 @@ describe('PayrollService', () => {
     expect(preview.totalOvertimeMin).toBe(OVERTIME_MIN);
     expect(preview.overtimeBonus).toBe(expectedBonus);
     expect(preview.netSalary).toBe(BASE_SALARY + expectedBonus);
+  });
+
+  it('09:00–18:00 va 1 soat tushlik uchun stavkani 8 sof ish soatidan hisoblaydi', async () => {
+    for (const schedule of prisma.__state.schedules) {
+      schedule.shift = {
+        startTime: '09:00',
+        endTime: '18:00',
+        isOvernight: false,
+        lunchStart: '12:00',
+        lunchEnd: '13:00',
+      };
+    }
+    prisma.__state.attendanceRecords.push({
+      employeeId: EMPLOYEE_ID,
+      status: 'PRESENT',
+      lateMinutes: 0,
+      earlyLeaveMin: 0,
+      overtimeMinutes: 60,
+      netWorkMin: 540,
+    });
+
+    const { preview } = await service.calculate(EMPLOYEE_ID, MONTH, YEAR);
+    const expected = Math.round(
+      60 * (BASE_SALARY / (SCHEDULED_DAYS * 8 * 60)) * 1.5,
+    );
+
+    expect(preview.overtimeBonus).toBe(expected);
   });
 
   it("chegirmalar baseSalary'dan oshib ketsa netSalary hech qachon manfiy bo'lmaydi (0'da to'xtaydi)", async () => {
