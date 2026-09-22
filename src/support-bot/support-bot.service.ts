@@ -7,8 +7,11 @@ import {
   ContractService,
   TrialContractData,
 } from '../contract/contract.service';
-import { SUPPORT_BOT_SYSTEM_PROMPT } from './faq-prompt';
-import { TrialLeadSource } from '@prisma/client';
+import {
+  SUPPORT_BOT_OWNER_PROMPT,
+  SUPPORT_BOT_SYSTEM_PROMPT,
+  formalizeUzbekAddress,
+} from './faq-prompt';
 import { TrialLeadsService } from '../trial-leads/trial-leads.service';
 
 const TZ = 'Asia/Tashkent';
@@ -72,9 +75,9 @@ function escapeHtml(value: string): string {
 }
 
 const PLAN_LABELS: Record<string, string> = {
-  start: 'Start (1 – 15 xodim)',
-  biznes: 'Biznes (16 – 100 xodim)',
-  korporativ: 'Korporativ (100+ xodim)',
+  start: "Start (1–14 xodim, 599 000 so'm/oy)",
+  biznes: "Biznes (15–199 xodim, 15 000 so'm/xodim/oy)",
+  korporativ: "Korporativ (200–500 xodim, 12 000 so'm/xodim/oy)",
 };
 
 /**
@@ -82,10 +85,8 @@ const PLAN_LABELS: Record<string, string> = {
  * support bot. Ichki HR botidan (TelegramService, TELEGRAM_BOT_TOKEN)
  * BUTUNLAY ALOHIDA bot — o'z tokeni, o'z auditoriyasi bor.
  *
- * Ish vaqtida: foydalanuvchiga qabul xabari yuboriladi va xabar staff
- * guruhiga forward qilinadi (odam javob beradi).
- * Ish vaqtidan tashqarida: Google Gemini orqali shablon (faq-prompt.ts)
- * asosida avtomatik javob beradi.
+ * Har doim Google Gemini orqali tasdiqlangan bilim manbai asosida javob
+ * beradi. Ish vaqtida xabar operatorga ham yuboriladi.
  *
  * Bundan tashqari — "yangi mijoz" (lead-intake) oqimi: mijoz "shartnoma"/
  * "sinov" kabi so'z yozsa yoki tugmani bossa, bot ketma-ket F.I.Sh,
@@ -119,6 +120,13 @@ export class SupportBotService implements OnModuleInit {
     this.bot = new Telegraf(token);
 
     this.bot.start(async (ctx) => {
+      const chatId = String(ctx.chat.id);
+      if (this.isStaffChat(chatId)) {
+        await ctx.reply(
+          "Assalomu alaykum! Siz loyiha egasi/operatori sifatida tanildingiz. StaffPlusPRO bo'yicha savolingizni yozishingiz mumkin.",
+        );
+        return;
+      }
       await ctx.reply(
         'Assalomu alaykum! 👋 StaffPlusPRO support botiga xush kelibsiz.\n\n' +
           'Savolingizni shu yerga yozing — ish vaqtida operatorimiz, ish ' +
@@ -137,6 +145,13 @@ export class SupportBotService implements OnModuleInit {
       await ctx.answerCbQuery();
       const chatId = String(ctx.chat?.id ?? '');
       if (!chatId) return;
+      if (this.isStaffChat(chatId)) {
+        await ctx.reply(
+          "Bu tugma mijozlarning trial oqimi uchun mo'ljallangan.",
+        );
+        return;
+      }
+      await this.captureCustomerContact(ctx, '14 kunlik bepul sinov tugmasi');
       const session = this.getSession(chatId);
       session.flow = { step: 'fullName', data: {} };
       await this.askFlowStep(ctx, session);
@@ -176,6 +191,13 @@ export class SupportBotService implements OnModuleInit {
 
     this.bot.command('trial', async (ctx) => {
       const chatId = String(ctx.chat.id);
+      if (this.isStaffChat(chatId)) {
+        await ctx.reply(
+          "Bu buyruq mijozlarning trial oqimi uchun mo'ljallangan.",
+        );
+        return;
+      }
+      await this.captureCustomerContact(ctx, '/trial');
       const session = this.getSession(chatId);
       session.flow = { step: 'fullName', data: {} };
       await this.askFlowStep(ctx, session);
@@ -185,6 +207,21 @@ export class SupportBotService implements OnModuleInit {
       const chatId = String(ctx.chat.id);
       const text = ctx.message.text?.trim();
       if (!text) return;
+
+      // Operator mijoz oqimi, LEAD va savdo triggerlariga tushmaydi.
+      if (this.isStaffChat(chatId)) {
+        try {
+          await ctx.sendChatAction('typing');
+        } catch {
+          // Telegram typing holati majburiy emas.
+        }
+        const reply = await this.askAi(chatId, text, true);
+        await ctx.reply(reply);
+        return;
+      }
+
+      // Mijoz bundan bexabar qoladi; username/chat ID faqat ichki LEADga yoziladi.
+      const isNewLead = await this.captureCustomerContact(ctx, text);
 
       if (this.isRateLimited(chatId)) {
         await ctx.reply(
@@ -208,13 +245,11 @@ export class SupportBotService implements OnModuleInit {
         return;
       }
 
-      // ── 3) Oddiy FAQ oqimi (o'zgarishsiz)
+      // ── 3) Oddiy FAQ oqimi: AI har doim javob beradi; ish vaqtida
+      // operator ham suhbatni ko'rishi uchun xabar unga yuboriladi.
       if (this.isWorkingHours()) {
-        await ctx.reply(
-          'Xabaringiz uchun rahmat! Hozir ish vaqti — operatorimiz tez orada javob beradi.',
-        );
-        await this.forwardToStaff(ctx, text);
-        return;
+        // Birinchi xabar yangi LEAD bildirishnomasida allaqachon yuborildi.
+        if (!isNewLead) await this.forwardToStaff(ctx, text);
       }
 
       try {
@@ -222,7 +257,7 @@ export class SupportBotService implements OnModuleInit {
       } catch {
         // e'tiborsiz qoldiriladi
       }
-      const reply = await this.askAi(chatId, text);
+      const reply = await this.askAi(chatId, text, false);
       await ctx.reply(reply);
     });
 
@@ -305,9 +340,9 @@ export class SupportBotService implements OnModuleInit {
         await ctx.reply(
           'Qaysi tarifni tanlaysiz?',
           Markup.inlineKeyboard([
-            [Markup.button.callback('Start (1–15 xodim)', 'plan_start')],
-            [Markup.button.callback('Biznes (16–100 xodim)', 'plan_biznes')],
-            [Markup.button.callback('Korporativ (100+)', 'plan_korporativ')],
+            [Markup.button.callback('Start (1–14 xodim)', 'plan_start')],
+            [Markup.button.callback('Biznes (15–199 xodim)', 'plan_biznes')],
+            [Markup.button.callback('Korporativ (200–500)', 'plan_korporativ')],
           ]),
         );
         break;
@@ -398,8 +433,9 @@ export class SupportBotService implements OnModuleInit {
     session.flow = undefined; // oqim tugadi, chat oddiy FAQ rejimiga qaytadi
 
     try {
-      await this.trialLeadsService.capture({
-        source: TrialLeadSource.TELEGRAM_BOT,
+      await this.trialLeadsService.completeTelegramLead({
+        chatId: String(ctx.chat?.id ?? ''),
+        username: ctx.from?.username || null,
         institutionName: contractData.institutionName,
         contactName: contractData.fullName,
         phone: contractData.phone,
@@ -407,8 +443,6 @@ export class SupportBotService implements OnModuleInit {
         plan: contractData.plan,
         faceId: contractData.faceId,
         contactTime: contractData.contactTime,
-        telegramChatId: String(ctx.chat?.id ?? '') || null,
-        telegramUsername: ctx.from?.username || null,
       });
     } catch (e) {
       // DB vaqtincha ishlamasa ham mijoz PDF va operator Telegram xabarini
@@ -643,7 +677,11 @@ export class SupportBotService implements OnModuleInit {
   }
 
   // ── AI javob (Google Gemini) ────────────────────────────────────────────
-  private async askAi(chatId: string, text: string): Promise<string> {
+  private async askAi(
+    chatId: string,
+    text: string,
+    ownerMode: boolean,
+  ): Promise<string> {
     const apiKey = this.config.get<string>('GEMINI_API_KEY');
     if (!apiKey) {
       this.logger.warn(
@@ -664,7 +702,13 @@ export class SupportBotService implements OnModuleInit {
         `${GEMINI_URL}/${model}:generateContent`,
         {
           systemInstruction: {
-            parts: [{ text: SUPPORT_BOT_SYSTEM_PROMPT }],
+            parts: [
+              {
+                text: ownerMode
+                  ? SUPPORT_BOT_OWNER_PROMPT
+                  : SUPPORT_BOT_SYSTEM_PROMPT,
+              },
+            ],
           },
           contents: session.history.map((m) => ({
             role: m.role === 'assistant' ? 'model' : 'user',
@@ -672,7 +716,7 @@ export class SupportBotService implements OnModuleInit {
           })),
           generationConfig: {
             temperature: 0.4,
-            maxOutputTokens: 500,
+            maxOutputTokens: 1000,
           },
         },
         {
@@ -684,15 +728,65 @@ export class SupportBotService implements OnModuleInit {
         },
       );
 
-      const reply =
+      const generatedReply =
         data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ||
         "Kechirasiz, javob shakllantira olmadim. Operatorimiz bilan bog'laning.";
+      const reply = formalizeUzbekAddress(generatedReply);
       session.history.push({ role: 'assistant', content: reply });
       session.history = session.history.slice(-MAX_HISTORY);
       return reply;
     } catch (e) {
       this.logger.error(`Gemini chaqiruvida xatolik: ${e}`);
       return 'Kechirasiz, hozir texnik nosozlik bor. Ish vaqtida operatorimiz javob beradi.';
+    }
+  }
+
+  private isStaffChat(chatId: string): boolean {
+    const staffChatId = this.config
+      .get<string>('SUPPORT_STAFF_CHAT_ID')
+      ?.trim();
+    return Boolean(staffChatId && chatId === staffChatId);
+  }
+
+  private async captureCustomerContact(ctx: any, firstMessage: string) {
+    const chatId = String(ctx.chat?.id ?? '');
+    if (!chatId || this.isStaffChat(chatId)) return false;
+
+    const displayName = [ctx.from?.first_name, ctx.from?.last_name]
+      .filter(Boolean)
+      .join(' ')
+      .trim();
+    const username = ctx.from?.username?.trim() || null;
+
+    try {
+      const result = await this.trialLeadsService.captureTelegramContact({
+        chatId,
+        username,
+        displayName: displayName || (username ? `@${username}` : "Noma'lum"),
+        firstMessage,
+      });
+      if (!result.created) return false;
+
+      const safeName = escapeHtml(displayName || "Noma'lum");
+      const telegramLink = username
+        ? `<a href="https://t.me/${encodeURIComponent(username)}">@${escapeHtml(username)}</a>`
+        : `<a href="tg://user?id=${encodeURIComponent(chatId)}">${safeName}</a>`;
+      const notification = [
+        '🆕 <b>Yangi Telegram LEAD</b>',
+        '',
+        `👤 Ism: <b>${safeName}</b>`,
+        `💬 Telegram: ${telegramLink}`,
+        `🆔 Chat ID: <code>${escapeHtml(chatId)}</code>`,
+        `📝 Birinchi xabar: ${escapeHtml(firstMessage.slice(0, 1000))}`,
+      ].join('\n');
+      await this.sendLeadNotification(notification, null);
+      return true;
+    } catch (e) {
+      // LEAD bazasi vaqtincha ishlamasa ham support javobi to'xtab qolmaydi.
+      this.logger.error(
+        `Telegram murojaatini LEADga saqlashda xatolik: ${e instanceof Error ? e.message : String(e)}`,
+      );
+      return false;
     }
   }
 

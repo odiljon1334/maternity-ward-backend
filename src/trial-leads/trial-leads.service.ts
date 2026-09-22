@@ -23,12 +23,91 @@ export type CaptureTrialLeadInput = {
   pageUrl?: string | null;
 };
 
+export type CaptureTelegramContactInput = {
+  chatId: string;
+  username?: string | null;
+  displayName: string;
+  firstMessage: string;
+};
+
+export type CompleteTelegramLeadInput = Omit<
+  CaptureTrialLeadInput,
+  'source' | 'telegramChatId' | 'telegramUsername'
+> & {
+  chatId: string;
+  username?: string | null;
+};
+
 @Injectable()
 export class TrialLeadsService {
   constructor(private readonly prisma: PrismaService) {}
 
   capture(input: CaptureTrialLeadInput) {
     return this.prisma.trialLead.create({ data: input });
+  }
+
+  /** Birinchi Telegram xabaridayoq LEAD yaratadi, takroriy xabarda dublikat qilmaydi. */
+  async captureTelegramContact(input: CaptureTelegramContactInput) {
+    const existing = await this.prisma.trialLead.findFirst({
+      where: {
+        source: TrialLeadSource.TELEGRAM_BOT,
+        telegramChatId: input.chatId,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (existing) {
+      if (input.username && input.username !== existing.telegramUsername) {
+        const lead = await this.prisma.trialLead.update({
+          where: { id: existing.id },
+          data: { telegramUsername: input.username },
+        });
+        return { lead, created: false };
+      }
+      return { lead: existing, created: false };
+    }
+
+    const message = input.firstMessage.trim().slice(0, 1000);
+    const lead = await this.prisma.trialLead.create({
+      data: {
+        source: TrialLeadSource.TELEGRAM_BOT,
+        institutionName: 'Telegram orqali murojaat',
+        contactName: input.displayName.trim() || "Noma'lum Telegram mijoz",
+        phone: 'Kiritilmagan',
+        telegramChatId: input.chatId,
+        telegramUsername: input.username || null,
+        note: message ? `Birinchi xabar: ${message}` : null,
+      },
+    });
+    return { lead, created: true };
+  }
+
+  /** Trial anketasi tugaganda dastlabki Telegram LEADni to'liq ma'lumot bilan boyitadi. */
+  async completeTelegramLead(input: CompleteTelegramLeadInput) {
+    const existing = await this.prisma.trialLead.findFirst({
+      where: {
+        source: TrialLeadSource.TELEGRAM_BOT,
+        telegramChatId: input.chatId,
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true },
+    });
+    const { chatId, username, ...details } = input;
+    const data = {
+      ...details,
+      telegramChatId: chatId,
+      telegramUsername: username || null,
+    };
+
+    if (existing) {
+      return this.prisma.trialLead.update({
+        where: { id: existing.id },
+        data,
+      });
+    }
+    return this.prisma.trialLead.create({
+      data: { source: TrialLeadSource.TELEGRAM_BOT, ...data },
+    });
   }
 
   async findAll(query: QueryTrialLeadsDto) {

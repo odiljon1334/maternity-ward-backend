@@ -16,7 +16,7 @@ const PLAN_LABELS: Record<string, string> = {
   start: "Start (1 – 14 xodim, 599 000 so'm/oy FIKS)",
   biznes: "Biznes (15 – 199 xodim, 15 000 so'm/xodim/oy)",
   korporativ:
-    "Korporativ (200 – 500 xodim, 12 000 so'm/xodim/oy; 500+ kelishiladi)",
+    "Korporativ (200 – 500 xodim, 12 000 so'm/xodim/oy; 501+ kelishiladi)",
 };
 
 /**
@@ -28,7 +28,7 @@ function priceDescription(staffCount?: number | null): string {
   if (staffCount == null) {
     return (
       "1\u201314 xodim: 599 000 so'm/oy (FIKS) \u00b7 15\u2013199: 15 000 so'm/xodim/oy \u00b7 " +
-      "200\u2013500: 12 000 so'm/xodim/oy \u00b7 500+: kelishiladi"
+      "200\u2013500: 12 000 so'm/xodim/oy \u00b7 501+: kelishiladi"
     );
   }
   const pricing = getStaffPricing(staffCount);

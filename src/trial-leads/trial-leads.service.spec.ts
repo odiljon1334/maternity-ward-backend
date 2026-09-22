@@ -13,6 +13,7 @@ function makeService() {
         { status: TrialLeadStatus.CONVERTED, _count: { _all: 1 } },
       ]),
       findUnique: jest.fn().mockResolvedValue({ id: 'lead-1' }),
+      findFirst: jest.fn().mockResolvedValue(null),
       update: jest.fn(async ({ data }) => ({ id: 'lead-1', ...data })),
     },
   };
@@ -107,5 +108,77 @@ describe('TrialLeadsService', () => {
       service.updateStatus('missing', TrialLeadStatus.REJECTED),
     ).rejects.toBeInstanceOf(NotFoundException);
     expect(prisma.trialLead.update).not.toHaveBeenCalled();
+  });
+
+  it('Telegramdagi birinchi murojaatni darhol LEAD sifatida saqlaydi', async () => {
+    const { service, prisma } = makeService();
+
+    const result = await service.captureTelegramContact({
+      chatId: '12345',
+      username: 'ali_user',
+      displayName: 'Ali Valiyev',
+      firstMessage: "Narxlari haqida ma'lumot bering",
+    });
+
+    expect(result.created).toBe(true);
+    expect(prisma.trialLead.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        source: TrialLeadSource.TELEGRAM_BOT,
+        telegramChatId: '12345',
+        telegramUsername: 'ali_user',
+        contactName: 'Ali Valiyev',
+        institutionName: 'Telegram orqali murojaat',
+        phone: 'Kiritilmagan',
+        note: "Birinchi xabar: Narxlari haqida ma'lumot bering",
+      }),
+    });
+  });
+
+  it('takroriy Telegram xabarida yangi LEAD yaratmaydi', async () => {
+    const { service, prisma } = makeService();
+    prisma.trialLead.findFirst.mockResolvedValue({
+      id: 'existing-lead',
+      contactName: 'Ali Valiyev',
+      note: 'Birinchi xabar: Salom',
+    });
+
+    const result = await service.captureTelegramContact({
+      chatId: '12345',
+      username: 'ali_new',
+      displayName: 'Ali Valiyev',
+      firstMessage: 'Yana savolim bor',
+    });
+
+    expect(result.created).toBe(false);
+    expect(prisma.trialLead.create).not.toHaveBeenCalled();
+    expect(prisma.trialLead.update).toHaveBeenCalledWith({
+      where: { id: 'existing-lead' },
+      data: { telegramUsername: 'ali_new' },
+    });
+  });
+
+  it("trial anketa tugaganda avvalgi Telegram LEADni to'ldiradi", async () => {
+    const { service, prisma } = makeService();
+    prisma.trialLead.findFirst.mockResolvedValue({ id: 'existing-lead' });
+
+    await service.completeTelegramLead({
+      chatId: '12345',
+      username: 'ali_user',
+      institutionName: 'Test klinika',
+      contactName: 'Ali Valiyev',
+      phone: '+998901234567',
+      staffCount: 20,
+    });
+
+    expect(prisma.trialLead.create).not.toHaveBeenCalled();
+    expect(prisma.trialLead.update).toHaveBeenCalledWith({
+      where: { id: 'existing-lead' },
+      data: expect.objectContaining({
+        institutionName: 'Test klinika',
+        contactName: 'Ali Valiyev',
+        phone: '+998901234567',
+        staffCount: 20,
+      }),
+    });
   });
 });
