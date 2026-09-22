@@ -21,7 +21,10 @@ export class AuditLogController {
     @Query('page') page = '1',
     @Query('limit') limit = '50',
   ) {
-    const hospitalId = targetHospitalId || jwtHospitalId || undefined;
+    // Tenant rollari yuborgan targetHospitalId JWT scope'ini hech qachon
+    // almashtira olmaydi. Platforma foydalanuvchisida jwtHospitalId null
+    // bo'lgandagina targetHospitalId ishlatiladi.
+    const hospitalId = jwtHospitalId || targetHospitalId || undefined;
     return this.auditLogService.findAll({
       hospitalId,
       entity,
