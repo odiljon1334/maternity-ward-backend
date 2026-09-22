@@ -71,7 +71,7 @@ describe('ReportsService.generateT13Excel', () => {
 
     const prisma = makeFakePrisma([emp], { name: 'Test Poliklinika' });
     const attendance = makeFakeAttendanceService({ 'emp-1': records });
-    const svc = new ReportsService(prisma as any, attendance as any);
+    const svc = new ReportsService(prisma as any, attendance as any, {} as any);
 
     const buffer = await svc.generateT13Excel({
       month: MONTH,
@@ -108,7 +108,7 @@ describe('ReportsService.generateT13Excel', () => {
   it("xodim yo'q bo'lsa — xatosiz bo'sh jadval generatsiya qiladi", async () => {
     const prisma = makeFakePrisma([]);
     const attendance = makeFakeAttendanceService({});
-    const svc = new ReportsService(prisma as any, attendance as any);
+    const svc = new ReportsService(prisma as any, attendance as any, {} as any);
 
     const buffer = await svc.generateT13Excel({ month: MONTH, year: YEAR });
 
@@ -144,7 +144,7 @@ describe('ReportsService.generateT13Excel', () => {
 
     const prisma = makeFakePrisma([emp]);
     const attendance = makeFakeAttendanceService({ 'emp-2': records });
-    const svc = new ReportsService(prisma as any, attendance as any);
+    const svc = new ReportsService(prisma as any, attendance as any, {} as any);
 
     const buffer = await svc.generateT13Excel({ month: MONTH, year: YEAR });
 
@@ -181,6 +181,7 @@ describe('ReportsService.generateAttendanceExcel', () => {
     const svc = new ReportsService(
       makeFakePrisma([employee]) as any,
       makeFakeAttendanceService({}) as any,
+      {} as any,
     );
 
     const buffer = await svc.generateAttendanceExcel({
@@ -195,6 +196,171 @@ describe('ReportsService.generateAttendanceExcel', () => {
     expect(row.getCell(5).value).toBe(14); // jami ish kuni
     expect(row.getCell(6).value).toBe(13); // keldi
     expect(row.getCell(7).value).toBe(1); // kelmadi
+  });
+});
+
+describe('ReportsService.generatePayrollExcel', () => {
+  it('payroll yozuvi hali yaratilmagan bo\u2018lsa ham oylik hisob va davomatni 0 qilmaydi', async () => {
+    const employee = {
+      id: 'emp-payroll-1',
+      fullName: 'Dilnoza Karimova',
+      baseSalary: 4_000_000,
+      department: { name: 'Terapiya' },
+      position: { name: 'Hamshira' },
+    };
+    const prisma = {
+      employee: { findMany: jest.fn().mockResolvedValue([employee]) },
+      payrollRecord: { findMany: jest.fn().mockResolvedValue([]) },
+      attendanceRecord: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            employeeId: employee.id,
+            status: 'LATE',
+            lateMinutes: 20,
+            earlyLeaveMin: 0,
+            overtimeMinutes: 0,
+          },
+          {
+            employeeId: employee.id,
+            status: 'LATE_EARLY',
+            lateMinutes: 10,
+            earlyLeaveMin: 15,
+            overtimeMinutes: 0,
+          },
+          {
+            employeeId: employee.id,
+            status: 'PRESENT',
+            lateMinutes: 0,
+            earlyLeaveMin: 0,
+            overtimeMinutes: 120,
+          },
+        ]),
+      },
+    };
+    const payroll = {
+      calculate: jest.fn().mockResolvedValue({
+        preview: {
+          scheduledDays: 22,
+          totalWorkDays: 20,
+          totalAbsences: 2,
+          totalLateMin: 30,
+          totalEarlyMin: 15,
+          totalOvertimeMin: 120,
+          totalNetWorkMin: 9_600,
+          baseSalary: 4_000_000,
+          absenceDeduction: 360_000,
+          lateDeduction: 0,
+          earlyLeaveDeduction: 10_000,
+          overtimeBonus: 150_000,
+          contractualKpiBonus: 200_000,
+          oneTimeAward: 100_000,
+          disciplinaryFine: 0,
+          otherLawfulDeduction: 50_000,
+          deferredDeduction: 0,
+          advancePaid: 500_000,
+          advanceApplied: 500_000,
+          deferredAdvance: 0,
+          grossSalary: 4_080_000,
+          netSalary: 3_530_000,
+        },
+      }),
+    };
+    const service = new (ReportsService as any)(
+      prisma,
+      makeFakeAttendanceService({}),
+      payroll,
+    ) as ReportsService;
+
+    const buffer = await service.generatePayrollExcel({
+      month: 9,
+      year: 2026,
+      hospitalId: 'hospital-1',
+    });
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(buffer as any);
+    const sheet = workbook.worksheets[0];
+    const headers = sheet.getRow(2);
+    const row = sheet.getRow(3);
+
+    expect(headers.getCell(5).value).toBe('Rejadagi ish kunlari');
+    expect(headers.getCell(8).value).toBe('Kech qolgan kunlar');
+    expect(headers.getCell(14).value).toBe('Sof ish vaqti (soat)');
+    expect(row.getCell(5).value).toBe(22);
+    expect(row.getCell(6).value).toBe(20);
+    expect(row.getCell(7).value).toBe(2);
+    expect(row.getCell(8).value).toBe(2);
+    expect(row.getCell(9).value).toBe(30);
+    expect(row.getCell(10).value).toBe(1);
+    expect(row.getCell(12).value).toBe(1);
+    expect(row.getCell(14).value).toBe(160);
+    expect(row.getCell(28).value).toBe(3_530_000);
+    expect(row.getCell(29).value).toBe('Hisoblanmagan (hisob)');
+    expect(payroll.calculate).toHaveBeenCalledWith(
+      employee.id,
+      9,
+      2026,
+      'hospital-1',
+    );
+  });
+
+  it('tasdiqlangan payroll qiymatlarini export paytida qayta hisoblamaydi', async () => {
+    const employee = {
+      id: 'emp-approved',
+      fullName: 'Tasdiqlangan Xodim',
+      baseSalary: 5_000_000,
+      department: { name: 'Jarrohlik' },
+      position: { name: 'Shifokor' },
+    };
+    const approvedRecord = {
+      employeeId: employee.id,
+      totalWorkDays: 21,
+      totalAbsences: 1,
+      totalLateMin: 5,
+      totalEarlyMin: 0,
+      totalOvertimeMin: 60,
+      totalNetWorkMin: 10_080,
+      baseSalary: 5_000_000,
+      absenceDeduction: 200_000,
+      lateDeduction: 0,
+      earlyLeaveDeduction: 0,
+      overtimeBonus: 100_000,
+      manualBonus: 0,
+      manualDeduction: 0,
+      contractualKpiBonus: 0,
+      oneTimeAward: 0,
+      disciplinaryFine: 0,
+      otherLawfulDeduction: 0,
+      deferredDeduction: 0,
+      advancePaid: 0,
+      advanceApplied: 0,
+      deferredAdvance: 0,
+      grossSalary: 4_900_000,
+      netSalary: 4_900_000,
+      status: 'APPROVED',
+    };
+    const prisma = {
+      employee: { findMany: jest.fn().mockResolvedValue([employee]) },
+      payrollRecord: {
+        findMany: jest.fn().mockResolvedValue([approvedRecord]),
+      },
+      attendanceRecord: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const payroll = { calculate: jest.fn() };
+    const service = new ReportsService(
+      prisma as any,
+      makeFakeAttendanceService({}) as any,
+      payroll as any,
+    );
+
+    const buffer = await service.generatePayrollExcel({ month: 9, year: 2026 });
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(buffer as any);
+    const row = workbook.worksheets[0].getRow(3);
+
+    expect(row.getCell(5).value).toBe(22);
+    expect(row.getCell(28).value).toBe(4_900_000);
+    expect(row.getCell(29).value).toBe('Tasdiqlangan');
+    expect(payroll.calculate).not.toHaveBeenCalled();
   });
 });
 
@@ -214,7 +380,7 @@ describe('ReportsService.generateWeeklyExcel', () => {
       attendanceRecord: { findMany: jest.fn().mockResolvedValue([]) },
       schedule: { findMany: jest.fn().mockResolvedValue([]) },
     };
-    const svc = new ReportsService(prisma as any, {} as any);
+    const svc = new ReportsService(prisma as any, {} as any, {} as any);
 
     const buffer = await svc.generateWeeklyExcel({
       weekStart: '2026-09-21',

@@ -1,17 +1,42 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import * as ExcelJS from 'exceljs';
 import dayjs from 'dayjs';
 import { AttendanceService } from '../attendance/attendance.service';
+import { PayrollService } from '../payroll/payroll.service';
 
 const TZ = process.env.TIMEZONE || 'Asia/Tashkent';
 
 @Injectable()
 export class ReportsService {
+  private readonly logger = new Logger(ReportsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly attendanceService: AttendanceService,
+    private readonly payrollService: PayrollService,
   ) {}
+
+  private async mapWithConcurrency<T, R>(
+    items: T[],
+    limit: number,
+    mapper: (item: T) => Promise<R>,
+  ): Promise<R[]> {
+    if (items.length === 0) return [];
+    const results = new Array<R>(items.length);
+    let nextIndex = 0;
+    const workers = Array.from(
+      { length: Math.min(limit, items.length) },
+      async () => {
+        while (nextIndex < items.length) {
+          const index = nextIndex++;
+          results[index] = await mapper(items[index]);
+        }
+      },
+    );
+    await Promise.all(workers);
+    return results;
+  }
 
   // ─────────────────────────────────────────────
   // ATTENDANCE EXCEL REPORT
@@ -274,6 +299,9 @@ export class ReportsService {
         totalWorkDays: true,
         totalAbsences: true,
         totalLateMin: true,
+        totalEarlyMin: true,
+        totalOvertimeMin: true,
+        totalNetWorkMin: true,
         baseSalary: true,
         absenceDeduction: true,
         lateDeduction: true,
@@ -296,33 +324,110 @@ export class ReportsService {
     });
     const payMap = new Map(payrollRecords.map((p) => [p.employeeId, p]));
 
-    // Barcha hodimlar uchun yozuv (payroll bo'lmasa bo'sh qiymatlar bilan)
-    const records = employees.map((emp) => ({
-      employee: emp,
-      ...(payMap.get(emp.id) ?? {
-        totalWorkDays: 0,
-        totalAbsences: 0,
-        totalLateMin: 0,
-        baseSalary: emp.baseSalary ?? 0,
-        absenceDeduction: 0,
-        lateDeduction: 0,
-        earlyLeaveDeduction: 0,
-        overtimeBonus: 0,
-        manualBonus: 0,
-        manualDeduction: 0,
-        contractualKpiBonus: 0,
-        oneTimeAward: 0,
-        disciplinaryFine: 0,
-        otherLawfulDeduction: 0,
-        deferredDeduction: 0,
-        advancePaid: 0,
-        advanceApplied: 0,
-        deferredAdvance: 0,
-        grossSalary: emp.baseSalary ?? 0,
-        netSalary: emp.baseSalary ?? 0,
-        status: 'DRAFT',
+    const employeeIds = employees.map((employee) => employee.id);
+    const startDate = new Date(year, month - 1, 1);
+    const endDate = new Date(year, month, 0, 23, 59, 59, 999);
+    const attendanceRecords = employeeIds.length
+      ? await this.prisma.attendanceRecord.findMany({
+          where: {
+            employeeId: { in: employeeIds },
+            workDate: { gte: startDate, lte: endDate },
+          },
+          select: {
+            employeeId: true,
+            lateMinutes: true,
+            earlyLeaveMin: true,
+            overtimeMinutes: true,
+          },
+        })
+      : [];
+    const attendanceDays = new Map<
+      string,
+      { lateDays: number; earlyLeaveDays: number; overtimeDays: number }
+    >();
+    for (const attendance of attendanceRecords) {
+      const stats = attendanceDays.get(attendance.employeeId) ?? {
+        lateDays: 0,
+        earlyLeaveDays: 0,
+        overtimeDays: 0,
+      };
+      if (attendance.lateMinutes > 0) stats.lateDays += 1;
+      if (attendance.earlyLeaveMin > 0) stats.earlyLeaveDays += 1;
+      if (attendance.overtimeMinutes > 0) stats.overtimeDays += 1;
+      attendanceDays.set(attendance.employeeId, stats);
+    }
+
+    // APPROVED/PAID yozuv o'zgarmas snapshot bo'lib qoladi. DRAFT yoki hali
+    // yaratilmagan payroll esa export vaqtida haqiqiy grafik va davomatdan
+    // qayta hisoblanadi; export DBga yozmaydi va xodimga bildirishnoma yubormaydi.
+    const calculatedEntries = await this.mapWithConcurrency(
+      employees.filter((employee) => {
+        const saved = payMap.get(employee.id);
+        return !saved || saved.status === 'DRAFT';
       }),
-    }));
+      5,
+      async (employee) => {
+        try {
+          const { preview } = await this.payrollService.calculate(
+            employee.id,
+            month,
+            year,
+            hospitalId,
+          );
+          return [employee.id, preview] as const;
+        } catch (error) {
+          this.logger.warn(
+            `Payroll report calculation failed for employee ${employee.id}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          return [employee.id, null] as const;
+        }
+      },
+    );
+    const calculatedMap = new Map(calculatedEntries);
+
+    const records = employees.map((employee) => {
+      const saved = payMap.get(employee.id);
+      const calculated = calculatedMap.get(employee.id);
+      const finalized = saved?.status === 'APPROVED' || saved?.status === 'PAID';
+      const values = finalized ? saved : calculated || saved || null;
+      const dayStats = attendanceDays.get(employee.id) ?? {
+        lateDays: 0,
+        earlyLeaveDays: 0,
+        overtimeDays: 0,
+      };
+      const scheduledDays = calculated
+        ? calculated.scheduledDays
+        : saved
+          ? saved.totalWorkDays + saved.totalAbsences
+          : null;
+
+      return {
+        employee,
+        scheduledDays,
+        ...dayStats,
+        totalWorkDays: values?.totalWorkDays ?? null,
+        totalAbsences: values?.totalAbsences ?? null,
+        totalLateMin: values?.totalLateMin ?? null,
+        totalEarlyMin: values?.totalEarlyMin ?? null,
+        totalOvertimeMin: values?.totalOvertimeMin ?? null,
+        totalNetWorkMin: values?.totalNetWorkMin ?? null,
+        baseSalary: values?.baseSalary ?? employee.baseSalary,
+        absenceDeduction: values?.absenceDeduction ?? null,
+        earlyLeaveDeduction: values?.earlyLeaveDeduction ?? null,
+        overtimeBonus: values?.overtimeBonus ?? null,
+        contractualKpiBonus: values?.contractualKpiBonus ?? null,
+        oneTimeAward: values?.oneTimeAward ?? null,
+        disciplinaryFine: values?.disciplinaryFine ?? null,
+        otherLawfulDeduction: values?.otherLawfulDeduction ?? null,
+        deferredDeduction: values?.deferredDeduction ?? null,
+        advancePaid: values?.advancePaid ?? null,
+        advanceApplied: values?.advanceApplied ?? null,
+        deferredAdvance: values?.deferredAdvance ?? null,
+        grossSalary: values?.grossSalary ?? null,
+        netSalary: values?.netSalary ?? null,
+        status: saved?.status ?? (calculated ? 'CALCULATED' : 'ERROR'),
+      };
+    });
 
     const workbook = new ExcelJS.Workbook();
     const monthName = dayjs(`${year}-${month}-01`).format('MMMM YYYY');
@@ -334,16 +439,20 @@ export class ReportsService {
       'F.I.O',
       "Bo'lim",
       'Lavozim',
-      'Ish kunlari',
-      "Yo'q kunlari",
+      'Rejadagi ish kunlari',
+      'Kelgan kunlar',
+      'Kelmagan kunlar',
+      'Kech qolgan kunlar',
       'Kechikish (min)',
-      'Asosiy maosh',
-      "Yo'qlik kesimi",
-      'Kechikish (pul jarimasiz)',
-      'Erta ketish kesimi',
-      "Qo'shimcha ish bonusi",
-      "Qo'shimcha bonus",
-      "Qo'shimcha kesim",
+      'Erta ketgan kunlar',
+      'Erta ketish (min)',
+      'Overtime kunlari',
+      'Overtime (min)',
+      'Sof ish vaqti (soat)',
+      'Bazaviy maosh',
+      'Ishlanmagan vaqt tuzatmasi',
+      'Erta ketish tuzatmasi',
+      'Overtime to\u2018lovi',
       'KPI bonusi',
       'Bir martalik mukofot',
       'Intizomiy jarima',
@@ -352,8 +461,8 @@ export class ReportsService {
       'Avans',
       'Payrollga qo‘llangan avans',
       'Keyingi davrga qolgan avans',
-      'Gross maosh',
-      'Jami (netto)',
+      'Hisoblangan ish haqi (gross)',
+      'Yakuniy to\u2018lov',
       'Holat',
     ];
 
@@ -389,8 +498,8 @@ export class ReportsService {
 
     // Widths
     const widths = [
-      4, 26, 18, 20, 10, 10, 14, 14, 14, 14, 14, 16, 14, 14, 14, 18, 18, 18, 22,
-      14, 16, 18, 20, 14, 10,
+      4, 26, 18, 20, 18, 12, 13, 17, 14, 17, 15, 15, 14, 18, 16, 22, 20, 17,
+      14, 18, 18, 20, 22, 14, 20, 22, 24, 18, 24,
     ];
     widths.forEach((w, i) => {
       sheet.getColumn(i + 1).width = w;
@@ -404,34 +513,48 @@ export class ReportsService {
           ? "To'langan"
           : r.status === 'APPROVED'
             ? 'Tasdiqlangan'
-            : 'Loyiha';
-      const net = Number(r.netSalary);
-      totalNet += net;
+            : r.status === 'CALCULATED'
+              ? 'Hisoblanmagan (hisob)'
+              : r.status === 'ERROR'
+                ? 'Hisoblash xatosi'
+                : 'Loyiha';
+      const net = r.netSalary == null ? null : Number(r.netSalary);
+      if (net != null) totalNet += net;
 
       const row = sheet.addRow([
         idx + 1,
         r.employee.fullName,
         r.employee.department.name,
         r.employee.position.name,
+        r.scheduledDays,
         r.totalWorkDays,
         r.totalAbsences,
+        r.lateDays,
         r.totalLateMin,
+        r.earlyLeaveDays,
+        r.totalEarlyMin,
+        r.overtimeDays,
+        r.totalOvertimeMin,
+        r.totalNetWorkMin == null
+          ? null
+          : Number((r.totalNetWorkMin / 60).toFixed(2)),
         Number(r.baseSalary),
-        Number(r.absenceDeduction),
-        Number(r.lateDeduction),
-        Number(r.earlyLeaveDeduction),
-        Number(r.overtimeBonus),
-        Number(r.manualBonus),
-        Number(r.manualDeduction),
-        Number(r.contractualKpiBonus),
-        Number(r.oneTimeAward),
-        Number(r.disciplinaryFine),
-        Number(r.otherLawfulDeduction),
-        Number(r.deferredDeduction),
-        Number(r.advancePaid),
-        Number(r.advanceApplied),
-        Number(r.deferredAdvance),
-        Number(r.grossSalary),
+        r.absenceDeduction == null ? null : Number(r.absenceDeduction),
+        r.earlyLeaveDeduction == null ? null : Number(r.earlyLeaveDeduction),
+        r.overtimeBonus == null ? null : Number(r.overtimeBonus),
+        r.contractualKpiBonus == null
+          ? null
+          : Number(r.contractualKpiBonus),
+        r.oneTimeAward == null ? null : Number(r.oneTimeAward),
+        r.disciplinaryFine == null ? null : Number(r.disciplinaryFine),
+        r.otherLawfulDeduction == null
+          ? null
+          : Number(r.otherLawfulDeduction),
+        r.deferredDeduction == null ? null : Number(r.deferredDeduction),
+        r.advancePaid == null ? null : Number(r.advancePaid),
+        r.advanceApplied == null ? null : Number(r.advanceApplied),
+        r.deferredAdvance == null ? null : Number(r.deferredAdvance),
+        r.grossSalary == null ? null : Number(r.grossSalary),
         net,
         statusLabel,
       ]);
@@ -443,7 +566,7 @@ export class ReportsService {
           bottom: { style: 'hair' },
           right: { style: 'hair' },
         };
-        if (colNum >= 8) {
+        if (colNum >= 15 && colNum <= 28) {
           cell.numFmt = '#,##0';
           cell.alignment = { horizontal: 'right' };
         } else {
@@ -462,7 +585,7 @@ export class ReportsService {
       });
 
       // Net salary highlight
-      const netCell = row.getCell(15);
+      const netCell = row.getCell(28);
       netCell.font = { bold: true };
       netCell.fill = {
         type: 'pattern',
@@ -488,16 +611,34 @@ export class ReportsService {
       '',
       '',
       '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
       totalNet,
       '',
     ]);
     totalRow.getCell(2).font = { bold: true };
-    totalRow.getCell(15).font = { bold: true };
-    totalRow.getCell(15).numFmt = '#,##0';
-    totalRow.getCell(15).fill = {
+    totalRow.getCell(28).font = { bold: true };
+    totalRow.getCell(28).numFmt = '#,##0';
+    totalRow.getCell(28).fill = {
       type: 'pattern',
       pattern: 'solid',
       fgColor: { argb: 'FFBBDEFB' },
+    };
+    sheet.views = [{ state: 'frozen', xSplit: 4, ySplit: 2 }];
+    sheet.autoFilter = {
+      from: { row: 2, column: 1 },
+      to: { row: 2, column: cols.length },
     };
 
     return workbook.xlsx.writeBuffer() as Promise<ExcelJS.Buffer>;
