@@ -14,7 +14,8 @@ import {
 } from './dto/generate-schedule.dto';
 import { DateUtil } from '../common/utils/date.util';
 import { calcAutoLunch } from '../common/utils/shift.util';
-import { ShiftType, ScheduleStatus } from '@prisma/client';
+import { Prisma, ShiftType, ScheduleStatus } from '@prisma/client';
+import { buildUzbekSearchVariants } from '../common/utils/uzbek-search.util';
 import dayjs from 'dayjs';
 import type { Dayjs } from 'dayjs';
 import utc from 'dayjs/plugin/utc';
@@ -26,6 +27,14 @@ dayjs.extend(timezone);
 dayjs.extend(isoWeek);
 
 const TZ = process.env.TIMEZONE || 'Asia/Tashkent';
+
+type MonthlyScheduleFilter = 'all' | 'with' | 'without';
+
+interface MonthlyScheduleListFilters {
+  departmentId?: string;
+  search?: string;
+  scheduleFilter?: MonthlyScheduleFilter;
+}
 
 @Injectable()
 export class SchedulesService {
@@ -194,13 +203,37 @@ export class SchedulesService {
     page: number = 1,
     limit: number = 20,
     hospitalId?: string | null,
+    filters: MonthlyScheduleListFilters = {},
   ) {
     const start = DateUtil.startOfMonth(year, month);
     const end = DateUtil.endOfMonth(year, month);
-    const skip = (page - 1) * limit;
+    const safePage = Math.max(1, page);
+    const safeLimit = Math.min(100, Math.max(1, limit));
+    const skip = (safePage - 1) * safeLimit;
 
-    const empWhere: any = { firedAt: null };
+    const empWhere: Prisma.EmployeeWhereInput = { firedAt: null };
     if (hospitalId) empWhere.hospitalId = hospitalId;
+    if (filters.departmentId) empWhere.departmentId = filters.departmentId;
+
+    const search = filters.search?.trim();
+    if (search) {
+      const nameVariants = buildUzbekSearchVariants(search);
+      empWhere.OR = [
+        ...nameVariants.map((variant) => ({
+          fullName: { contains: variant, mode: Prisma.QueryMode.insensitive },
+        })),
+        {
+          employeeNo: { contains: search, mode: Prisma.QueryMode.insensitive },
+        },
+        { phone: { contains: search, mode: Prisma.QueryMode.insensitive } },
+      ];
+    }
+
+    if (filters.scheduleFilter === 'with') {
+      empWhere.schedules = { some: { date: { gte: start, lte: end } } };
+    } else if (filters.scheduleFilter === 'without') {
+      empWhere.schedules = { none: { date: { gte: start, lte: end } } };
+    }
 
     // Faqat shu sahifa uchun kerakli xodimlarni olamiz (Pagination)
     const employees = await this.prisma.employee.findMany({
@@ -208,7 +241,7 @@ export class SchedulesService {
       include: { department: true, position: true },
       orderBy: { fullName: 'asc' },
       skip,
-      take: limit,
+      take: safeLimit,
     });
 
     const employeeIds = employees.map((e) => e.id);
@@ -238,9 +271,9 @@ export class SchedulesService {
       data,
       meta: {
         total: totalCount,
-        page,
-        limit,
-        totalPages: Math.ceil(totalCount / limit),
+        page: safePage,
+        limit: safeLimit,
+        totalPages: Math.ceil(totalCount / safeLimit),
       },
     };
   }

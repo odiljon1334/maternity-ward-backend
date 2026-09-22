@@ -1029,6 +1029,12 @@ export class AttendanceService {
         return 'SICK';
       case 'HOLIDAY':
         return 'HOLIDAY';
+      case 'MATERNITY_LEAVE':
+        return 'MATERNITY_LEAVE';
+      case 'TRAINING':
+        return 'TRAINING';
+      case 'OTHER_ABSENCE':
+        return 'OTHER_ABSENCE';
       case 'WORKING':
       default:
         // Grafik bo'yicha ishlashi kerak edi, lekin davomat yozuvi yo'q

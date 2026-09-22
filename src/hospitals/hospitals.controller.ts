@@ -20,7 +20,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
-import { UserRole } from '@prisma/client';
+import { SchedulePlanningMode, UserRole } from '@prisma/client';
 
 const SUPER = UserRole.SUPER_ADMIN;
 const ASST = UserRole.ASSISTANT_ADMIN;
@@ -125,6 +125,19 @@ export class HospitalsController {
   @Roles(SUPER)
   unblock(@Param('id') id: string) {
     return this.svc.setBlocked(id, false);
+  }
+
+  /**
+   * POST_COVERAGE faqat SUPER_ADMIN tomonidan aniq muassasa uchun yoqiladi.
+   * Barcha mavjud va yangi muassasalar STANDARD holatda boshlaydi.
+   */
+  @Patch(':id/schedule-planning-mode')
+  @Roles(SUPER)
+  setSchedulePlanningMode(
+    @Param('id') id: string,
+    @Body('mode') mode: SchedulePlanningMode,
+  ) {
+    return this.svc.setSchedulePlanningMode(id, mode);
   }
 
   @Post(':id/directors')

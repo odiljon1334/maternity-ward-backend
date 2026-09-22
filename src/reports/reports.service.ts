@@ -388,7 +388,8 @@ export class ReportsService {
     const records = employees.map((employee) => {
       const saved = payMap.get(employee.id);
       const calculated = calculatedMap.get(employee.id);
-      const finalized = saved?.status === 'APPROVED' || saved?.status === 'PAID';
+      const finalized =
+        saved?.status === 'APPROVED' || saved?.status === 'PAID';
       const values = finalized ? saved : calculated || saved || null;
       const dayStats = attendanceDays.get(employee.id) ?? {
         lateDays: 0,
@@ -498,8 +499,8 @@ export class ReportsService {
 
     // Widths
     const widths = [
-      4, 26, 18, 20, 18, 12, 13, 17, 14, 17, 15, 15, 14, 18, 16, 22, 20, 17,
-      14, 18, 18, 20, 22, 14, 20, 22, 24, 18, 24,
+      4, 26, 18, 20, 18, 12, 13, 17, 14, 17, 15, 15, 14, 18, 16, 22, 20, 17, 14,
+      18, 18, 20, 22, 14, 20, 22, 24, 18, 24,
     ];
     widths.forEach((w, i) => {
       sheet.getColumn(i + 1).width = w;
@@ -542,14 +543,10 @@ export class ReportsService {
         r.absenceDeduction == null ? null : Number(r.absenceDeduction),
         r.earlyLeaveDeduction == null ? null : Number(r.earlyLeaveDeduction),
         r.overtimeBonus == null ? null : Number(r.overtimeBonus),
-        r.contractualKpiBonus == null
-          ? null
-          : Number(r.contractualKpiBonus),
+        r.contractualKpiBonus == null ? null : Number(r.contractualKpiBonus),
         r.oneTimeAward == null ? null : Number(r.oneTimeAward),
         r.disciplinaryFine == null ? null : Number(r.disciplinaryFine),
-        r.otherLawfulDeduction == null
-          ? null
-          : Number(r.otherLawfulDeduction),
+        r.otherLawfulDeduction == null ? null : Number(r.otherLawfulDeduction),
         r.deferredDeduction == null ? null : Number(r.deferredDeduction),
         r.advancePaid == null ? null : Number(r.advancePaid),
         r.advanceApplied == null ? null : Number(r.advanceApplied),
@@ -760,6 +757,9 @@ export class ReportsService {
       VACATION: 'T',
       SICK: 'KAS',
       HOLIDAY: 'B',
+      MATERNITY_LEAVE: 'TT',
+      TRAINING: 'MO',
+      OTHER_ABSENCE: 'B',
     };
     const statusColor: Record<string, string> = {
       PRESENT: 'FFE8F5E9',
@@ -911,6 +911,9 @@ export class ReportsService {
     HOLIDAY: 'В',
     VACATION: 'ОТ',
     SICK: 'Б',
+    MATERNITY_LEAVE: 'Р',
+    TRAINING: 'ПК',
+    OTHER_ABSENCE: 'НН',
     PLANNED: '',
   };
 

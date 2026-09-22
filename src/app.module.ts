@@ -36,6 +36,7 @@ import { PublicModule } from './public/public.module';
 import { SupportBotModule } from './support-bot/support-bot.module';
 import { TrialLeadsModule } from './trial-leads/trial-leads.module';
 import { CompensationModule } from './compensation/compensation.module';
+import { SchedulePlanningModule } from './schedule-planning/schedule-planning.module';
 
 @Module({
   imports: [
@@ -91,6 +92,7 @@ import { CompensationModule } from './compensation/compensation.module';
     UsersModule,
     DidoxModule,
     CompensationModule,
+    SchedulePlanningModule,
   ],
   providers: [],
 })

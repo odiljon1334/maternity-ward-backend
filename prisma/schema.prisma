@@ -44,6 +44,46 @@ enum ScheduleStatus {
   SICK
   VACATION
   HOLIDAY
+  MATERNITY_LEAVE
+  TRAINING
+  OTHER_ABSENCE
+}
+
+enum SchedulePlanningMode {
+  STANDARD
+  POST_COVERAGE
+}
+
+enum MonthlySchedulePlanStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  REJECTED
+  ARCHIVED
+}
+
+enum SchedulePlanEntryType {
+  WORKING
+  DAY_OFF
+  SICK
+  VACATION
+  MATERNITY_LEAVE
+  TRAINING
+  OTHER_ABSENCE
+}
+
+enum ScheduleChangeType {
+  SUBSTITUTION
+  SWAP
+  ABSENCE
+}
+
+enum ScheduleChangeStatus {
+  REQUESTED
+  ACCEPTED
+  APPROVED
+  REJECTED
+  CANCELLED
 }
 
 enum AttendanceStatus {
@@ -186,6 +226,10 @@ model Hospital {
   isActive  Boolean @default(true)
   isBlocked Boolean @default(false) // Manual admin blok
 
+  // STANDARD — mavjud poliklinika grafigi o'zgarmaydi.
+  // POST_COVERAGE — tug'ruqxona uchun post kesimidagi oylik reja yoqiladi.
+  schedulePlanningMode SchedulePlanningMode @default(STANDARD)
+
   // GPS geofencing — mobil check-in uchun (ixtiyoriy)
   gpsLat    Float? // Kasalxona kengligi
   gpsLng    Float? // Kasalxona uzunligi
@@ -196,21 +240,25 @@ model Hospital {
   lastPaymentReminderAt     DateTime?
   lastPaymentReminderPeriod String? // "YYYY-MM" — shu oy uchun eslatma yuborilganmi
 
-  users              User[]
-  employees          Employee[]
-  departments        Department[]
-  positions          Position[]
-  shifts             ShiftTemplate[]
-  telegramSubs       TelegramSubscription[]
-  notifications      Notification[]
-  payments           Payment[]
-  cameras            Camera[]
-  hikTerminals       HikTerminal[]
-  leaveRequests      LeaveRequest[]
-  assistantAdmins    HospitalAssistant[]
-  didoxCredential    HospitalDidoxCredential?
-  payrollAdjustments PayrollAdjustment[]
-  salaryAdvances     SalaryAdvance[]
+  users                  User[]
+  employees              Employee[]
+  departments            Department[]
+  positions              Position[]
+  shifts                 ShiftTemplate[]
+  telegramSubs           TelegramSubscription[]
+  notifications          Notification[]
+  payments               Payment[]
+  cameras                Camera[]
+  hikTerminals           HikTerminal[]
+  leaveRequests          LeaveRequest[]
+  assistantAdmins        HospitalAssistant[]
+  didoxCredential        HospitalDidoxCredential?
+  payrollAdjustments     PayrollAdjustment[]
+  salaryAdvances         SalaryAdvance[]
+  schedulePosts          SchedulePost[]
+  monthlySchedulePlans   MonthlySchedulePlan[]
+  monthlyScheduleEntries MonthlyScheduleEntry[]
+  scheduleChangeRequests ScheduleChangeRequest[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -282,18 +330,23 @@ model User {
   hospitalId String?
   hospital   Hospital? @relation(fields: [hospitalId], references: [id])
 
-  employee                  Employee?
-  pushSubscriptions         PushSubscription[]
-  liveLocations             LiveLocation[]
-  notifications             Notification[]
-  emailOtpTokens            EmailOtpToken[]
-  passwordResetTokens       PasswordResetToken[]
-  assignedHospitals         HospitalAssistant[]
-  permissionOverrides       UserPermissionOverride[]
-  createdPayrollAdjustments PayrollAdjustment[]      @relation("PayrollAdjustmentCreator")
-  decidedPayrollAdjustments PayrollAdjustment[]      @relation("PayrollAdjustmentDecider")
-  requestedSalaryAdvances   SalaryAdvance[]          @relation("SalaryAdvanceRequester")
-  approvedSalaryAdvances    SalaryAdvance[]          @relation("SalaryAdvanceApprover")
+  employee                     Employee?
+  pushSubscriptions            PushSubscription[]
+  liveLocations                LiveLocation[]
+  notifications                Notification[]
+  emailOtpTokens               EmailOtpToken[]
+  passwordResetTokens          PasswordResetToken[]
+  assignedHospitals            HospitalAssistant[]
+  permissionOverrides          UserPermissionOverride[]
+  createdPayrollAdjustments    PayrollAdjustment[]      @relation("PayrollAdjustmentCreator")
+  decidedPayrollAdjustments    PayrollAdjustment[]      @relation("PayrollAdjustmentDecider")
+  requestedSalaryAdvances      SalaryAdvance[]          @relation("SalaryAdvanceRequester")
+  approvedSalaryAdvances       SalaryAdvance[]          @relation("SalaryAdvanceApprover")
+  createdMonthlySchedulePlans  MonthlySchedulePlan[]    @relation("MonthlySchedulePlanCreator")
+  approvedMonthlySchedulePlans MonthlySchedulePlan[]    @relation("MonthlySchedulePlanApprover")
+  requestedScheduleChanges     ScheduleChangeRequest[]  @relation("ScheduleChangeRequester")
+  acceptedScheduleChanges      ScheduleChangeRequest[]  @relation("ScheduleChangeAccepter")
+  approvedScheduleChanges      ScheduleChangeRequest[]  @relation("ScheduleChangeApprover")
 
   lastLoginAt          DateTime? // Oxirgi muvaffaqiyatli login vaqti (auth.service.ts login()da yangilanadi)
   // Parol almashtirilsa yoki tiklansa, undan oldin berilgan barcha JWTlar
@@ -376,7 +429,8 @@ model Department {
   hospitalId String
   hospital   Hospital @relation(fields: [hospitalId], references: [id])
 
-  employees Employee[]
+  employees     Employee[]
+  schedulePosts SchedulePost[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -451,14 +505,16 @@ model Employee {
   birthDate  DateTime?
   status     EmployeeStatus @default(ACTIVE)
 
-  schedules          Schedule[]
-  attendances        AttendanceRecord[]
-  payrolls           PayrollRecord[]
-  weeklyStats        WeeklyAttendanceStat[]
-  terminalEvents     AttendanceEvent[]
-  leaveRequests      LeaveRequest[]
-  payrollAdjustments PayrollAdjustment[]
-  salaryAdvances     SalaryAdvance[]
+  schedules                  Schedule[]
+  attendances                AttendanceRecord[]
+  payrolls                   PayrollRecord[]
+  weeklyStats                WeeklyAttendanceStat[]
+  terminalEvents             AttendanceEvent[]
+  leaveRequests              LeaveRequest[]
+  payrollAdjustments         PayrollAdjustment[]
+  salaryAdvances             SalaryAdvance[]
+  monthlyScheduleEntries     MonthlyScheduleEntry[]
+  replacementScheduleChanges ScheduleChangeRequest[] @relation("ScheduleChangeReplacementEmployee")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -490,7 +546,8 @@ model ShiftTemplate {
   hospitalId String
   hospital   Hospital @relation(fields: [hospitalId], references: [id])
 
-  schedules Schedule[]
+  schedules              Schedule[]
+  monthlyScheduleEntries MonthlyScheduleEntry[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -514,6 +571,12 @@ model Schedule {
   status ScheduleStatus @default(WORKING)
   note   String?
 
+  // POST_COVERAGE rejasidan nashr qilingan grafiklar uchun audit manbasi.
+  // Eski STANDARD grafiklarda bu maydonlar null bo'lib qoladi.
+  sourcePlanId            String?
+  sourceEntryId           String?
+  scheduleChangeRequestId String?
+
   attendance AttendanceRecord?
 
   createdAt DateTime @default(now())
@@ -521,6 +584,144 @@ model Schedule {
 
   @@unique([employeeId, date])
   @@index([date])
+  @@index([sourcePlanId])
+  @@index([scheduleChangeRequestId])
+}
+
+// ─────────────────────────────────────────────
+// POST-BASED MONTHLY SCHEDULE PLANNING (opt-in per hospital)
+// ─────────────────────────────────────────────
+
+model SchedulePost {
+  id String @id @default(uuid())
+
+  hospitalId String
+  hospital   Hospital @relation(fields: [hospitalId], references: [id], onDelete: Cascade)
+
+  departmentId String
+  department   Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+
+  name                 String
+  code                 String
+  dailyCoverageMinutes Int     @default(1440)
+  isActive             Boolean @default(true)
+
+  plans MonthlySchedulePlan[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([hospitalId, code])
+  @@index([hospitalId, departmentId, isActive])
+}
+
+model MonthlySchedulePlan {
+  id String @id @default(uuid())
+
+  hospitalId String
+  hospital   Hospital @relation(fields: [hospitalId], references: [id], onDelete: Cascade)
+
+  postId String
+  post   SchedulePost @relation(fields: [postId], references: [id], onDelete: Restrict)
+
+  year    Int
+  month   Int
+  version Int                       @default(1)
+  status  MonthlySchedulePlanStatus @default(DRAFT)
+
+  createdById String
+  createdBy   User   @relation("MonthlySchedulePlanCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  submittedAt DateTime?
+
+  approvedById String?
+  approvedBy   User?     @relation("MonthlySchedulePlanApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+  approvedAt   DateTime?
+  decisionNote String?
+
+  entries        MonthlyScheduleEntry[]
+  changeRequests ScheduleChangeRequest[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([postId, year, month, version])
+  @@index([hospitalId, year, month, status])
+}
+
+model MonthlyScheduleEntry {
+  id String @id @default(uuid())
+
+  hospitalId String
+  hospital   Hospital @relation(fields: [hospitalId], references: [id], onDelete: Cascade)
+
+  planId String
+  plan   MonthlySchedulePlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+
+  shiftId String?
+  shift   ShiftTemplate? @relation(fields: [shiftId], references: [id], onDelete: SetNull)
+
+  entryType SchedulePlanEntryType @default(WORKING)
+  workDate  DateTime
+  startsAt  DateTime?
+  endsAt    DateTime?
+  note      String?
+
+  primaryChangeRequests     ScheduleChangeRequest[] @relation("ScheduleChangePrimaryEntry")
+  counterpartChangeRequests ScheduleChangeRequest[] @relation("ScheduleChangeCounterpartEntry")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([planId, employeeId, workDate])
+  @@index([hospitalId, workDate])
+}
+
+model ScheduleChangeRequest {
+  id String @id @default(uuid())
+
+  hospitalId String
+  hospital   Hospital @relation(fields: [hospitalId], references: [id], onDelete: Cascade)
+
+  planId String
+  plan   MonthlySchedulePlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  type             ScheduleChangeType
+  status           ScheduleChangeStatus   @default(REQUESTED)
+  absenceEntryType SchedulePlanEntryType?
+
+  primaryEntryId String
+  primaryEntry   MonthlyScheduleEntry @relation("ScheduleChangePrimaryEntry", fields: [primaryEntryId], references: [id], onDelete: Restrict)
+
+  counterpartEntryId String?
+  counterpartEntry   MonthlyScheduleEntry? @relation("ScheduleChangeCounterpartEntry", fields: [counterpartEntryId], references: [id], onDelete: SetNull)
+
+  replacementEmployeeId String?
+  replacementEmployee   Employee? @relation("ScheduleChangeReplacementEmployee", fields: [replacementEmployeeId], references: [id], onDelete: SetNull)
+
+  reason String
+
+  requestedById String
+  requestedBy   User   @relation("ScheduleChangeRequester", fields: [requestedById], references: [id], onDelete: Restrict)
+
+  acceptedById String?
+  acceptedBy   User?     @relation("ScheduleChangeAccepter", fields: [acceptedById], references: [id], onDelete: SetNull)
+  acceptedAt   DateTime?
+
+  approvedById String?
+  approvedBy   User?     @relation("ScheduleChangeApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+  approvedAt   DateTime?
+  decisionNote String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([hospitalId, status, createdAt])
+  @@index([planId, status])
+  @@index([replacementEmployeeId, status])
 }
 
 // ─────────────────────────────────────────────

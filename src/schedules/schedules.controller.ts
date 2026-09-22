@@ -109,6 +109,9 @@ export class SchedulesController {
     @Query('limit') limit: string,
     @CurrentUser('hospitalId') hospitalId: string | null,
     @Query('targetHospitalId') targetHospitalId?: string,
+    @Query('departmentId') departmentId?: string,
+    @Query('search') search?: string,
+    @Query('scheduleFilter') scheduleFilter?: 'all' | 'with' | 'without',
   ) {
     return this.service.getMonthlySchedulesPaginated(
       +month || new Date().getMonth() + 1,
@@ -116,6 +119,13 @@ export class SchedulesController {
       +page || 1,
       +limit || 20,
       resolveHospitalId(hospitalId, targetHospitalId),
+      {
+        departmentId,
+        search,
+        scheduleFilter: ['with', 'without'].includes(scheduleFilter)
+          ? scheduleFilter
+          : 'all',
+      },
     );
   }
 

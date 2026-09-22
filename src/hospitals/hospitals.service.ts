@@ -7,6 +7,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { processAndSaveLogo } from '../common/utils/image.util';
 import * as path from 'path';
 import * as fs from 'fs';
+import { SchedulePlanningMode } from '@prisma/client';
 
 const UPLOAD_DIR = process.env.UPLOAD_DIR || './uploads';
 
@@ -128,6 +129,18 @@ export class HospitalsService {
   ) {
     await this.findOne(id);
     return this.prisma.hospital.update({ where: { id }, data });
+  }
+
+  async setSchedulePlanningMode(id: string, mode: SchedulePlanningMode) {
+    await this.findOne(id);
+    if (!Object.values(SchedulePlanningMode).includes(mode)) {
+      throw new ConflictException('Grafik rejalashtirish rejimi noto‘g‘ri');
+    }
+    return this.prisma.hospital.update({
+      where: { id },
+      data: { schedulePlanningMode: mode },
+      select: { id: true, name: true, schedulePlanningMode: true },
+    });
   }
 
   /**

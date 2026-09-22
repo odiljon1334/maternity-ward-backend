@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { HospitalsService } from './hospitals.service';
 import { PrismaService } from '../prisma/prisma.service';
 import * as fs from 'fs';
+import { SchedulePlanningMode } from '@prisma/client';
 
 /**
  * HospitalsService — tenant self-service branding (2026-09-19, Odiljon
@@ -94,5 +95,26 @@ describe('HospitalsService — branding (updateOwnInfo/updateOwnLogo)', () => {
     const result = await service.updateOwnLogo('h1', Buffer.from('img'));
     expect(result.logoUrl).toBe('/uploads/logo-test.png');
     expect(fs.unlinkSync).toHaveBeenCalled();
+  });
+
+  it('post-grafik rejimini faqat tanlangan muassasada yangilaydi', async () => {
+    const prisma = await build({
+      id: 'h1',
+      name: 'Shifoxona',
+      schedulePlanningMode: SchedulePlanningMode.STANDARD,
+      departments: [],
+      _count: { employees: 0, users: 0 },
+    });
+
+    await service.setSchedulePlanningMode(
+      'h1',
+      SchedulePlanningMode.POST_COVERAGE,
+    );
+
+    expect(prisma.hospital.update).toHaveBeenCalledWith({
+      where: { id: 'h1' },
+      data: { schedulePlanningMode: SchedulePlanningMode.POST_COVERAGE },
+      select: { id: true, name: true, schedulePlanningMode: true },
+    });
   });
 });

@@ -43,3 +43,21 @@ _Avoid_: Draft
 **Maosh varaqasi (Payslip)**:
 Xodimga taqdim etiladigan, hisoblangan ish haqi, har bir qo‘shimcha va ushlanmaning sababi hamda yakuniy to‘lovni ko‘rsatadigan hujjat.
 _Avoid_: Payroll draft
+
+## Grafik tili
+
+**Tasdiqlangan bazaviy grafik (Approved baseline schedule)**:
+Rahbariyat tasdiqlagan, muayyan oy uchun kim qaysi smenada ishlashi rejalashtirilganini ko‘rsatuvchi boshlang‘ich grafik; keyingi operatsion o‘zgarishlar uni izsiz almashtirmaydi.
+_Avoid_: O‘zgarmas grafik, amaldagi davomat
+
+**Grafik o‘zgarishi (Schedule amendment)**:
+Kasallik, ta’til, smena almashtirish yoki boshqa asos sabab bazaviy grafikka kiritilgan, oldingi va yangi holat, sabab hamda tasdiqlovchini saqlaydigan rasmiy o‘zgarish.
+_Avoid_: Bazaviy grafikni bevosita tahrirlash
+
+**Smena o‘rnini bosish (Shift substitution)**:
+Bir xodimga rejalashtirilgan smenani boshqa xodim ishlashi; ishlangan vaqt va davomat o‘rnini bosgan xodimga tegishli bo‘ladi.
+_Avoid_: Ikki tomonlama smena almashish
+
+**Smena almashish (Shift swap)**:
+Ikki xodim o‘zlariga rejalashtirilgan smenalarni o‘zaro almashtirishi; har bir smenaning ishlangan vaqti uni amalda bajargan xodimga tegishli bo‘ladi.
+_Avoid_: Bir tomonlama o‘rnini bosish
