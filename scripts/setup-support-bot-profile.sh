@@ -195,7 +195,8 @@ open_url "https://t.me/BotFather"
 step "BotFather chatida /setuserpic buyrug'ini yuboring."
 step "Ro'yxatdan @StaffPlusPRO_Support_bot botini tanlang."
 step "Quyidagi kvadrat logotipni oddiy rasm sifatida yuboring:"
-note "/home/maternit-backend/maternity-ward-frontend/public/icons/icon-512x512.png"
+note "/home/maternit-backend/maternity-ward-frontend/public/icons/staffpluspro-supportbot.png"
+note "Yoki brauzerdan yuklab oling: https://clinicuk24.com/icons/staffpluspro-supportbot.png"
 step "BotFather 'Success' deb javob bergach, Telegram'da bot profilini qayta ochib rasmni tekshiring."
 if ! confirm "Profil rasmi muvaffaqiyatli o'rnatildimi?"; then
   SKIPPED+=("@StaffPlusPRO_Support_bot profil rasmi")

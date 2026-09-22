@@ -105,7 +105,7 @@ bash scripts/setup-support-bot-profile.sh
 ```
 
 Wizard ishlatadigan logo:
-`/home/maternit-backend/maternity-ward-frontend/public/icons/icon-512x512.png`.
+`/home/maternit-backend/maternity-ward-frontend/public/icons/staffpluspro-supportbot.png`.
 
 ## 5. Yakunlash mezoni
 
