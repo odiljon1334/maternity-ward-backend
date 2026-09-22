@@ -1,3 +1,23 @@
+# MaternityCare backend
+
+Production backend, PostgreSQL/Redis, Face Match, Nginx va frontend yagona
+Compose loyiha orqali boshqariladi.
+
+## Production deploy
+
+VPS'da yagona qo'llab-quvvatlanadigan deploy buyrug'i:
+
+```bash
+cd /home/maternit-backend/maternity-ward-backend
+bash deploy.sh
+```
+
+Alohida eski compose yoki deploy skriptlaridan foydalanmang. To'liq tekshiruv
+uchun [production regression checklist](docs/PRODUCTION_REGRESSION_CHECKLIST.md)ga
+qarang.
+
+---
+
 <p align="center">
   <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
 </p>

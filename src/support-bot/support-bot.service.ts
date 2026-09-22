@@ -12,6 +12,11 @@ import {
   SUPPORT_BOT_SYSTEM_PROMPT,
   formalizeUzbekAddress,
 } from './faq-prompt';
+import {
+  SUPPORT_BOT_COMMANDS,
+  SUPPORT_BOT_DESCRIPTION,
+  SUPPORT_BOT_SHORT_DESCRIPTION,
+} from './support-bot.metadata';
 import { TrialLeadsService } from '../trial-leads/trial-leads.service';
 
 const TZ = 'Asia/Tashkent';
@@ -118,6 +123,7 @@ export class SupportBotService implements OnModuleInit {
     }
 
     this.bot = new Telegraf(token);
+    await this.configureBotMetadata();
 
     this.bot.start(async (ctx) => {
       const chatId = String(ctx.chat.id);
@@ -263,6 +269,29 @@ export class SupportBotService implements OnModuleInit {
 
     await this.registerWebhook();
     this.logger.log('Support bot started (webhook mode)');
+  }
+
+  /**
+   * BotFather'da qo'lda yozilgan matnlar vaqt o'tishi bilan eskirib qolmasligi
+   * uchun public metadata har deployda idempotent ravishda yangilanadi.
+   * Telegram API vaqtincha ishlamasa bot/webhook startup'i to'xtamaydi.
+   */
+  private async configureBotMetadata() {
+    const updates = await Promise.allSettled([
+      this.bot.telegram.setMyCommands([...SUPPORT_BOT_COMMANDS]),
+      this.bot.telegram.setMyDescription(SUPPORT_BOT_DESCRIPTION),
+      this.bot.telegram.setMyShortDescription(SUPPORT_BOT_SHORT_DESCRIPTION),
+    ]);
+
+    const failed = updates.filter((result) => result.status === 'rejected');
+    if (failed.length > 0) {
+      this.logger.warn(
+        `Support bot metadata qisman yangilanmadi (${failed.length}/3); bot ishlashda davom etadi`,
+      );
+      return;
+    }
+
+    this.logger.log('Support bot commands/About metadata yangilandi');
   }
 
   /** Secret+URL bo'lmasa avvalgi support-bot webhookiga tegmaydi. */
