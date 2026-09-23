@@ -18,6 +18,24 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { TenantScopeGuard } from '../common/guards/tenant-scope.guard';
 
+/**
+ * Muassasa ID'sini aniqlash.
+ *
+ * XAVFSIZLIK (2026-09-23 audit): JWT'dagi hospitalId HAR DOIM ustun.
+ * Ilgari `targetId || jwt` tartibi tufayli A muassasa direktori
+ * `?targetHospitalId=B` bilan B'ning ta'tillarini ko'rib, tasdiqlab va
+ * grafigini o'zgartira olardi. `targetHospitalId` faqat JWT'da muassasa
+ * bo'lmagan platforma rollari (SUPER_ADMIN) uchun ishlatiladi;
+ * ASSISTANT_ADMIN uchun TenantScopeGuard JWT qiymatini tasdiqlangan
+ * muassasaga almashtirib qo'yadi.
+ */
+export function scopeHospitalId(
+  jwtHospitalId: string | null | undefined,
+  targetHospitalId?: string,
+): string {
+  return jwtHospitalId || targetHospitalId || '';
+}
+
 @Controller('leave')
 @UseGuards(JwtAuthGuard, RolesGuard, TenantScopeGuard)
 export class LeaveController {
@@ -73,7 +91,7 @@ export class LeaveController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
-    const hospitalId = targetId || jwtHospitalId || '';
+    const hospitalId = scopeHospitalId(jwtHospitalId, targetId);
     return this.svc.getAll(hospitalId, {
       status,
       page: page ? +page : undefined,
@@ -96,7 +114,7 @@ export class LeaveController {
     @Body() dto: ReviewLeaveDto,
     @Query('targetHospitalId') targetId?: string,
   ) {
-    const hospitalId = targetId || jwtHospId || '';
+    const hospitalId = scopeHospitalId(jwtHospId, targetId);
     return this.svc.review(id, reviewerId, dto, hospitalId);
   }
 
@@ -113,7 +131,7 @@ export class LeaveController {
     @CurrentUser('hospitalId') jwtHospId: string | null,
     @Query('targetHospitalId') targetId?: string,
   ) {
-    const hospitalId = targetId || jwtHospId || '';
+    const hospitalId = scopeHospitalId(jwtHospId, targetId);
     return this.svc.revokeApproval(id, hospitalId);
   }
 }
