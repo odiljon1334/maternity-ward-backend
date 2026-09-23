@@ -1,9 +1,15 @@
 import {
+  BadRequestException,
   Controller,
+  Delete,
+  ForbiddenException,
   Get,
+  Param,
   Post,
+  Put,
   Body,
   Headers,
+  Query,
   UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
@@ -15,6 +21,9 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 import { TelegramService } from './telegram.service';
+import { TelegramAccessService } from './telegram-access.service';
+import { SetBotAccessDto } from './dto/set-bot-access.dto';
+import { TenantScopeGuard } from '../common/guards/tenant-scope.guard';
 import { UserRole } from '@prisma/client';
 
 @Controller('telegram')
@@ -23,6 +32,7 @@ export class TelegramController {
     private readonly prisma: PrismaService,
     private readonly telegramService: TelegramService,
     private readonly config: ConfigService,
+    private readonly access: TelegramAccessService,
   ) {}
 
   /** POST /telegram/webhook — JWT guard YO'Q! */
@@ -89,5 +99,82 @@ export class TelegramController {
         })),
       };
     });
+  }
+
+  // ── HR botga ulanish ruxsati (allowlist) ─────────────────────────────────
+  // DIRECTOR/ADMIN — faqat o'z muassasasi (JWT). ASSISTANT_ADMIN — faqat
+  // biriktirilgan muassasa (TenantScopeGuard user.hospitalId'ni tasdiqlab
+  // almashtiradi). SUPER_ADMIN — `hospitalId` ni aniq yuborishi shart.
+
+  /** GET /telegram/bot-access?hospitalId= */
+  @Get('bot-access')
+  @UseGuards(JwtAuthGuard, RolesGuard, TenantScopeGuard)
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.DIRECTOR,
+    UserRole.ADMIN,
+  )
+  listBotAccess(
+    @CurrentUser() user: { role: UserRole; hospitalId?: string | null },
+    @Query('hospitalId') hospitalId?: string,
+  ) {
+    return this.access.list(this.resolveHospitalId(user, hospitalId));
+  }
+
+  /** PUT /telegram/bot-access/:employeeId  { enabled, hospitalId? } */
+  @Put('bot-access/:employeeId')
+  @UseGuards(JwtAuthGuard, RolesGuard, TenantScopeGuard)
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.DIRECTOR,
+    UserRole.ADMIN,
+  )
+  setBotAccess(
+    @CurrentUser() user: { role: UserRole; hospitalId?: string | null },
+    @Param('employeeId') employeeId: string,
+    @Body() dto: SetBotAccessDto,
+  ) {
+    return this.access.setAccess(
+      this.resolveHospitalId(user, dto.hospitalId),
+      employeeId,
+      dto.enabled,
+    );
+  }
+
+  /** DELETE /telegram/bot-access/subscriptions/:id?hospitalId= */
+  @Delete('bot-access/subscriptions/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard, TenantScopeGuard)
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.DIRECTOR,
+    UserRole.ADMIN,
+  )
+  revokeBotSubscription(
+    @CurrentUser() user: { role: UserRole; hospitalId?: string | null },
+    @Param('id') id: string,
+    @Query('hospitalId') hospitalId?: string,
+  ) {
+    return this.access.revokeSubscription(
+      this.resolveHospitalId(user, hospitalId),
+      id,
+    );
+  }
+
+  private resolveHospitalId(
+    user: { role: UserRole; hospitalId?: string | null },
+    requested?: string,
+  ): string {
+    if (user.role === UserRole.SUPER_ADMIN) {
+      if (!requested) throw new BadRequestException('hospitalId kerak');
+      return requested;
+    }
+    // Boshqa rollar uchun so'rovdagi qiymat E'TIBORGA OLINMAYDI.
+    if (!user.hospitalId) {
+      throw new ForbiddenException('Muassasa aniqlanmadi');
+    }
+    return user.hospitalId;
   }
 }

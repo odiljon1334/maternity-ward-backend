@@ -498,6 +498,13 @@ model Employee {
 
   telegramChatId String?
 
+  // HR botga (davomat xabarlari/hisobotlari) ulanish ruxsati. Direktor,
+  // o'rinbosari, kadrlar boshlig'i kabi 3-5 shaxsga Direktor/Admin/
+  // Super Admin tomonidan beriladi. Ulanish Telegram "raqamni ulashish"
+  // (contact) orqali — raqam egasi Telegram tomonidan tasdiqlanadi.
+  telegramBotAccess Boolean                @default(false)
+  telegramSubs      TelegramSubscription[]
+
   hiredAt    DateTime       @default(now())
   firedAt    DateTime?
   fireReason String? // Ketish sababi: RESIGNED, FIRED, RETIRED, TRANSFERRED, OTHER
@@ -1035,10 +1042,16 @@ model TelegramSubscription {
   hospitalId String?
   hospital   Hospital? @relation(fields: [hospitalId], references: [id])
 
+  // Qaysi ruxsatli xodim ulangan (contact orqali tasdiqlangan). Eski
+  // (2026-09-23 gacha, raqamni matn bilan yozib ulangan) obunalarda null.
+  employeeId String?
+  employee   Employee? @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([chatId, hospitalId])
+  @@index([employeeId])
 }
 
 // ─────────────────────────────────────────────

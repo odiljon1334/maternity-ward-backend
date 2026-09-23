@@ -580,7 +580,13 @@ export class EmployeesService {
           status: 'FIRED',
           fireReason: fireReason ?? null,
           fireNote: fireNote ?? null,
+          telegramBotAccess: false,
         },
+      }),
+      // Shu xodim nomidan ulangan HR bot chatlari uziladi
+      this.prisma.telegramSubscription.updateMany({
+        where: { employeeId: id, isActive: true },
+        data: { isActive: false },
       }),
     ];
 
@@ -593,10 +599,17 @@ export class EmployeesService {
       );
     }
 
+    // Direktor ketganda — egasi noma'lum ESKI usulda ulangan chatlar ham
+    // uziladi (ular odatda direktorniki edi). Yangi, ruxsat ro'yxati orqali
+    // ulangan boshqa xodimlar (o'rinbosar, kadrlar) ta'sirlanmaydi.
     if (emp.user?.role === 'DIRECTOR' && emp.hospitalId) {
       ops.push(
         this.prisma.telegramSubscription.updateMany({
-          where: { hospitalId: emp.hospitalId, isActive: true },
+          where: {
+            hospitalId: emp.hospitalId,
+            isActive: true,
+            employeeId: null,
+          },
           data: { isActive: false },
         }),
       );

@@ -7,6 +7,10 @@ import * as path from 'path';
 import * as https from 'https';
 import { formatMinutes, isHospitalBlocked } from '../common/utils/payment.util';
 import { getStaffPricing } from '../common/utils/pricing.util';
+import {
+  BotLinkCandidate,
+  TelegramAccessService,
+} from './telegram-access.service';
 
 const TZ = process.env.TIMEZONE || 'Asia/Tashkent';
 
@@ -116,6 +120,20 @@ function mainKeyboard(linked: boolean) {
   ]);
 }
 
+/** Telegram raqamni o'zi tasdiqlab yuboradigan tugma (faqat shaxsiy chatda). */
+function contactKeyboard() {
+  return Markup.keyboard([
+    [Markup.button.contactRequest('📱 Raqamni ulashish')],
+  ])
+    .oneTime()
+    .resize();
+}
+
+const LINK_INSTRUCTIONS =
+  '📱 Ulanish uchun pastdagi <b>«📱 Raqamni ulashish»</b> tugmasini bosing.\n\n' +
+  "Telegram raqamingizni o'zi tasdiqlab yuboradi. Faqat muassasa rahbariyati " +
+  "botdan foydalanish ro'yxatiga qo'shgan xodimlar ulana oladi.";
+
 /** Sub-keyboard for today detail.
  *  XAVFSIZLIK: callback data'da hospitalId YO'Q — handler shifoxonani doim
  *  chat obunasidan oladi (callback data'ni mijoz soxtalashtirishi mumkin). */
@@ -133,12 +151,17 @@ export class TelegramService implements OnModuleInit {
   private readonly logger = new Logger(TelegramService.name);
   private bot: Telegraf;
 
-  // chatId → waiting for phone number input
-  private pendingLink = new Set<string>();
+  // Bir raqam bir nechta muassasadagi ruxsatli xodimga mos kelsa — tanlov
+  // kutilmoqda. Callback'da faqat INDEX yuboriladi, ID emas.
+  private pendingChoices = new Map<
+    string,
+    { candidates: BotLinkCandidate[]; expiresAt: number }
+  >();
 
   constructor(
     private readonly config: ConfigService,
     private readonly prisma: PrismaService,
+    private readonly access: TelegramAccessService,
   ) {}
 
   async onModuleInit() {
@@ -622,13 +645,7 @@ export class TelegramService implements OnModuleInit {
 
     bot.action('cmd_link', async (ctx) => {
       await ctx.answerCbQuery();
-      const chatId = this.chatIdFromCtx(ctx);
-      this.pendingLink.add(chatId);
-      await ctx.reply(
-        "📱 Kasalxona tizimiga ro'yxatdan o'tgan <b>telefon raqamingizni</b> yuboring.\n\n" +
-          'Misol: <code>+998901234567</code>',
-        { parse_mode: 'HTML' },
-      );
+      await this.sendLinkPrompt(ctx);
     });
 
     // ── Inline button: today came/not-came detail lists ───────────────────────
@@ -653,143 +670,132 @@ export class TelegramService implements OnModuleInit {
       });
     });
 
-    // ── Text: phone number for linking ────────────────────────────────────────
+    // ── Ulanish: Telegram tasdiqlagan raqam (contact) ────────────────────────
+    bot.on('contact', async (ctx) => {
+      const chatId = String(ctx.chat.id);
+      const contact = ctx.message.contact;
+
+      if (ctx.chat.type !== 'private') return;
+
+      // Faqat O'Z raqamini ulashgan bo'lishi shart — boshqa kontaktni
+      // "forward" qilib ulanib bo'lmaydi.
+      if (!contact?.user_id || contact.user_id !== ctx.from?.id) {
+        await ctx.reply(
+          "⚠️ Faqat o'zingizning raqamingizni «📱 Raqamni ulashish» tugmasi orqali yuboring.",
+          contactKeyboard(),
+        );
+        return;
+      }
+
+      const candidates = await this.access.findLinkCandidates(
+        contact.phone_number,
+      );
+
+      if (!candidates.length) {
+        // Hech qanday ism/muassasa/rol oshkor qilinmaydi.
+        this.logger.warn(`Telegram ulanish rad etildi: chat=${chatId}`);
+        await ctx.reply(
+          "⛔ Bu raqam botdan foydalanish ro'yxatida yo'q.\n\n" +
+            'Muassasangiz direktori yoki administratoriga murojaat qiling — ular sizni ' +
+            "Sozlamalar → «Telegram bot ruxsati» bo'limida qo'shishi kerak.",
+          Markup.removeKeyboard(),
+        );
+        return;
+      }
+
+      if (candidates.length === 1) {
+        await this.completeLink(ctx, candidates[0]);
+        return;
+      }
+
+      // Raqam egasi Telegram tomonidan tasdiqlangan — unga o'z muassasalari
+      // ro'yxatini ko'rsatish xavfsiz.
+      this.pendingChoices.set(chatId, {
+        candidates,
+        expiresAt: Date.now() + 10 * 60_000,
+      });
+      await ctx.reply('✅ Raqam tasdiqlandi.', Markup.removeKeyboard());
+      await ctx.reply(
+        'Raqamingiz bir nechta muassasada ruxsatga ega. Qaysi biriga ulanasiz?',
+        Markup.inlineKeyboard(
+          candidates.map((c, i) => [
+            Markup.button.callback(`🏥 ${c.hospitalName}`, `link_pick:${i}`),
+          ]),
+        ),
+      );
+    });
+
+    bot.action(/^link_pick:(\d+)$/, async (ctx) => {
+      await ctx.answerCbQuery();
+      const chatId = this.chatIdFromCtx(ctx);
+      const pending = this.pendingChoices.get(chatId);
+      const index = Number((ctx.match as RegExpMatchArray)[1]);
+      const candidate =
+        pending && pending.expiresAt > Date.now()
+          ? pending.candidates[index]
+          : undefined;
+      this.pendingChoices.delete(chatId);
+      if (!candidate) {
+        await this.sendLinkPrompt(
+          ctx,
+          "⌛ Tanlov muddati o'tdi. Qaytadan urinib ko'ring.",
+        );
+        return;
+      }
+      await this.completeLink(ctx, candidate);
+    });
+
+    // ── Matn: eski usul (raqamni yozish) endi ishlamaydi ─────────────────────
     bot.on('text', async (ctx) => {
       const chatId = String(ctx.chat.id);
       const text = ctx.message.text.trim();
-
-      // Commands are handled by bot.command/bot.start — skip here
       if (text.startsWith('/')) return;
 
       const digits = text.replace(/\D/g, '');
-      const looksLikePhone = digits.length >= 9;
-      const inPending = this.pendingLink.has(chatId);
+      if (digits.length < 9) return;
+      if (await this.getLinkedHospital(chatId)) return;
 
-      // Process if: user clicked "Tizimga ulanish" (pendingLink)
-      // OR: message looks like a phone number and user is NOT yet linked
-      // (handles server-restart case where pendingLink Set is cleared)
-      if (!inPending) {
-        if (!looksLikePhone) return;
-        const alreadyLinked = await this.getLinkedHospital(chatId);
-        if (alreadyLinked) return; // linked foydalanuvchining tasodifiy raqam xabari — ignore
-      }
-
-      if (!looksLikePhone) {
-        await ctx.reply(
-          "❌ Noto'g'ri format. Raqamni to'liq kiriting.\nMisol: <code>+998901234567</code>",
-          { parse_mode: 'HTML' },
-        );
-        return;
-      }
-
-      const last9 = digits.slice(-9);
-
-      // ⚠️ Ilgari `phone: { endsWith: last9 }` ishlatilardi — bu faqat
-      //    raqam bazada AYNAN "+998901234567" ko'rinishida saqlangan
-      //    bo'lsagina ishlardi. "+998 90 123-45-67" yoki "90 123-45-67"
-      //    kabi yozilgan bo'lsa mos kelmasdi va direktor "topilmadi"
-      //    xabarini olardi. Endi faqat RAQAMLAR solishtiriladi.
-      const matches = await this.prisma.$queryRaw<Array<{ id: string }>>`
-        SELECT id FROM "Employee"
-        WHERE "firedAt" IS NULL
-          AND phone IS NOT NULL
-          AND right(regexp_replace(phone, '[^0-9]', '', 'g'), 9) = ${last9}
-      `;
-
-      if (!matches.length) {
-        await ctx.reply(
-          `❌ <b>${text}</b> raqamli hodim tizimda topilmadi.\n\nAdministrator bilan bog\'laning.`,
-          { parse_mode: 'HTML' },
-        );
-        return;
-      }
-
-      const candidates = await this.prisma.employee.findMany({
-        where: { id: { in: matches.map((m) => m.id) } },
-        include: { hospital: true, user: true },
-      });
-
-      // ⚠️ Bir xil raqam bir necha kasalxonada uchrashi mumkin.
-      //    Ilgari findFirst tasodifiy birini olardi va chat NOTO'G'RI
-      //    kasalxonaga ulanib qolishi mumkin edi.
-      //    Endi ruxsati bor (DIRECTOR/ADMIN) xodim afzal ko'riladi.
-      const ALLOWED_ROLES = ['DIRECTOR', 'ADMIN'];
-      const employee =
-        candidates.find(
-          (c) => c.user && ALLOWED_ROLES.includes(c.user.role) && c.hospitalId,
-        ) ?? candidates[0];
-
-      if (candidates.length > 1) {
-        this.logger.warn(
-          `Telegram ulanish: "${text}" raqami ${candidates.length} ta xodimga mos keldi ` +
-            `(${candidates.map((c) => `${c.fullName}/${c.hospital?.name}`).join(', ')}). ` +
-            `Tanlandi: ${employee.fullName}/${employee.hospital?.name}`,
-        );
-      }
-
-      if (!employee.hospitalId) {
-        await ctx.reply(
-          '❌ Bu hodim hech qanday kasalxonaga biriktirilmagan.',
-          { parse_mode: 'HTML' },
-        );
-        return;
-      }
-
-      // DIRECTOR yoki ADMIN roli bo'lgan foydalanuvchilar ulay oladi
-      if (!employee.user || !ALLOWED_ROLES.includes(employee.user.role)) {
-        // Sabab aniq aytiladi — administrator nimani tuzatishini bilsin
-        const roleInfo = employee.user
-          ? `Joriy roli: <b>${employee.user.role}</b> (kerak: DIRECTOR yoki ADMIN)`
-          : "Bu xodimda tizimga kirish hisobi (login) umuman yo'q";
-
-        await ctx.reply(
-          `⛔ <b>Kirish rad etildi</b>\n\n` +
-            `👤 Topilgan xodim: <b>${employee.fullName}</b>\n` +
-            `🏥 Kasalxona: <b>${employee.hospital?.name ?? '—'}</b>\n` +
-            `🔑 ${roleInfo}\n\n` +
-            'Faqat kasalxona <b>direktori</b> (DIRECTOR yoki ADMIN) Telegram botni ulay oladi.\n\n' +
-            "Administratordan shu xodimga DIRECTOR roli bilan login yaratishini so'rang.",
-          { parse_mode: 'HTML' },
-        );
-
-        this.logger.warn(
-          `Telegram ulanish rad etildi: ${employee.fullName} ` +
-            `(${employee.hospital?.name}) — rol: ${employee.user?.role ?? "login yo'q"}`,
-        );
-        return;
-      }
-
-      this.pendingLink.delete(chatId);
-
-      const username = ctx.from?.username || ctx.from?.first_name || '';
-      const existingSub = await this.prisma.telegramSubscription.findFirst({
-        where: { chatId, hospitalId: employee.hospitalId },
-      });
-
-      if (existingSub) {
-        await this.prisma.telegramSubscription.update({
-          where: { id: existingSub.id },
-          data: { isActive: true, username },
-        });
-      } else {
-        await this.prisma.telegramSubscription.create({
-          data: {
-            chatId,
-            username,
-            role: 'DIRECTOR',
-            hospitalId: employee.hospitalId,
-            isActive: true,
-          },
-        });
-      }
-
-      await ctx.reply(
-        `✅ <b>${employee.hospital?.name}</b> kasalxonasiga muvaffaqiyatli ulandi!\n\n` +
-          `👤 Direktor: <b>${employee.fullName}</b>\n\n` +
-          `Endi real vaqtda davomat xabarlari yuboriladi. 🎉`,
-        { parse_mode: 'HTML', ...mainKeyboard(true) },
+      await this.sendLinkPrompt(
+        ctx,
+        "🔒 Xavfsizlik uchun raqamni qo'lda yozish endi qabul qilinmaydi.",
       );
     });
+  }
+
+  private async sendLinkPrompt(ctx: any, prefix?: string) {
+    if (ctx.chat?.type && ctx.chat.type !== 'private') {
+      await ctx.reply(
+        'ℹ️ Botga ulanish faqat shaxsiy chatda mumkin — botga shaxsiy xabar yozing.',
+      );
+      return;
+    }
+    await ctx.reply((prefix ? `${prefix}\n\n` : '') + LINK_INSTRUCTIONS, {
+      parse_mode: 'HTML',
+      ...contactKeyboard(),
+    });
+  }
+
+  private async completeLink(ctx: any, candidate: BotLinkCandidate) {
+    const chatId = this.chatIdFromCtx(ctx);
+    const username = ctx.from?.username || ctx.from?.first_name || '';
+    const linked = await this.access.linkChat(chatId, username, candidate);
+    if (!linked) {
+      await ctx.reply(
+        '⛔ Ruxsat bekor qilingan. Muassasa rahbariyatiga murojaat qiling.',
+        Markup.removeKeyboard(),
+      );
+      return;
+    }
+    this.logger.log(
+      `Telegram ulandi: chat=${chatId} → ${candidate.hospitalName} (${candidate.fullName})`,
+    );
+    await ctx.reply(
+      `✅ <b>${candidate.hospitalName}</b> muassasasiga muvaffaqiyatli ulandingiz!\n\n` +
+        `👤 ${candidate.fullName}\n\n` +
+        `Endi real vaqtda davomat xabarlari yuboriladi. 🎉`,
+      { parse_mode: 'HTML', ...Markup.removeKeyboard() },
+    );
+    await ctx.reply('🏠 Asosiy menyu:', { ...mainKeyboard(true) });
   }
 
   // ─── helpers ────────────────────────────────────────────────────────────────

@@ -14,7 +14,7 @@ import { TelegramService } from './telegram.service';
 const LINKED_CHAT = 111;
 const STRANGER_CHAT = 999;
 
-function makeHarness() {
+export function makeHarness() {
   const prisma: any = {
     telegramSubscription: {
       findFirst: jest.fn(async ({ where }: any) =>
@@ -31,7 +31,11 @@ function makeHarness() {
     },
   };
   const config: any = { get: jest.fn(() => undefined) };
-  const service = new TelegramService(config, prisma);
+  const access: any = {
+    findLinkCandidates: jest.fn(async () => []),
+    linkChat: jest.fn(async () => true),
+  };
+  const service = new TelegramService(config, prisma, access);
 
   const bot = new Telegraf('123:TEST');
   // Telegraf har bir update uchun yangi Telegram instansiyasini yaratadi —
@@ -50,7 +54,7 @@ function makeHarness() {
       .filter(([m]) => m === 'sendMessage')
       .map(([, p]: any) => String(p.text));
 
-  return { prisma, bot, callApi, sentTexts };
+  return { prisma, access, bot, callApi, sentTexts };
 }
 
 let updateId = 1;
