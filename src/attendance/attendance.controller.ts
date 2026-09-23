@@ -81,7 +81,7 @@ export class AttendanceController {
 
   /**
    * EMPLOYEE o'zi GPS + selfie bilan davomat belgilaydi.
-   * multipart/form-data: selfie (optional) + JSON maydonlar.
+   * multipart/form-data: selfie (check-in uchun majburiy) + GPS maydonlar (majburiy).
    */
   @Post('self-checkin')
   @Roles(UserRole.EMPLOYEE)
@@ -94,53 +94,26 @@ export class AttendanceController {
     @UploadedFile() file?: Express.Multer.File,
   ) {
     const dto = new SelfCheckInDto();
-    if (gpsLat) dto.gpsLat = parseFloat(gpsLat);
-    if (gpsLng) dto.gpsLng = parseFloat(gpsLng);
-    if (gpsAccuracy) dto.gpsAccuracy = parseFloat(gpsAccuracy);
+    // Noto'g'ri qiymat (masalan "abc") NaN bo'lib qolmasin — NaN masofa
+    // geofence tekshiruvidan har doim o'tib ketardi. Servis bo'sh
+    // koordinatani rad etadi.
+    const num = (v?: string) => {
+      if (v === undefined || v === null || String(v).trim() === '')
+        return undefined;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : undefined;
+    };
+    dto.gpsLat = num(gpsLat);
+    dto.gpsLng = num(gpsLng);
+    dto.gpsAccuracy = num(gpsAccuracy);
     return this.service.selfCheckIn(userId, dto, file?.buffer);
   }
 
-  /**
-   * Xodim birinchi marta ish joyi GPS ni o'rnatadi (Hospital.gpsLat/gpsLng).
-   * Faqat hospital GPS null bo'lsa saqlanadi.
-   */
-  @Post('set-hospital-gps')
-  @Roles(UserRole.EMPLOYEE)
-  setHospitalGps(
-    @CurrentUser('sub') userId: string,
-    @Body('lat') lat: string,
-    @Body('lng') lng: string,
-  ) {
-    return this.service.setHospitalGps(
-      userId,
-      parseFloat(lat),
-      parseFloat(lng),
-    );
-  }
-
-  @Post('set-employee-gps')
-  @Roles(UserRole.EMPLOYEE)
-  setEmployeeGps(
-    @CurrentUser('sub') userId: string,
-    @Body('lat') lat: string,
-    @Body('lng') lng: string,
-    // Brauzerdan kelgan o'lchov aniqligi (metr). Yuborilmasa tekshirilmaydi —
-    // eski mobil klientlar bilan uzilib qolmaslik uchun
-    @Body('accuracy') accuracy?: string,
-  ) {
-    return this.service.setEmployeeGps(
-      userId,
-      parseFloat(lat),
-      parseFloat(lng),
-      accuracy !== undefined ? parseFloat(accuracy) : undefined,
-    );
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────────
-  // QO'SHISH KERAK: attendance.controller.ts ichiga, setEmployeeGps() dan keyin
-  // UserRole importida ASSISTANT_ADMIN allaqachon bor deb faraz qilinmoqda —
-  // bo'lmasa import qatoridan olib tashlang yoki qo'shing.
-  // ─────────────────────────────────────────────────────────────────────────────
+  // XAVFSIZLIK (2026-09-23 audit): `set-hospital-gps` va `set-employee-gps`
+  // olib tashlandi — ular XODIMGA geofence markazini o'zi belgilash imkonini
+  // berardi (masalan uyidan turib, keyin har kuni uydan check-in qilish).
+  // Muassasa markazini endi faqat DIRECTOR/ADMIN `PUT /hospitals/me/gps`
+  // orqali belgilaydi.
 
   /**
    * Admin: xodimning (adashib belgilangan) ish joyi GPS'ini tozalaydi,

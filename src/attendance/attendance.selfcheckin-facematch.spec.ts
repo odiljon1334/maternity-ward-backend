@@ -11,7 +11,9 @@ jest.mock('../common/utils/payment.util', () => ({
   isHospitalBlocked: jest.fn().mockResolvedValue(false),
 }));
 jest.mock('../common/utils/image.util', () => ({
-  processAndSavePhoto: jest.fn().mockResolvedValue({ filename: 'x.jpg', sizeKb: 10 }),
+  processAndSavePhoto: jest
+    .fn()
+    .mockResolvedValue({ filename: 'x.jpg', sizeKb: 10 }),
 }));
 
 /**
@@ -64,7 +66,9 @@ describe('AttendanceService.selfCheckIn — Qaror 4 yuz tekshiruvi gate', () => 
         findUnique: jest.fn().mockResolvedValue(null),
         upsert: jest.fn().mockResolvedValue({}),
       },
-      employee: { findUnique: jest.fn().mockResolvedValue({ baseSalary: 3000000 }) },
+      employee: {
+        findUnique: jest.fn().mockResolvedValue({ baseSalary: 3000000 }),
+      },
     };
 
     faceMatch = { verify: jest.fn() };
@@ -91,7 +95,7 @@ describe('AttendanceService.selfCheckIn — Qaror 4 yuz tekshiruvi gate', () => 
     service = module.get(AttendanceService);
   });
 
-  it("ANIQ MOS KELMASLIK — check-in rad etiladi, AttendanceRecord YARATILMAYDI (GPS kuzatish boshlanmaydi)", async () => {
+  it('ANIQ MOS KELMASLIK — check-in rad etiladi, AttendanceRecord YARATILMAYDI (GPS kuzatish boshlanmaydi)', async () => {
     faceMatch.verify.mockResolvedValue({
       mismatch: true,
       skipped: false,
@@ -110,7 +114,7 @@ describe('AttendanceService.selfCheckIn — Qaror 4 yuz tekshiruvi gate', () => 
     );
   });
 
-  it("mos keldi (skipped:false, mismatch:false) — check-in davom etadi, AttendanceRecord yaratiladi", async () => {
+  it('mos keldi (skipped:false, mismatch:false) — check-in davom etadi, AttendanceRecord yaratiladi', async () => {
     faceMatch.verify.mockResolvedValue({
       mismatch: false,
       skipped: false,
@@ -142,10 +146,53 @@ describe('AttendanceService.selfCheckIn — Qaror 4 yuz tekshiruvi gate', () => 
     );
   });
 
-  it("selfie yuborilmagan bo'lsa — face-match umuman chaqirilmaydi", async () => {
-    await service.selfCheckIn('user-1', dto as any, undefined);
+  it("selfie yuborilmagan check-in RAD ETILADI (yuz tekshiruvini chetlab o'tib bo'lmaydi)", async () => {
+    await expect(
+      service.selfCheckIn('user-1', dto as any, undefined),
+    ).rejects.toThrow(/selfie kerak/);
     expect(faceMatch.verify).not.toHaveBeenCalled();
-    expect(prisma.attendanceRecord.create).toHaveBeenCalled();
+    expect(prisma.attendanceRecord.create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['koordinatasiz', {}],
+    ['faqat kenglik', { gpsLat: 41.31 }],
+    ['NaN', { gpsLat: NaN, gpsLng: 69.28 }],
+    ['diapazondan tashqari', { gpsLat: 141.31, gpsLng: 69.28 }],
+  ])("GPS %s bo'lsa check-in RAD ETILADI", async (_label, badDto) => {
+    faceMatch.verify.mockResolvedValue({ mismatch: false, skipped: false });
+    await expect(
+      service.selfCheckIn('user-1', badDto as any, selfieBuffer),
+    ).rejects.toThrow(/Joylashuv aniqlanmadi/);
+    expect(prisma.attendanceRecord.create).not.toHaveBeenCalled();
+  });
+
+  it("geofence markazidan uzoqda bo'lsa rad etiladi, ichida bo'lsa o'tadi", async () => {
+    faceMatch.verify.mockResolvedValue({ mismatch: false, skipped: false });
+    prisma.user.findUnique.mockResolvedValue({
+      employee: {
+        ...employee,
+        hospital: { gpsLat: 41.31, gpsLng: 69.28, gpsRadius: 200 },
+      },
+    });
+
+    // ~1.1 km shimolda
+    await expect(
+      service.selfCheckIn(
+        'user-1',
+        { gpsLat: 41.32, gpsLng: 69.28 } as any,
+        selfieBuffer,
+      ),
+    ).rejects.toThrow(/uzoqdasiz/);
+    expect(prisma.attendanceRecord.create).not.toHaveBeenCalled();
+
+    // ~50 m
+    const res = await service.selfCheckIn(
+      'user-1',
+      { gpsLat: 41.3104, gpsLng: 69.28 } as any,
+      selfieBuffer,
+    );
+    expect(res.action).toBe('CHECK_IN');
   });
 
   it("bu CHECK_OUT bo'lsa (allaqachon check-in qilingan) — face-match chaqirilmaydi", async () => {

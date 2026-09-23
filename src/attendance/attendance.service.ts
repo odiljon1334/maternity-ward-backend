@@ -43,13 +43,6 @@ const TZ = process.env.TIMEZONE || 'Asia/Tashkent';
 const MIN_CHECKOUT_GAP_MIN = 120;
 
 /**
- * Xodimning ish joyi koordinatasini saqlash uchun ruxsat etilgan eng past
- * aniqlik (metr). Bundan yomon o'lchov Wi-Fi/antenna orqali topilgan taxminiy
- * nuqta bo'ladi va ish joyini noto'g'ri belgilab qo'yadi.
- */
-const EMPLOYEE_GPS_MAX_ACCURACY_M = 75;
-
-/**
  * Grafigi yo'q xodim uchun smena TAXMIN qilinadi. Taxmin noto'g'ri chiqsa
  * absurd kechikish yozilib qolmasligi kerak (masalan 660 daqiqa) — bunday
  * holatda kechikish qayd etilmaydi va direktorga noto'g'ri xabar ketmaydi.
@@ -1342,96 +1335,9 @@ export class AttendanceService {
   }
 
   /**
-  /**
-   * Xodim birinchi marta ish joyini belgilaganda kasalxona GPS ni saqlash.
-   * Faqat Hospital.gpsLat null bo'lsa ishlaydi (bir martalik setup).
-   */
-  async setHospitalGps(
-    userId: string,
-    lat: number,
-    lng: number,
-  ): Promise<{ saved: boolean; alreadySet: boolean }> {
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      include: { employee: { include: { hospital: true } } },
-    });
-    if (!user?.employee) throw new NotFoundException('Xodim profili topilmadi');
-
-    const hospital = user.employee.hospital;
-    if (!hospital) throw new NotFoundException('Kasalxona topilmadi');
-
-    if (hospital.gpsLat != null && hospital.gpsLng != null) {
-      return { saved: false, alreadySet: true };
-    }
-
-    await this.prisma.hospital.update({
-      where: { id: hospital.id },
-      data: { gpsLat: lat, gpsLng: lng },
-    });
-
-    this.logger.log(
-      `Hospital GPS set: ${hospital.name} → (${lat}, ${lng}) by ${user.username}`,
-    );
-    return { saved: true, alreadySet: false };
-  }
-
-  async setEmployeeGps(
-    userId: string,
-    lat: number,
-    lng: number,
-    accuracyM?: number,
-  ): Promise<{ saved: boolean; alreadySet: boolean }> {
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-      throw new BadRequestException("Joylashuv koordinatalari noto'g'ri");
-    }
-
-    // ⚠️ Telefon birinchi o'lchovni Wi-Fi/uyali antenna orqali beradi —
-    //    aniqlik 500-3000 m bo'lishi mumkin. Bunday qiymat ish joyi sifatida
-    //    saqlansa, xodim ish joyida turgan bo'lsa ham "uzoqda" hisoblanadi.
-    if (
-      accuracyM !== undefined &&
-      Number.isFinite(accuracyM) &&
-      accuracyM > EMPLOYEE_GPS_MAX_ACCURACY_M
-    ) {
-      throw new BadRequestException(
-        `Joylashuv aniqligi yetarli emas (±${Math.round(accuracyM)}m). ` +
-          `Ochiq joyga chiqib qayta urinib ko'ring (±${EMPLOYEE_GPS_MAX_ACCURACY_M}m dan yaxshi bo'lishi kerak).`,
-      );
-    }
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      include: { employee: true },
-    });
-
-    if (!user?.employee) throw new NotFoundException('Xodim profili topilmadi');
-
-    const employee = user.employee;
-
-    if (employee.gpsLat != null && employee.gpsLng != null) {
-      return { saved: false, alreadySet: true };
-    }
-
-    await this.prisma.employee.update({
-      where: { id: employee.id },
-      data: { gpsLat: lat, gpsLng: lng },
-    });
-
-    this.logger.log(
-      `Employee GPS set: ${employee.fullName} → (${lat}, ${lng}) by ${user.username}`,
-    );
-
-    return { saved: true, alreadySet: false };
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────────
-  // QO'SHISH KERAK: attendance.service.ts ichiga, setEmployeeGps() dan keyin
-  // ─────────────────────────────────────────────────────────────────────────────
-
-  /**
    * SUPER_ADMIN/ASSISTANT_ADMIN/DIRECTOR/ADMIN tomonidan: xodimning
-   * (noto'g'ri/adashib) saqlangan ish joyi GPS'ini tozalaydi — shundan keyin
-   * xodim ilovaga kirganda "Ish joyi manzilini belgilang" banneri qayta
-   * chiqadi va u to'g'ri joyda turib qaytadan belgilashi mumkin bo'ladi.
+   * (noto'g'ri/adashib) saqlangan shaxsiy ish joyi GPS'ini tozalaydi —
+   * shundan keyin xodim lavozim/muassasa markazi bo'yicha tekshiriladi.
    */
   async resetEmployeeGps(
     employeeId: string,
@@ -1507,13 +1413,33 @@ export class AttendanceService {
       hospital?.gpsRadius ??
       200;
 
+    // XAVFSIZLIK (2026-09-23 audit): koordinata MAJBURIY. Ilgari GPS
+    // yuborilmasa masofa tekshiruvi umuman o'tkazilmasdi va istalgan joydan
+    // check-in qilish mumkin edi.
     if (
-      geoLat != null &&
-      geoLng != null &&
-      dto.gpsLat != null &&
-      dto.gpsLng != null
+      !Number.isFinite(dto.gpsLat) ||
+      !Number.isFinite(dto.gpsLng) ||
+      Math.abs(dto.gpsLat as number) > 90 ||
+      Math.abs(dto.gpsLng as number) > 180
     ) {
-      const distance = haversineMeters(dto.gpsLat, dto.gpsLng, geoLat, geoLng);
+      throw new BadRequestException(
+        "Joylashuv aniqlanmadi. Telefoningizda GPS (joylashuv) ruxsatini yoqib, qaytadan urinib ko'ring.",
+      );
+    }
+
+    if (geoLat == null || geoLng == null) {
+      // Muassasa markazi hali belgilanmagan — tekshirib bo'lmaydi.
+      // Direktor/Admin Sozlamalar → "GPS markazi" orqali belgilashi kerak.
+      this.logger.warn(
+        `Geofence markazi yo'q: hospital=${employee.hospitalId} — masofa tekshirilmadi`,
+      );
+    } else {
+      const distance = haversineMeters(
+        dto.gpsLat as number,
+        dto.gpsLng as number,
+        geoLat,
+        geoLng,
+      );
       if (distance > geoRadius) {
         const distStr = formatDistance(Math.round(distance));
         throw new BadRequestException(
@@ -1544,6 +1470,15 @@ export class AttendanceService {
       where: { employeeId: employee.id, workDate },
     });
     const isCheckIn = !existing || !existing.checkIn;
+
+    // XAVFSIZLIK (2026-09-23 audit): check-in uchun selfie MAJBURIY. Ilgari
+    // fayl yuborilmasa yuz tekshiruvi butunlay o'tkazib yuborilardi (hatto
+    // strict rejimda ham). Mobil ilova har doim selfie yuboradi.
+    if (isCheckIn && !selfieBuffer?.length) {
+      throw new BadRequestException(
+        'Check-in uchun selfie kerak. Kamerani yoqib, suratga tushing va qaytadan yuboring.',
+      );
+    }
 
     // 4a. Yuz tekshiruvi (Qaror 4) — FAQAT check-in uchun (GPS kuzatish
     // yuz tasdiqlangandan keyingina boshlanishi kerak). Fail-open siyosati

@@ -16,6 +16,7 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { HospitalsService } from './hospitals.service';
+import { SetHospitalGpsDto } from './dto/set-hospital-gps.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -26,6 +27,12 @@ const SUPER = UserRole.SUPER_ADMIN;
 const ASST = UserRole.ASSISTANT_ADMIN;
 const DIR = UserRole.DIRECTOR;
 const ADMIN = UserRole.ADMIN;
+
+interface HospitalActor {
+  sub: string;
+  role: UserRole;
+  hospitalId?: string | null;
+}
 
 @Controller('hospitals')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -164,25 +171,57 @@ export class HospitalsController {
     return this.svc.updateDirector(id, body);
   }
 
-  /** DIRECTOR/SUPER: GPS radius ni o'zgartirish (50–2000 metr) */
+  /** GPS radius ni o'zgartirish (50–2000 metr). DIRECTOR — faqat o'z muassasasi. */
   @Patch(':id/gps-radius')
   @Roles(SUPER, ASST, DIR)
-  updateGpsRadius(@Param('id') id: string, @Body('radius') radius: number) {
+  async updateGpsRadius(
+    @Param('id') id: string,
+    @Body('radius') radius: number,
+    @CurrentUser() user: HospitalActor,
+  ) {
+    await this.assertCanManageHospital(id, user);
     return this.svc.updateGpsRadius(id, Number(radius));
   }
 
-  /** SUPER/DIRECTOR: GPS ni reset qilish (xodim qayta o'rnatishi uchun) */
+  /** GPS markazini tozalash. DIRECTOR — faqat o'z muassasasi. */
   @Patch(':id/gps-reset')
   @Roles(SUPER, ASST, DIR)
-  resetGps(@Param('id') id: string) {
+  async resetGps(@Param('id') id: string, @CurrentUser() user: HospitalActor) {
+    await this.assertCanManageHospital(id, user);
     return this.svc.resetGps(id);
   }
 
   /** Kasalxonaning barcha Telegram obunalarini o'chirish (eski direktor qoldiqlari uchun) */
   @Delete(':id/telegram-subs')
   @Roles(SUPER, ASST)
-  resetTelegramSubs(@Param('id') id: string) {
+  async resetTelegramSubs(
+    @Param('id') id: string,
+    @CurrentUser() user: HospitalActor,
+  ) {
+    await this.assertCanManageHospital(id, user);
     return this.svc.resetTelegramSubs(id);
+  }
+
+  /**
+   * XAVFSIZLIK (2026-09-23 audit): `:id` bilan ishlaydigan operatsion
+   * endpointlar ilgari istalgan muassasa ID'sini qabul qilardi.
+   * SUPER_ADMIN — hammasi; ASSISTANT_ADMIN — faqat biriktirilganlari;
+   * DIRECTOR/ADMIN — faqat JWT'dagi o'z muassasasi.
+   */
+  private async assertCanManageHospital(id: string, user: HospitalActor) {
+    if (user.role === SUPER) return;
+    if (user.role === ASST) {
+      const allowed = await this.svc.resolveAllowedHospitalIds(
+        user.role,
+        user.sub,
+      );
+      if (allowed?.includes(id)) return;
+    } else if (user.hospitalId && user.hospitalId === id) {
+      return;
+    }
+    throw new ForbiddenException(
+      'Sizga bu muassasani boshqarish huquqi berilmagan',
+    );
   }
 
   /** SUPER_ADMIN: shifoxonaga biriktirilgan Assistant Admin'lar ro'yxati */
@@ -212,6 +251,29 @@ export class HospitalsController {
   // DIQQAT: hospitalId HAR DOIM JWT'dan olinadi (mijoz yuborgan qiymatga
   // ishonilmaydi) — hikvision tuzatishidagi bilan bir xil naqsh.
   // ─────────────────────────────────────────────────────────
+
+  /** O'z muassasasining geofence markazi va radiusi. */
+  @Get('me/gps')
+  @Roles(DIR, ADMIN)
+  getOwnGps(@CurrentUser('hospitalId') hospitalId: string) {
+    if (!hospitalId) throw new ForbiddenException('Shifoxona aniqlanmadi');
+    return this.svc.getGps(hospitalId);
+  }
+
+  /**
+   * Geofence markazini belgilash — Sozlamalarda xaritadan tanlangan nuqta
+   * yoki "hozirgi joyimni markaz qilish" (accuracy bilan). Ilgari buni
+   * muassasaning BIRINCHI check-in qilgan xodimi o'zi belgilardi.
+   */
+  @Put('me/gps')
+  @Roles(DIR, ADMIN)
+  setOwnGps(
+    @CurrentUser('hospitalId') hospitalId: string,
+    @Body() dto: SetHospitalGpsDto,
+  ) {
+    if (!hospitalId) throw new ForbiddenException('Shifoxona aniqlanmadi');
+    return this.svc.setGps(hospitalId, dto);
+  }
 
   @Patch('me')
   @Roles(DIR, ADMIN)

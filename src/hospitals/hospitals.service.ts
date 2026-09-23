@@ -360,6 +360,42 @@ export class HospitalsService {
     });
   }
 
+  /** Geofence holati: markaz, radius va shaxsiy markazi bor xodimlar soni. */
+  async getGps(hospitalId: string) {
+    const [hospital, personalCenters] = await Promise.all([
+      this.prisma.hospital.findUnique({
+        where: { id: hospitalId },
+        select: { gpsLat: true, gpsLng: true, gpsRadius: true },
+      }),
+      // Shaxsiy markaz muassasa markazidan USTUN — admin buni bilishi kerak
+      this.prisma.employee.count({
+        where: { hospitalId, firedAt: null, gpsLat: { not: null } },
+      }),
+    ]);
+    return {
+      gpsLat: hospital?.gpsLat ?? null,
+      gpsLng: hospital?.gpsLng ?? null,
+      gpsRadius: hospital?.gpsRadius ?? 200,
+      personalCenters,
+    };
+  }
+
+  /** DIRECTOR/ADMIN: o'z muassasasining geofence markazini belgilash. */
+  async setGps(
+    hospitalId: string,
+    data: { lat: number; lng: number; radius?: number },
+  ) {
+    await this.prisma.hospital.update({
+      where: { id: hospitalId },
+      data: {
+        gpsLat: data.lat,
+        gpsLng: data.lng,
+        ...(data.radius != null && { gpsRadius: data.radius }),
+      },
+    });
+    return this.getGps(hospitalId);
+  }
+
   /** DIRECTOR: kasalxona GPS ni reset qilish (qayta o'rnatish uchun) */
   async resetGps(hospitalId: string) {
     return this.prisma.hospital.update({
