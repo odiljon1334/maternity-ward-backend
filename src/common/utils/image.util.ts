@@ -68,3 +68,22 @@ export async function processAndSaveLogo(
   const stat = fs.statSync(outputPath);
   return { filename, sizeKb: Math.round(stat.size / 1024) };
 }
+
+/**
+ * Yuz tekshiruvi (face-match) uchun rasmni tayyorlaydi — FAZA 6, 4c.
+ * Profil rasmi va telefon selfisi ko'pincha bir necha MB bo'ladi; ularni
+ * base64 qilib Python xizmatiga yuborish va u yerda dekodlash sekin edi.
+ * Model uchun 640px yetarli: EXIF bo'yicha buriladi, 640x640 ichiga
+ * kichraytiriladi, JPEG 85%. Xatolik bo'lsa asl bufer qaytadi.
+ */
+export async function prepareFaceImage(buffer: Buffer): Promise<Buffer> {
+  try {
+    return await sharp(buffer)
+      .rotate()
+      .resize(640, 640, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 85 })
+      .toBuffer();
+  } catch {
+    return buffer;
+  }
+}

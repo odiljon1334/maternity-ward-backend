@@ -26,7 +26,10 @@ import { isHospitalBlocked } from '../common/utils/payment.util';
 import { calcNetWorkMin } from '../common/utils/shift.util';
 import { formatDistance } from '../common/utils/geo.util';
 import { buildGeoCenters, matchGeoCenter } from '../work-sites/geofence.util';
-import { processAndSavePhoto } from '../common/utils/image.util';
+import {
+  prepareFaceImage,
+  processAndSavePhoto,
+} from '../common/utils/image.util';
 import { LATE_GRACE_MINUTES } from '../common/constants';
 import { SelfCheckInDto } from './dto/self-check-in.dto';
 import { LocationGateway } from '../location/location.gateway';
@@ -42,6 +45,18 @@ const TZ = process.env.TIMEZONE || 'Asia/Tashkent';
  * Bu qiymatdan kam bo'lsa — terminal dublikati sifatida ignore qilinadi.
  */
 const MIN_CHECKOUT_GAP_MIN = 120;
+
+/**
+ * Mobil check-in GPS aniqligi (FAZA 6, 4c — Odiljon, 2026-09-23):
+ *  - telefon bergan aniqlik (accuracy) geofence radiusiga ko'pi bilan 50 m
+ *    qo'shiladi — ±2 km taxminiy nuqta bilan chetlab o'tib bo'lmaydi;
+ *  - 150 m dan yomon aniqlikdagi o'lchov umuman qabul qilinmaydi.
+ */
+const MOBILE_GPS_TOLERANCE_MAX_M = 50;
+const MOBILE_GPS_MAX_ACCURACY_M = 150;
+
+/** Check-out'da jonli kuzatuv shu daqiqadan ko'p uzilgan bo'lsa — yuz tekshiriladi */
+const CHECKOUT_TRACKING_GAP_MIN = 30;
 
 /**
  * Grafigi yo'q xodim uchun smena TAXMIN qilinadi. Taxmin noto'g'ri chiqsa
@@ -1336,6 +1351,113 @@ export class AttendanceService {
   }
 
   /**
+   * Yuz tekshiruvi (Qaror 4). Rasmlar oldin 640px gacha kichraytiriladi;
+   * har bir bosqich vaqti log'ga yoziladi (face-match tezligini o'lchash).
+   * Mos kelmasa BadRequestException. Check-out'da xizmat ishlamasa —
+   * bloklanmaydi (xodim ishdan keta olmay qolmasligi uchun), faqat log.
+   */
+  private async verifyFaceOrThrow(
+    userId: string,
+    employee: { id: string; hospitalId: string; photoUrl: string | null },
+    selfie: Buffer,
+    stage: 'CHECK_IN' | 'CHECK_OUT',
+  ): Promise<boolean> {
+    const t0 = Date.now();
+    let referenceRaw: Buffer | null = null;
+    if (employee.photoUrl) {
+      try {
+        const refPath = path.join(
+          process.env.UPLOAD_DIR || './uploads',
+          employee.photoUrl.replace(/^\/uploads\//, ''),
+        );
+        if (fs.existsSync(refPath)) referenceRaw = fs.readFileSync(refPath);
+      } catch (e: any) {
+        this.logger.warn(`Profil rasmini o'qib bo'lmadi: ${e?.message ?? e}`);
+      }
+    }
+    const [reference, live] = await Promise.all([
+      referenceRaw ? prepareFaceImage(referenceRaw) : Promise.resolve(null),
+      prepareFaceImage(selfie),
+    ]);
+    const t1 = Date.now();
+    const faceResult = await this.faceMatch.verify(reference, live);
+    const t2 = Date.now();
+
+    this.logger.log(
+      `Face-match ${stage}: employee=${employee.id} prep=${t1 - t0}ms verify=${t2 - t1}ms ` +
+        `selfie=${Math.round(selfie.length / 1024)}→${Math.round(live.length / 1024)}KB ` +
+        `ref=${reference ? Math.round(reference.length / 1024) : 0}KB ` +
+        `result=${faceResult.mismatch ? 'MISMATCH' : faceResult.skipped ? 'SKIPPED' : 'OK'}${faceResult.reason ? `/${faceResult.reason}` : ''}`,
+    );
+
+    this.auditLog.log({
+      userId,
+      hospitalId: employee.hospitalId,
+      action: faceResult.mismatch
+        ? 'FACE_MATCH_REJECTED'
+        : faceResult.skipped
+          ? 'FACE_MATCH_SKIPPED'
+          : 'FACE_MATCH_OK',
+      entity: 'AttendanceRecord',
+      entityId: employee.id,
+      details: {
+        stage,
+        reason: faceResult.reason,
+        similarity: faceResult.similarity,
+        prepMs: t1 - t0,
+        verifyMs: t2 - t1,
+      },
+    });
+
+    if (!faceResult.mismatch) return !faceResult.skipped;
+
+    if (stage === 'CHECK_OUT' && faceResult.reason === 'SERVICE_ERROR') {
+      this.logger.warn(
+        `Face-match xizmati ishlamadi — check-out bloklanmadi: employee=${employee.id}`,
+      );
+      return false;
+    }
+
+    const action = stage === 'CHECK_IN' ? 'check-in' : 'check-out';
+    const MESSAGES: Record<string, string> = {
+      FACE_MISMATCH: `Yuz tasdiqlanmadi — ${action} rad etildi. Iltimos, yaxshi yorug'likda, kamerani to'g'ridan qarab qaytadan urinib ko'ring.`,
+      LIVE_FACE_NOT_FOUND: `Suratda yuzingiz aniqlanmadi — ${action} rad etildi. Iltimos, yorug'roq joyda, yuzingizni kameraga to'g'ridan qaratib qaytadan urinib ko'ring.`,
+      REFERENCE_FACE_NOT_FOUND: `Profil rasmingizda yuz aniqlanmadi — ${action} rad etildi. Iltimos, administratorga murojaat qiling.`,
+      NO_REFERENCE_PHOTO:
+        'Profilingizda rasm mavjud emas — yuz tasdiqlash uchun avval profilga rasm yuklashingiz kerak. Administratorga murojaat qiling.',
+      SERVICE_ERROR: `Yuz tekshirish xizmati vaqtincha ishlamayapti — ${action} rad etildi. Birozdan so'ng qaytadan urinib ko'ring yoki administratorga murojaat qiling.`,
+    };
+    throw new BadRequestException(
+      MESSAGES[faceResult.reason ?? ''] ?? MESSAGES.FACE_MISMATCH,
+    );
+  }
+
+  /**
+   * Check-out'da yuz kerakmi: smena davomida jonli kuzatuv xodimni ish
+   * joyidan tashqarida ko'rgan, yoki oxirgi GPS nuqtasi 30 daqiqadan eski
+   * (yoki umuman yo'q) bo'lsa — ha.
+   */
+  private async checkoutNeedsFaceMatch(
+    userId: string,
+    checkIn: Date,
+  ): Promise<boolean> {
+    const [outside, last] = await Promise.all([
+      this.prisma.liveLocation.count({
+        where: { userId, createdAt: { gte: checkIn }, isOutside: true },
+      }),
+      this.prisma.liveLocation.findFirst({
+        where: { userId, createdAt: { gte: checkIn } },
+        orderBy: { createdAt: 'desc' },
+        select: { createdAt: true },
+      }),
+    ]);
+    if (outside > 0 || !last) return true;
+    return (
+      Date.now() - last.createdAt.getTime() > CHECKOUT_TRACKING_GAP_MIN * 60_000
+    );
+  }
+
+  /**
    * SUPER_ADMIN/ASSISTANT_ADMIN/DIRECTOR/ADMIN tomonidan: xodimning
    * (noto'g'ri/adashib) saqlangan shaxsiy ish joyi GPS'ini tozalaydi —
    * shundan keyin xodim lavozim/muassasa markazi bo'yicha tekshiriladi.
@@ -1426,10 +1548,19 @@ export class AttendanceService {
       hospital: employee.hospital,
       sites: (employee.workSites ?? []).map((w) => w.workSite),
     });
+    const accuracy = Number.isFinite(dto.gpsAccuracy)
+      ? Math.max(0, dto.gpsAccuracy as number)
+      : 0;
+    if (accuracy > MOBILE_GPS_MAX_ACCURACY_M) {
+      throw new BadRequestException(
+        `Joylashuv aniqligi past (±${Math.round(accuracy)} m). Ochiqroq joyga chiqib, bir necha soniya kuting va qayta urinib ko'ring.`,
+      );
+    }
     const geoMatch = matchGeoCenter(
       geoCenters,
       dto.gpsLat as number,
       dto.gpsLng as number,
+      Math.min(accuracy, MOBILE_GPS_TOLERANCE_MAX_M),
     );
 
     if (!geoMatch) {
@@ -1482,74 +1613,23 @@ export class AttendanceService {
       );
     }
 
-    // 4a. Yuz tekshiruvi (Qaror 4) — FAQAT check-in uchun (GPS kuzatish
-    // yuz tasdiqlangandan keyingina boshlanishi kerak). Fail-open siyosati
-    // FaceMatchService.verify() ichida hujjatlashtirilgan — bu YANGI,
-    // ixtiyoriy qatlam production check-in oqimini to'xtatmasligi kerak,
-    // ANIQ MOS KELMASLIKdan tashqari.
+    // 4a. Yuz tekshiruvi (Qaror 4) — check-in'da har doim; check-out'da
+    //     faqat shubhali holatda (checkoutNeedsFaceMatch, pastda).
     let faceVerified = false;
-    if (isCheckIn && selfieBuffer?.length) {
-      let referenceBuffer: Buffer | null = null;
-      if (employee.photoUrl) {
-        try {
-          const refPath = path.join(
-            process.env.UPLOAD_DIR || './uploads',
-            employee.photoUrl.replace(/^\/uploads\//, ''),
-          );
-          if (fs.existsSync(refPath)) {
-            referenceBuffer = fs.readFileSync(refPath);
-          }
-        } catch (e: any) {
-          this.logger.warn(`Profil rasmini o'qib bo'lmadi: ${e?.message ?? e}`);
-        }
-      }
-
-      const faceResult = await this.faceMatch.verify(
-        referenceBuffer,
-        selfieBuffer,
-      );
-
-      this.auditLog.log({
+    if (isCheckIn) {
+      faceVerified = await this.verifyFaceOrThrow(
         userId,
-        hospitalId: employee.hospitalId,
-        action: faceResult.mismatch
-          ? 'FACE_MATCH_REJECTED'
-          : faceResult.skipped
-            ? 'FACE_MATCH_SKIPPED'
-            : 'FACE_MATCH_OK',
-        entity: 'AttendanceRecord',
-        entityId: employee.id,
-        details: {
-          reason: faceResult.reason,
-          similarity: faceResult.similarity,
-        },
-      });
-
-      faceVerified = !faceResult.mismatch && !faceResult.skipped;
-
-      if (faceResult.mismatch) {
-        const FACE_MATCH_MESSAGES: Record<string, string> = {
-          FACE_MISMATCH:
-            "Yuz tasdiqlanmadi — check-in rad etildi. Iltimos, yaxshi yorug'likda, kamerani to'g'ridan qarab qaytadan urinib ko'ring.",
-          LIVE_FACE_NOT_FOUND:
-            "Suratda yuzingiz aniqlanmadi — check-in rad etildi. Iltimos, yorug'roq joyda, yuzingizni kameraga to'g'ridan qaratib qaytadan urinib ko'ring.",
-          REFERENCE_FACE_NOT_FOUND:
-            'Profil rasmingizda yuz aniqlanmadi — check-in rad etildi. Iltimos, administratorga murojaat qiling.',
-          NO_REFERENCE_PHOTO:
-            'Profilingizda rasm mavjud emas — yuz tasdiqlash uchun avval profilga rasm yuklashingiz kerak. Administratorga murojaat qiling.',
-          SERVICE_ERROR:
-            "Yuz tekshirish xizmati vaqtincha ishlamayapti — check-in rad etildi. Birozdan so'ng qaytadan urinib ko'ring yoki administratorga murojaat qiling.",
-        };
-        throw new BadRequestException(
-          FACE_MATCH_MESSAGES[faceResult.reason ?? ''] ??
-            "Yuz tasdiqlanmadi — check-in rad etildi. Iltimos, yaxshi yorug'likda, kamerani to'g'ridan qarab qaytadan urinib ko'ring.",
-        );
-      }
+        employee,
+        selfieBuffer as Buffer,
+        'CHECK_IN',
+      );
     }
 
     // 5. Selfie saqlash (ish joyi isboti sifatida)
+    // Faqat check-in'da: ilgari check-out'da ham shu nomga yozilib, kelish
+    // selfisi ketish selfisi bilan almashib qolardi.
     let selfieUrl: string | undefined;
-    if (selfieBuffer?.length) {
+    if (isCheckIn && selfieBuffer?.length) {
       const uploadDir = path.join(
         process.env.UPLOAD_DIR || './uploads',
         'selfies',
@@ -1665,6 +1745,27 @@ export class AttendanceService {
             `Check-out hali erta. ${remaining} daqiqa kutish kerak (minimum 2 soat ish vaqti).`,
           );
         }
+      }
+
+      // GPS yuqorida tekshirildi. Yuz — faqat shubhali holatda (smena
+      // davomida ish joyidan tashqarida ko'rilgan yoki kuzatuv uzilgan):
+      // aks holda boshqa odam xodim telefonidan "ketish"ni bosib qo'yishi
+      // mumkin bo'lardi.
+      if (
+        existing.checkIn &&
+        (await this.checkoutNeedsFaceMatch(userId, existing.checkIn))
+      ) {
+        if (!selfieBuffer?.length) {
+          throw new BadRequestException(
+            "Ketishni tasdiqlash uchun yuz tekshiruvi kerak. Kamerani yoqib, qaytadan urinib ko'ring.",
+          );
+        }
+        await this.verifyFaceOrThrow(
+          userId,
+          employee,
+          selfieBuffer,
+          'CHECK_OUT',
+        );
       }
 
       const expectedEnd =

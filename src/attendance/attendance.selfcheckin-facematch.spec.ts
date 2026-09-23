@@ -14,6 +14,7 @@ jest.mock('../common/utils/image.util', () => ({
   processAndSavePhoto: jest
     .fn()
     .mockResolvedValue({ filename: 'x.jpg', sizeKb: 10 }),
+  prepareFaceImage: jest.fn(async (b: Buffer) => b),
 }));
 
 /**
@@ -69,6 +70,11 @@ describe('AttendanceService.selfCheckIn — Qaror 4 yuz tekshiruvi gate', () => 
       },
       employee: {
         findUnique: jest.fn().mockResolvedValue({ baseSalary: 3000000 }),
+      },
+      // Jonli kuzatuv: standart holatda — ish joyida, signal yangi
+      liveLocation: {
+        count: jest.fn().mockResolvedValue(0),
+        findFirst: jest.fn().mockResolvedValue({ createdAt: new Date() }),
       },
     };
 
@@ -212,5 +218,122 @@ describe('AttendanceService.selfCheckIn — Qaror 4 yuz tekshiruvi gate', () => 
     await service.selfCheckIn('user-1', dto as any, selfieBuffer);
 
     expect(faceMatch.verify).not.toHaveBeenCalled();
+  });
+
+  describe('CHECK_OUT (4c)', () => {
+    const openRecord = {
+      id: 'att-1',
+      checkIn: new Date(Date.now() - 8 * 60 * 60 * 1000),
+      checkOut: null,
+      selfieUrl: '/uploads/selfies/checkin.jpg',
+      status: 'PRESENT',
+      lateMinutes: 0,
+      expectedCheckOut: null,
+      lunchOut: null,
+      lunchIn: null,
+    };
+    beforeEach(() =>
+      prisma.attendanceRecord.findFirst.mockResolvedValue(openRecord),
+    );
+
+    it("kuzatuv toza bo'lsa selfisiz ham ketish mumkin, yuz tekshirilmaydi", async () => {
+      const res = await service.selfCheckIn('user-1', dto as any, undefined);
+      expect(res.action).toBe('CHECK_OUT');
+      expect(faceMatch.verify).not.toHaveBeenCalled();
+    });
+
+    it('smena davomida tashqarida ko‘rilgan bo‘lsa — yuz tekshiriladi, mos kelmasa rad', async () => {
+      prisma.liveLocation.count.mockResolvedValue(2);
+      faceMatch.verify.mockResolvedValue({
+        mismatch: true,
+        skipped: false,
+        reason: 'FACE_MISMATCH',
+      });
+      await expect(
+        service.selfCheckIn('user-1', dto as any, selfieBuffer),
+      ).rejects.toThrow(/check-out rad etildi/);
+      expect(prisma.attendanceRecord.update).not.toHaveBeenCalled();
+    });
+
+    it('kuzatuv 30 daqiqadan ko‘p uzilgan va selfie yo‘q — rad', async () => {
+      prisma.liveLocation.findFirst.mockResolvedValue({
+        createdAt: new Date(Date.now() - 60 * 60_000),
+      });
+      await expect(
+        service.selfCheckIn('user-1', dto as any, undefined),
+      ).rejects.toThrow(/yuz tekshiruvi kerak/);
+    });
+
+    it('shubhali holatda face-match xizmati ishlamasa — ketish BLOKLANMAYDI', async () => {
+      prisma.liveLocation.count.mockResolvedValue(1);
+      faceMatch.verify.mockResolvedValue({
+        mismatch: true,
+        skipped: false,
+        reason: 'SERVICE_ERROR',
+      });
+      const res = await service.selfCheckIn('user-1', dto as any, selfieBuffer);
+      expect(res.action).toBe('CHECK_OUT');
+    });
+
+    it('check-out kelish selfisini ustidan yozmaydi', async () => {
+      const { processAndSavePhoto } = jest.requireMock(
+        '../common/utils/image.util',
+      );
+      processAndSavePhoto.mockClear();
+      await service.selfCheckIn('user-1', dto as any, selfieBuffer);
+      const bases = processAndSavePhoto.mock.calls.map((c: any[]) => c[2]);
+      expect(bases.length).toBeGreaterThan(0);
+      expect(bases.every((b: string) => b.startsWith('checkout-'))).toBe(true);
+    });
+  });
+
+  describe('GPS aniqligi (4c)', () => {
+    beforeEach(() => {
+      faceMatch.verify.mockResolvedValue({ mismatch: false, skipped: false });
+      prisma.user.findUnique.mockResolvedValue({
+        employee: {
+          ...employee,
+          hospital: { gpsLat: 41.31, gpsLng: 69.28, gpsRadius: 200 },
+        },
+      });
+    });
+
+    it('~230 m, aniqlik ±40 m — radius+40 ichida, o‘tadi', async () => {
+      const res = await service.selfCheckIn(
+        'user-1',
+        { gpsLat: 41.3121, gpsLng: 69.28, gpsAccuracy: 40 } as any,
+        selfieBuffer,
+      );
+      expect(res.action).toBe('CHECK_IN');
+    });
+
+    it('~230 m, aniqlik ±140 m — noaniqlik ko‘pi bilan 50 m olinadi, 250 ichida o‘tadi', async () => {
+      const res = await service.selfCheckIn(
+        'user-1',
+        { gpsLat: 41.3121, gpsLng: 69.28, gpsAccuracy: 140 } as any,
+        selfieBuffer,
+      );
+      expect(res.action).toBe('CHECK_IN');
+    });
+
+    it('~280 m, aniqlik ±140 m — 200+50 dan tashqarida, rad', async () => {
+      await expect(
+        service.selfCheckIn(
+          'user-1',
+          { gpsLat: 41.3125, gpsLng: 69.28, gpsAccuracy: 140 } as any,
+          selfieBuffer,
+        ),
+      ).rejects.toThrow(/uzoqdasiz/);
+    });
+
+    it('aniqlik ±600 m — umuman qabul qilinmaydi', async () => {
+      await expect(
+        service.selfCheckIn(
+          'user-1',
+          { gpsLat: 41.31, gpsLng: 69.28, gpsAccuracy: 600 } as any,
+          selfieBuffer,
+        ),
+      ).rejects.toThrow(/aniqligi past/);
+    });
   });
 });
