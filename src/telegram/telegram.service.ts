@@ -116,13 +116,14 @@ function mainKeyboard(linked: boolean) {
   ]);
 }
 
-/** Sub-keyboard for today detail */
-function todayDetailKeyboard(hospitalId: string | null) {
-  const hid = hospitalId || 'null';
+/** Sub-keyboard for today detail.
+ *  XAVFSIZLIK: callback data'da hospitalId YO'Q — handler shifoxonani doim
+ *  chat obunasidan oladi (callback data'ni mijoz soxtalashtirishi mumkin). */
+function todayDetailKeyboard() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("📋 Kelganlar ro'yhati", `cmd_came:${hid}`),
-      Markup.button.callback("❌ Kelmaganlar ro'yhati", `cmd_notcame:${hid}`),
+      Markup.button.callback("📋 Kelganlar ro'yhati", 'cmd_came'),
+      Markup.button.callback("❌ Kelmaganlar ro'yhati", 'cmd_notcame'),
     ],
   ]);
 }
@@ -255,10 +256,9 @@ export class TelegramService implements OnModuleInit {
     // ── Text commands ─────────────────────────────────────────────────────────
     // ── /today | /bugun ───────────────────────────────────────────────────────
     const handleToday = async (ctx: any) => {
-      const sub = await this.getSubscriber(ctx);
-      const { text, keyboard } = await this.buildTodaySummary(
-        sub?.hospitalId || null,
-      );
+      const hospitalId = await this.requireLinkedHospitalId(ctx);
+      if (!hospitalId) return;
+      const { text, keyboard } = await this.buildTodaySummary(hospitalId);
       await ctx.reply(text, { parse_mode: 'HTML', ...keyboard });
     };
     bot.command('today', handleToday);
@@ -266,11 +266,11 @@ export class TelegramService implements OnModuleInit {
 
     // ── /absent | /kechikganlar | /kelmaganlar ────────────────────────────────
     const handleAbsent = async (ctx: any) => {
-      const sub = await this.getSubscriber(ctx);
-      await ctx.reply(
-        await this.buildNotCheckedInList(sub?.hospitalId || null),
-        { parse_mode: 'HTML' },
-      );
+      const hospitalId = await this.requireLinkedHospitalId(ctx);
+      if (!hospitalId) return;
+      await ctx.reply(await this.buildNotCheckedInList(hospitalId), {
+        parse_mode: 'HTML',
+      });
     };
     bot.command('absent', handleAbsent);
     bot.command('kechikganlar', handleAbsent);
@@ -278,8 +278,9 @@ export class TelegramService implements OnModuleInit {
 
     // ── /week | /haftalik ─────────────────────────────────────────────────────
     const handleWeek = async (ctx: any) => {
-      const sub = await this.getSubscriber(ctx);
-      await ctx.reply(await this.buildWeeklyReport(sub?.hospitalId || null), {
+      const hospitalId = await this.requireLinkedHospitalId(ctx);
+      if (!hospitalId) return;
+      await ctx.reply(await this.buildWeeklyReport(hospitalId), {
         parse_mode: 'HTML',
       });
     };
@@ -288,13 +289,14 @@ export class TelegramService implements OnModuleInit {
 
     // ── /month | /oylik | /hisobot ────────────────────────────────────────────
     const handleMonth = async (ctx: any) => {
-      const sub = await this.getSubscriber(ctx);
+      const hospitalId = await this.requireLinkedHospitalId(ctx);
+      if (!hospitalId) return;
       const now = new Date();
       await ctx.reply(
         await this.buildMonthlyReport(
           now.getMonth() + 1,
           now.getFullYear(),
-          sub?.hospitalId || null,
+          hospitalId,
         ),
         { parse_mode: 'HTML' },
       );
@@ -323,43 +325,40 @@ export class TelegramService implements OnModuleInit {
     // ── Inline button: main actions ───────────────────────────────────────────
     bot.action('cmd_today', async (ctx) => {
       await ctx.answerCbQuery();
-      const chatId = this.chatIdFromCtx(ctx);
-      const sub = await this.getSubscriberByChatId(chatId);
-      const { text, keyboard } = await this.buildTodaySummary(
-        sub?.hospitalId || null,
-      );
+      const hospitalId = await this.requireLinkedHospitalId(ctx);
+      if (!hospitalId) return;
+      const { text, keyboard } = await this.buildTodaySummary(hospitalId);
       await ctx.reply(text, { parse_mode: 'HTML', ...keyboard });
     });
 
     bot.action('cmd_absent', async (ctx) => {
       await ctx.answerCbQuery();
-      const chatId = this.chatIdFromCtx(ctx);
-      const sub = await this.getSubscriberByChatId(chatId);
-      await ctx.reply(
-        await this.buildNotCheckedInList(sub?.hospitalId || null),
-        { parse_mode: 'HTML' },
-      );
+      const hospitalId = await this.requireLinkedHospitalId(ctx);
+      if (!hospitalId) return;
+      await ctx.reply(await this.buildNotCheckedInList(hospitalId), {
+        parse_mode: 'HTML',
+      });
     });
 
     bot.action('cmd_week', async (ctx) => {
       await ctx.answerCbQuery();
-      const chatId = this.chatIdFromCtx(ctx);
-      const sub = await this.getSubscriberByChatId(chatId);
-      await ctx.reply(await this.buildWeeklyReport(sub?.hospitalId || null), {
+      const hospitalId = await this.requireLinkedHospitalId(ctx);
+      if (!hospitalId) return;
+      await ctx.reply(await this.buildWeeklyReport(hospitalId), {
         parse_mode: 'HTML',
       });
     });
 
     bot.action('cmd_month', async (ctx) => {
       await ctx.answerCbQuery();
-      const chatId = this.chatIdFromCtx(ctx);
-      const sub = await this.getSubscriberByChatId(chatId);
+      const hospitalId = await this.requireLinkedHospitalId(ctx);
+      if (!hospitalId) return;
       const now = new Date();
       await ctx.reply(
         await this.buildMonthlyReport(
           now.getMonth() + 1,
           now.getFullYear(),
-          sub?.hospitalId || null,
+          hospitalId,
         ),
         { parse_mode: 'HTML' },
       );
@@ -511,11 +510,13 @@ export class TelegramService implements OnModuleInit {
       );
     };
 
-    bot.action(/^pay_(monthly|annual):(.+)$/, async (ctx) => {
+    bot.action(/^pay_(monthly|annual)(?::.*)?$/, async (ctx) => {
       await ctx.answerCbQuery();
-      const match = ctx.match;
-      const type = match[1].toUpperCase() as 'MONTHLY' | 'ANNUAL';
-      const hospitalId = match[2];
+      const type = ctx.match[1].toUpperCase() as 'MONTHLY' | 'ANNUAL';
+      // XAVFSIZLIK: callback data'dagi hospitalId'ga ishonilmaydi — invoys
+      // faqat shu chat ulangan shifoxona uchun yaratiladi.
+      const hospitalId = await this.requireLinkedHospitalId(ctx);
+      if (!hospitalId) return;
       await sendSubscriptionInvoice(ctx, hospitalId, type);
     });
 
@@ -631,23 +632,22 @@ export class TelegramService implements OnModuleInit {
     });
 
     // ── Inline button: today came/not-came detail lists ───────────────────────
-    bot.action(/^cmd_came:(.+)$/, async (ctx) => {
+    // Eski xabarlardagi `cmd_came:<id>` tugmalari ham ishlashi uchun regex
+    // ':<...>' qismini qabul qiladi, lekin uni E'TIBORGA OLMAYDI — shifoxona
+    // doim chat obunasidan olinadi.
+    bot.action(/^cmd_came(?::.*)?$/, async (ctx) => {
       await ctx.answerCbQuery();
-      const hospitalId =
-        (ctx.match as RegExpMatchArray)[1] === 'null'
-          ? null
-          : (ctx.match as RegExpMatchArray)[1];
+      const hospitalId = await this.requireLinkedHospitalId(ctx);
+      if (!hospitalId) return;
       await ctx.reply(await this.buildCameList(hospitalId), {
         parse_mode: 'HTML',
       });
     });
 
-    bot.action(/^cmd_notcame:(.+)$/, async (ctx) => {
+    bot.action(/^cmd_notcame(?::.*)?$/, async (ctx) => {
       await ctx.answerCbQuery();
-      const hospitalId =
-        (ctx.match as RegExpMatchArray)[1] === 'null'
-          ? null
-          : (ctx.match as RegExpMatchArray)[1];
+      const hospitalId = await this.requireLinkedHospitalId(ctx);
+      if (!hospitalId) return;
       await ctx.reply(await this.buildNotCheckedInList(hospitalId), {
         parse_mode: 'HTML',
       });
@@ -815,6 +815,26 @@ export class TelegramService implements OnModuleInit {
       where: { chatId, isActive: true, hospitalId: { not: null } },
       orderBy: { createdAt: 'desc' },
     });
+  }
+
+  /**
+   * Chat ulangan shifoxona ID'sini qaytaradi. Chat ulanmagan bo'lsa —
+   * "avval ulaning" deb javob beradi va null qaytaradi (handler to'xtashi
+   * kerak).
+   *
+   * XAVFSIZLIK: hisobot/ro'yxat builderlari faqat shu metod bergan ID bilan
+   * chaqirilishi shart. Ilgari ulanmagan chat uchun `null` uzatilardi va
+   * builderlar filtrni olib tashlab, BARCHA shifoxonalar ma'lumotini
+   * qaytarardi.
+   */
+  private async requireLinkedHospitalId(ctx: any): Promise<string | null> {
+    const sub = await this.getSubscriberByChatId(this.chatIdFromCtx(ctx));
+    if (sub?.hospitalId) return sub.hospitalId;
+    await ctx.reply(
+      "⚠️ Bu ma'lumotni ko'rish uchun avval kasalxona tizimiga ulaning.",
+      { ...mainKeyboard(false) },
+    );
+    return null;
   }
 
   // ──────────────────────────────────────────
@@ -1128,13 +1148,12 @@ export class TelegramService implements OnModuleInit {
     });
   }
 
-  async broadcastToHospital(hospitalId: string | null, message: string) {
+  async broadcastToHospital(hospitalId: string, message: string) {
     if (!this.bot) return;
+    // Faqat shu shifoxonaga ulangan chatlar — ulanmagan (hospitalId=null)
+    // chatlarga shifoxona ma'lumoti yuborilmaydi.
     const subscribers = await this.prisma.telegramSubscription.findMany({
-      where: {
-        isActive: true,
-        OR: [{ hospitalId }, { hospitalId: null }],
-      },
+      where: { isActive: true, hospitalId },
     });
     for (const sub of subscribers) {
       try {
@@ -1154,7 +1173,7 @@ export class TelegramService implements OnModuleInit {
   /**
    * Bugungi davomat xulosasi + "Kelganlar / Kelmaganlar" tugmalari
    */
-  private async buildTodaySummary(hospitalId: string | null): Promise<{
+  private async buildTodaySummary(hospitalId: string): Promise<{
     text: string;
     keyboard: ReturnType<typeof Markup.inlineKeyboard>;
   }> {
@@ -1163,11 +1182,11 @@ export class TelegramService implements OnModuleInit {
     const timeLabel = nowStr();
 
     const empWhere: any = { firedAt: null };
-    if (hospitalId) empWhere.hospitalId = hospitalId;
+    empWhere.hospitalId = hospitalId;
 
     // Rejalashtirilgan bugun (schedule bo'lsa)
     const schedWhere: any = { date: todayStart, status: 'WORKING' };
-    if (hospitalId) schedWhere.employee = { hospitalId };
+    schedWhere.employee = { hospitalId };
     const scheduled = await this.prisma.schedule.findMany({
       where: schedWhere,
       select: { employeeId: true },
@@ -1175,7 +1194,7 @@ export class TelegramService implements OnModuleInit {
 
     // Check-in qilganlar (bugun)
     const attWhere: any = { workDate: todayStart, checkIn: { not: null } };
-    if (hospitalId) attWhere.employee = { hospitalId };
+    attWhere.employee = { hospitalId };
     const attendances = await this.prisma.attendanceRecord.findMany({
       where: attWhere,
       select: { employeeId: true, lateMinutes: true },
@@ -1212,18 +1231,18 @@ export class TelegramService implements OnModuleInit {
       `❌ Hali kelmagan: <b>${Math.max(0, notCameCount)} ta</b>\n` +
       `⚠️ Kechikkan: <b>${lateCount} ta</b>`;
 
-    return { text, keyboard: todayDetailKeyboard(hospitalId) };
+    return { text, keyboard: todayDetailKeyboard() };
   }
 
   /**
    * Bugun kelganlar ro'yhati (ism + kelgan vaqt)
    */
-  private async buildCameList(hospitalId: string | null): Promise<string> {
+  private async buildCameList(hospitalId: string): Promise<string> {
     const todayStart = this.todayStart();
     const dateLabel = todayDateStr();
 
     const attWhere: any = { workDate: todayStart, checkIn: { not: null } };
-    if (hospitalId) attWhere.employee = { hospitalId };
+    attWhere.employee = { hospitalId };
 
     const records = await this.prisma.attendanceRecord.findMany({
       where: attWhere,
@@ -1233,7 +1252,7 @@ export class TelegramService implements OnModuleInit {
 
     // Schedule bo'lsa, faqat jadvalda bo'lganlarni ko'rsatish
     const schedWhere: any = { date: todayStart, status: 'WORKING' };
-    if (hospitalId) schedWhere.employee = { hospitalId };
+    schedWhere.employee = { hospitalId };
     const scheduled = await this.prisma.schedule.findMany({
       where: schedWhere,
       select: { employeeId: true },
@@ -1274,15 +1293,13 @@ export class TelegramService implements OnModuleInit {
   /**
    * Bugun rejalashtirilgan, lekin hali check-in qilmaganlar
    */
-  private async buildNotCheckedInList(
-    hospitalId: string | null,
-  ): Promise<string> {
+  private async buildNotCheckedInList(hospitalId: string): Promise<string> {
     const todayStart = this.todayStart();
     const dateLabel = todayDateStr();
     const timeLabel = nowStr();
 
     const schedWhere: any = { date: todayStart, status: 'WORKING' };
-    if (hospitalId) schedWhere.employee = { hospitalId };
+    schedWhere.employee = { hospitalId };
 
     const schedules = await this.prisma.schedule.findMany({
       where: schedWhere,
@@ -1294,7 +1311,7 @@ export class TelegramService implements OnModuleInit {
     }
 
     const attWhere: any = { workDate: todayStart, checkIn: { not: null } };
-    if (hospitalId) attWhere.employee = { hospitalId };
+    attWhere.employee = { hospitalId };
 
     const checkedIn = await this.prisma.attendanceRecord.findMany({
       where: attWhere,
@@ -1332,7 +1349,7 @@ export class TelegramService implements OnModuleInit {
   /**
    * Haftalik hisobot — weeklyAttendanceStat bo'lmasa, attendanceRecord dan hisoblanadi
    */
-  private async buildWeeklyReport(hospitalId: string | null): Promise<string> {
+  private async buildWeeklyReport(hospitalId: string): Promise<string> {
     const weekStart = this.weekStart();
 
     const where: any = {
@@ -1343,7 +1360,7 @@ export class TelegramService implements OnModuleInit {
         { daysAbsent: { gt: 0 } },
       ],
     };
-    if (hospitalId) where.employee = { hospitalId };
+    where.employee = { hospitalId };
 
     const stats = await this.prisma.weeklyAttendanceStat.findMany({
       where,
@@ -1371,7 +1388,7 @@ export class TelegramService implements OnModuleInit {
         { status: 'ABSENT' },
       ],
     };
-    if (hospitalId) rawWhere.employee = { hospitalId };
+    rawWhere.employee = { hospitalId };
 
     const raw = await this.prisma.attendanceRecord.findMany({
       where: rawWhere,
@@ -1435,10 +1452,10 @@ export class TelegramService implements OnModuleInit {
   private async buildMonthlyReport(
     month: number,
     year: number,
-    hospitalId: string | null,
+    hospitalId: string,
   ): Promise<string> {
     const where: any = { month, year };
-    if (hospitalId) where.employee = { hospitalId };
+    where.employee = { hospitalId };
 
     const payrolls = await this.prisma.payrollRecord.findMany({
       where,
