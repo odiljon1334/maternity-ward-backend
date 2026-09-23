@@ -90,11 +90,14 @@ export class LocationService {
             gpsLat: true,
             gpsLng: true,
             gpsRadius: true,
+            department: {
+              select: { name: true },
+            },
             position: {
-              select: { gpsLat: true, gpsLng: true },
+              select: { name: true, gpsLat: true, gpsLng: true },
             },
             hospital: {
-              select: { gpsLat: true, gpsLng: true },
+              select: { name: true, gpsLat: true, gpsLng: true },
             },
             attendances: {
               where: {
@@ -153,6 +156,9 @@ export class LocationService {
           userId: u.id,
           name: u.employee?.fullName,
           photo: u.employee?.photoUrl,
+          positionName: u.employee?.position?.name ?? null,
+          departmentName: u.employee?.department?.name ?? null,
+          hospitalName: u.employee?.hospital?.name ?? null,
           distance,
           checkIn: u.employee?.attendances?.[0]?.checkIn ?? null,
           checkOut: u.employee?.attendances?.[0]?.checkOut ?? null,

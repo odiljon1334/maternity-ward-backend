@@ -73,7 +73,12 @@ export class LocationController {
     const today = DateUtil.startOfDay(new Date());
     const attendance = await this.prisma.attendanceRecord.findFirst({
       where: { employeeId: employee.id, workDate: today },
-      select: { checkOut: true, expectedCheckOut: true },
+      select: {
+        checkIn: true,
+        checkOut: true,
+        expectedCheckOut: true,
+        status: true,
+      },
     });
 
     const workEnded =
@@ -160,6 +165,9 @@ export class LocationController {
       userId: user.sub,
       name: employee.fullName,
       photo: employee.photoUrl,
+      positionName: employee.position?.name ?? null,
+      departmentName: employee.department?.name ?? null,
+      hospitalName: employee.hospital?.name ?? null,
       latitude: dto.latitude,
       longitude: dto.longitude,
       accuracy: dto.accuracy,
@@ -167,6 +175,11 @@ export class LocationController {
       battery: dto.battery,
       distance,
       isOutside,
+      checkIn: attendance?.checkIn ?? null,
+      checkOut: attendance?.checkOut ?? null,
+      attendanceStatus: attendance?.status ?? null,
+      createdAt: saved.createdAt,
+      // Eski mobil clientlar uchun rollout davrida saqlanadi.
       timestamp: saved.createdAt,
     });
 

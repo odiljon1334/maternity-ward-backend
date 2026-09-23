@@ -99,7 +99,10 @@ describe('LocationController.updateLiveLocation', () => {
       expectedCheckOut: new Date(Date.now() - 60 * 60 * 1000),
     });
 
-    const res = await controller.updateLiveLocation(currentUser as any, baseDto as any);
+    const res = await controller.updateLiveLocation(
+      currentUser as any,
+      baseDto as any,
+    );
 
     expect(res).toEqual({
       ok: false,
@@ -119,7 +122,10 @@ describe('LocationController.updateLiveLocation', () => {
       expectedCheckOut: new Date(Date.now() - 5 * 60 * 1000), // 5 daqiqa oldin tugagan
     });
 
-    const res = await controller.updateLiveLocation(currentUser as any, baseDto as any);
+    const res = await controller.updateLiveLocation(
+      currentUser as any,
+      baseDto as any,
+    );
 
     expect(res.ok).toBe(false);
     expect(res.stopTracking).toBe(true);
@@ -128,8 +134,11 @@ describe('LocationController.updateLiveLocation', () => {
     expect(locationGateway.broadcastLocationRemoved).toHaveBeenCalled();
   });
 
-  it('ish vaqti ichida, geofence ichida — oddiy saqlanadi, ogohlantirish yo\'q', async () => {
-    const res = await controller.updateLiveLocation(currentUser as any, baseDto as any);
+  it("ish vaqti ichida, geofence ichida — oddiy saqlanadi, ogohlantirish yo'q", async () => {
+    const res = await controller.updateLiveLocation(
+      currentUser as any,
+      baseDto as any,
+    );
 
     expect(res).toEqual({ ok: true });
     expect(locationService.saveLiveLocation).toHaveBeenCalledWith(
@@ -141,11 +150,28 @@ describe('LocationController.updateLiveLocation', () => {
     expect(telegramService.notifyGeofenceAlert).not.toHaveBeenCalled();
   });
 
+  it("WebSocket lokatsiya xabarida xodimning ish joyi ma'lumotlari yuboriladi", async () => {
+    await controller.updateLiveLocation(currentUser as any, baseDto as any);
+
+    expect(locationGateway.broadcastLocation).toHaveBeenCalledWith(
+      'hosp-1',
+      expect.objectContaining({
+        userId: 'user-1',
+        positionName: 'Lavozim',
+        departmentName: "Bo'lim",
+        hospitalName: 'Hospital',
+      }),
+    );
+  });
+
   it("BITTA marta geofence tashqarisida — hali ogohlantirilmaydi (tasodifiy sakrash bo'lishi mumkin)", async () => {
     locationService.getPreviousLocation.mockResolvedValue({ isOutside: false });
     const outsideDto = { latitude: 41.5, longitude: 69.5, accuracy: 10 };
 
-    const res = await controller.updateLiveLocation(currentUser as any, outsideDto as any);
+    const res = await controller.updateLiveLocation(
+      currentUser as any,
+      outsideDto as any,
+    );
 
     expect(res).toEqual({ ok: true });
     expect(locationService.saveLiveLocation).toHaveBeenCalledWith(
