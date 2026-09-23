@@ -45,6 +45,7 @@ describe('AttendanceService.selfCheckIn — Qaror 4 yuz tekshiruvi gate', () => 
     hospital: { gpsLat: null, gpsLng: null, gpsRadius: null },
     department: null,
     position: null,
+    workSites: [],
   };
 
   const dto = { gpsLat: 41.31, gpsLng: 69.28, gpsAccuracy: 10 };

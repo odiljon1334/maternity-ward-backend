@@ -1,3 +1,4 @@
+import { buildGeoCenters, matchGeoCenter } from '../work-sites/geofence.util';
 import { Controller, Post, Get, Body, UseGuards, Query } from '@nestjs/common';
 import { LocationService } from './location.service';
 import { LocationGateway } from './location.gateway';
@@ -111,6 +112,7 @@ export class LocationController {
                 gpsRadius: true,
               },
             },
+            workSites: { select: { workSite: true } },
           },
         },
       },
@@ -145,42 +147,32 @@ export class LocationController {
     }
 
     // ── 2. Geofence tekshiruvi ──
-    const geoLat =
-      employee.gpsLat ??
-      employee.position?.gpsLat ??
-      employee.hospital?.gpsLat ??
-      null;
-    const geoLng =
-      employee.gpsLng ??
-      employee.position?.gpsLng ??
-      employee.hospital?.gpsLng ??
-      null;
-    const geoRadius =
-      employee.gpsRadius ??
-      employee.position?.gpsRadius ??
-      employee.hospital?.gpsRadius ??
-      200;
-
-    let distance: number | null = null;
-    let isOutside = false;
-    if (geoLat != null && geoLng != null) {
-      distance = Math.round(
-        this.locationService.getDistance(
-          geoLat,
-          geoLng,
-          dto.latitude,
-          dto.longitude,
-        ),
-      );
-      // GPS bergan `accuracy` — haqiqiy nuqta shu radius ichida bo'lishi
-      // ehtimoli borligini bildiradi. Aniqlik past paytda xodimni noto'g'ri
-      // ravishda tashqarida deb belgilamaslik uchun butun noaniqlik doirasi
-      // geofence'dan tashqariga chiqqandagina violation hisoblaymiz.
-      const uncertainty = Number.isFinite(dto.accuracy)
-        ? Math.max(0, dto.accuracy)
-        : 0;
-      isOutside = distance > geoRadius + uncertainty;
-    }
+    // FAZA 6 (4b): xodimga ruxsat etilgan BARCHA ish joylari hisobga olinadi
+    // (biriktirilgan WorkSite'lar + asosiy bino). Maktabga yo'naltirilgan
+    // hamshira asosiy binodan uzoqda bo'lgani uchun "tashqarida" sanalmaydi.
+    //
+    // GPS bergan `accuracy` — haqiqiy nuqta shu radius ichida bo'lishi
+    // ehtimoli borligini bildiradi. Aniqlik past paytda xodimni noto'g'ri
+    // ravishda tashqarida deb belgilamaslik uchun butun noaniqlik doirasi
+    // geofence'dan tashqariga chiqqandagina violation hisoblaymiz.
+    const uncertainty = Number.isFinite(dto.accuracy)
+      ? Math.max(0, dto.accuracy)
+      : 0;
+    const geoMatch = matchGeoCenter(
+      buildGeoCenters({
+        employee,
+        position: employee.position,
+        hospital: employee.hospital,
+        sites: (employee.workSites ?? []).map((w) => w.workSite),
+      }),
+      dto.latitude,
+      dto.longitude,
+      uncertainty,
+    );
+    const distance: number | null = geoMatch
+      ? Math.round(geoMatch.distance)
+      : null;
+    const isOutside = geoMatch ? !geoMatch.inside : false;
 
     // Yangi nuqta saqlanishidan OLDIN — oldingi nuqtani olib qo'yamiz
     // (ketma-ket 2 marta tashqarida bo'lsa — bu tasodifiy GPS sakrash emas).
@@ -276,54 +268,53 @@ export class LocationController {
     @CurrentUser() user: { sub: string; hospitalId: string },
     @Body() dto: { latitude: number; longitude: number },
   ) {
-    // Avval Position GPS, yo'q bo'lsa Hospital GPS
-    const employee = await this.prisma.user.findUnique({
+    const user_ = await this.prisma.user.findUnique({
       where: { id: user.sub },
-      include: {
+      select: {
         employee: {
-          include: { position: true, hospital: true },
+          select: {
+            gpsLat: true,
+            gpsLng: true,
+            gpsRadius: true,
+            position: {
+              select: { gpsLat: true, gpsLng: true, gpsRadius: true },
+            },
+            hospital: {
+              select: {
+                name: true,
+                gpsLat: true,
+                gpsLng: true,
+                gpsRadius: true,
+              },
+            },
+            workSites: { select: { workSite: true } },
+          },
         },
       },
     });
+    const employee = user_?.employee;
+    const match = employee
+      ? matchGeoCenter(
+          buildGeoCenters({
+            employee,
+            position: employee.position,
+            hospital: employee.hospital,
+            sites: (employee.workSites ?? []).map((w) => w.workSite),
+          }),
+          dto.latitude,
+          dto.longitude,
+        )
+      : null;
 
-    const position = employee?.employee?.position;
-    const hospital = employee?.employee?.hospital;
-
-    const geoLat =
-      employee?.employee?.gpsLat ??
-      position?.gpsLat ??
-      hospital?.gpsLat ??
-      null;
-
-    const geoLng =
-      employee?.employee?.gpsLng ??
-      position?.gpsLng ??
-      hospital?.gpsLng ??
-      null;
-
-    const geoRadius =
-      employee?.employee?.gpsRadius ??
-      position?.gpsRadius ??
-      hospital?.gpsRadius ??
-      200;
-
-    if (!geoLat || !geoLng) {
+    if (!match) {
       return { inside: true, distance: 0, message: 'GPS sozlanmagan' };
     }
 
-    const distance = this.locationService.getDistance(
-      geoLat,
-      geoLng,
-      dto.latitude,
-      dto.longitude,
-    );
-
-    const inside = distance <= geoRadius;
-
     return {
-      inside,
-      distance: Math.round(distance),
-      radius: geoRadius,
+      inside: match.inside,
+      distance: Math.round(match.distance),
+      radius: match.center.radius,
+      siteName: match.center.name,
     };
   }
 }

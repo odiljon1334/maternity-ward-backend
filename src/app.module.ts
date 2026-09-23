@@ -13,6 +13,7 @@ import { EmployeesModule } from './employees/employees.module';
 import { ShiftsModule } from './shifts/shifts.module';
 import { SchedulesModule } from './schedules/schedules.module';
 import { AttendanceModule } from './attendance/attendance.module';
+import { WorkSitesModule } from './work-sites/work-sites.module';
 import { PayrollModule } from './payroll/payroll.module';
 import { TelegramModule } from './telegram/telegram.module';
 import { DashboardModule } from './dashboard/dashboard.module';
@@ -69,6 +70,7 @@ import { SchedulePlanningModule } from './schedule-planning/schedule-planning.mo
     ShiftsModule,
     SchedulesModule,
     AttendanceModule,
+    WorkSitesModule,
     PayrollModule,
     TelegramModule,
     PublicModule,

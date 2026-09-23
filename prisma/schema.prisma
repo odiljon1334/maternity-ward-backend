@@ -259,6 +259,7 @@ model Hospital {
   monthlySchedulePlans   MonthlySchedulePlan[]
   monthlyScheduleEntries MonthlyScheduleEntry[]
   scheduleChangeRequests ScheduleChangeRequest[]
+  workSites              WorkSite[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -504,6 +505,10 @@ model Employee {
   // (contact) orqali — raqam egasi Telegram tomonidan tasdiqlanadi.
   telegramBotAccess Boolean                @default(false)
   telegramSubs      TelegramSubscription[]
+
+  // Qo'shimcha ish joylari (maktab, bog'cha, filial...) — check-in shu
+  // joylarning istalganida (va muassasa asosiy binosida) ruxsat etiladi.
+  workSites EmployeeWorkSite[]
 
   hiredAt    DateTime       @default(now())
   firedAt    DateTime?
@@ -772,6 +777,11 @@ model AttendanceRecord {
   gpsVerified   Boolean @default(false)
   faceVerified  Boolean @default(false)
 
+  // Mobil check-in qaysi ish joyida qilingani (null — asosiy bino, eski
+  // shaxsiy/lavozim markazi yoki markaz belgilanmagan).
+  checkInWorkSiteId String?
+  checkInWorkSite   WorkSite? @relation(fields: [checkInWorkSiteId], references: [id], onDelete: SetNull)
+
   // Check-out selfie + GPS (mobil ilovadan)
   checkOutSource      String? // TERMINAL | MOBILE | MANUAL | AUTO
   autoCheckOut        Boolean @default(false)
@@ -800,6 +810,46 @@ model AttendanceRecord {
 
   @@unique([employeeId, workDate])
   @@index([employeeId, workDate])
+}
+
+// ─────────────────────────────────────────────
+// WORK SITES — muassasaning qo'shimcha ish joylari (2026-09-23, FAZA 6 4b)
+// Poliklinika xodimlari maktab, bog'cha, harbiy komissariat, sport zal va
+// boshqa joylarga yo'naltiriladi. Har bir joyning o'z geofence'i bor;
+// xodimga bir nechta joy biriktiriladi. Faqat DIRECTOR/ADMIN boshqaradi.
+// ─────────────────────────────────────────────
+
+model WorkSite {
+  id         String   @id @default(uuid())
+  hospitalId String
+  hospital   Hospital @relation(fields: [hospitalId], references: [id], onDelete: Cascade)
+
+  name      String
+  address   String?
+  gpsLat    Float
+  gpsLng    Float
+  gpsRadius Int     @default(200)
+  isActive  Boolean @default(true)
+
+  employees   EmployeeWorkSite[]
+  attendances AttendanceRecord[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([hospitalId, isActive])
+}
+
+model EmployeeWorkSite {
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  workSiteId String
+  workSite   WorkSite @relation(fields: [workSiteId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@id([employeeId, workSiteId])
+  @@index([workSiteId])
 }
 
 // ─────────────────────────────────────────────

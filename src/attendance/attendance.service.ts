@@ -24,7 +24,8 @@ import { AuditLogService } from '../audit-log/audit-log.service';
 import { DateUtil } from '../common/utils/date.util';
 import { isHospitalBlocked } from '../common/utils/payment.util';
 import { calcNetWorkMin } from '../common/utils/shift.util';
-import { haversineMeters, formatDistance } from '../common/utils/geo.util';
+import { formatDistance } from '../common/utils/geo.util';
+import { buildGeoCenters, matchGeoCenter } from '../work-sites/geofence.util';
 import { processAndSavePhoto } from '../common/utils/image.util';
 import { LATE_GRACE_MINUTES } from '../common/constants';
 import { SelfCheckInDto } from './dto/self-check-in.dto';
@@ -1383,7 +1384,12 @@ export class AttendanceService {
       where: { id: userId },
       include: {
         employee: {
-          include: { hospital: true, department: true, position: true },
+          include: {
+            hospital: true,
+            department: true,
+            position: true,
+            workSites: { include: { workSite: true } },
+          },
         },
       },
     });
@@ -1397,21 +1403,6 @@ export class AttendanceService {
         "Tashkilot to'lovlarini kechiktirdi, davomat yozilmayapti",
       );
     }
-
-    // 3. Geofencing — avval Position GPS, yo'q bo'lsa Hospital GPS
-    const position = employee.position as any;
-    const hospital = employee.hospital as any;
-
-    // Employee GPS ustuvor, keyin Position, keyin Hospital
-    const geoLat =
-      (employee as any).gpsLat ?? position?.gpsLat ?? hospital?.gpsLat;
-    const geoLng =
-      (employee as any).gpsLng ?? position?.gpsLng ?? hospital?.gpsLng;
-    const geoRadius =
-      (employee as any).gpsRadius ??
-      position?.gpsRadius ??
-      hospital?.gpsRadius ??
-      200;
 
     // XAVFSIZLIK (2026-09-23 audit): koordinata MAJBURIY. Ilgari GPS
     // yuborilmasa masofa tekshiruvi umuman o'tkazilmasdi va istalgan joydan
@@ -1427,27 +1418,38 @@ export class AttendanceService {
       );
     }
 
-    if (geoLat == null || geoLng == null) {
-      // Muassasa markazi hali belgilanmagan — tekshirib bo'lmaydi.
-      // Direktor/Admin Sozlamalar → "GPS markazi" orqali belgilashi kerak.
+    // 3. Geofence (FAZA 6, 4b): biriktirilgan ish joylari + eski shaxsiy
+    //    markaz + asosiy bino — ISTALGANI ichida bo'lsa ruxsat.
+    const geoCenters = buildGeoCenters({
+      employee,
+      position: employee.position,
+      hospital: employee.hospital,
+      sites: (employee.workSites ?? []).map((w) => w.workSite),
+    });
+    const geoMatch = matchGeoCenter(
+      geoCenters,
+      dto.gpsLat as number,
+      dto.gpsLng as number,
+    );
+
+    if (!geoMatch) {
+      // Hech qanday markaz belgilanmagan — tekshirib bo'lmaydi.
+      // Direktor/Admin Sozlamalar → "Check-in hududi" orqali belgilashi kerak.
       this.logger.warn(
         `Geofence markazi yo'q: hospital=${employee.hospitalId} — masofa tekshirilmadi`,
       );
-    } else {
-      const distance = haversineMeters(
-        dto.gpsLat as number,
-        dto.gpsLng as number,
-        geoLat,
-        geoLng,
+    } else if (!geoMatch.inside) {
+      const distStr = formatDistance(Math.round(geoMatch.distance));
+      const place =
+        geoCenters.length > 1
+          ? `eng yaqin ish joyi «${geoMatch.center.name}»dan`
+          : 'ish joyidan';
+      throw new BadRequestException(
+        `Siz ${place} ${distStr} uzoqdasiz (ruxsat: ${geoMatch.center.radius}m). Ish joyida bo'lgan holda check-in qiling.`,
       );
-      if (distance > geoRadius) {
-        const distStr = formatDistance(Math.round(distance));
-        throw new BadRequestException(
-          `Siz ish joyidan ${distStr} uzoqdasiz (ruxsat: ${geoRadius}m). Ish joyida bo'lgan holda check-in qiling.`,
-        );
-      }
+    } else {
       this.logger.log(
-        `Geofencing OK: ${employee.fullName} — ${Math.round(distance)}m`,
+        `Geofencing OK: employee=${employee.id} — ${geoMatch.center.source} ${Math.round(geoMatch.distance)}m`,
       );
     }
 
@@ -1485,6 +1487,7 @@ export class AttendanceService {
     // FaceMatchService.verify() ichida hujjatlashtirilgan — bu YANGI,
     // ixtiyoriy qatlam production check-in oqimini to'xtatmasligi kerak,
     // ANIQ MOS KELMASLIKdan tashqari.
+    let faceVerified = false;
     if (isCheckIn && selfieBuffer?.length) {
       let referenceBuffer: Buffer | null = null;
       if (employee.photoUrl) {
@@ -1521,6 +1524,8 @@ export class AttendanceService {
           similarity: faceResult.similarity,
         },
       });
+
+      faceVerified = !faceResult.mismatch && !faceResult.skipped;
 
       if (faceResult.mismatch) {
         const FACE_MATCH_MESSAGES: Record<string, string> = {
@@ -1590,6 +1595,9 @@ export class AttendanceService {
         gpsLat: dto.gpsLat,
         gpsLng: dto.gpsLng,
         gpsAccuracy: dto.gpsAccuracy,
+        gpsVerified: !!geoMatch?.inside,
+        faceVerified,
+        checkInWorkSiteId: geoMatch?.inside ? geoMatch.center.workSiteId : null,
       };
 
       let attendance: any;

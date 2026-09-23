@@ -234,9 +234,11 @@ describe('LocationController.updateLiveLocation', () => {
   });
 
   it("GPS aniqligi past bo'lsa noaniq nuqta geofence violation hisoblanmaydi", async () => {
+    // Markazdan ~4.4 km (haqiqiy haversine), aniqlik ±6 km — noaniqlik
+    // doirasi geofence'ni qoplaydi, violation emas.
     const inaccurateDto = {
-      latitude: 41.5,
-      longitude: 69.5,
+      latitude: 41.35,
+      longitude: 69.28,
       accuracy: 6000,
     };
 

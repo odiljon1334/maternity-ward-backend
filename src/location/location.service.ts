@@ -1,3 +1,4 @@
+import { buildGeoCenters, matchGeoCenter } from '../work-sites/geofence.util';
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpdateLiveLocationDto } from './dto/update-live-location.dto';
@@ -98,11 +99,22 @@ export class LocationService {
               select: { name: true },
             },
             position: {
-              select: { name: true, gpsLat: true, gpsLng: true },
+              select: {
+                name: true,
+                gpsLat: true,
+                gpsLng: true,
+                gpsRadius: true,
+              },
             },
             hospital: {
-              select: { name: true, gpsLat: true, gpsLng: true },
+              select: {
+                name: true,
+                gpsLat: true,
+                gpsLng: true,
+                gpsRadius: true,
+              },
             },
+            workSites: { select: { workSite: true } },
             attendances: {
               where: {
                 workDate: {
@@ -151,24 +163,22 @@ export class LocationService {
           : loc.isOutside
             ? 'OUTSIDE'
             : 'ONLINE';
-        const geoLat =
-          u.employee?.gpsLat ??
-          u.employee?.position?.gpsLat ??
-          u.employee?.hospital?.gpsLat ??
-          null;
-
-        const geoLng =
-          u.employee?.gpsLng ??
-          u.employee?.position?.gpsLng ??
-          u.employee?.hospital?.gpsLng ??
-          null;
-
-        let distance: number | null = null;
-        if (geoLat != null && geoLng != null) {
-          distance = Math.round(
-            this.getDistance(geoLat, geoLng, loc.latitude, loc.longitude),
-          );
-        }
+        // Eng yaqin ruxsat etilgan ish joyigacha masofa (FAZA 6, 4b)
+        const match = u.employee
+          ? matchGeoCenter(
+              buildGeoCenters({
+                employee: u.employee,
+                position: u.employee.position,
+                hospital: u.employee.hospital,
+                sites: (u.employee.workSites ?? []).map((w) => w.workSite),
+              }),
+              loc.latitude,
+              loc.longitude,
+            )
+          : null;
+        const distance: number | null = match
+          ? Math.round(match.distance)
+          : null;
 
         return {
           userId: u.id,
