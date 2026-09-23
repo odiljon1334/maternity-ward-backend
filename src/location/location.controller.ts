@@ -175,6 +175,8 @@ export class LocationController {
       battery: dto.battery,
       distance,
       isOutside,
+      isStale: false,
+      trackingStatus: isOutside ? 'OUTSIDE' : 'ONLINE',
       checkIn: attendance?.checkIn ?? null,
       checkOut: attendance?.checkOut ?? null,
       attendanceStatus: attendance?.status ?? null,

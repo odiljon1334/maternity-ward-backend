@@ -4,6 +4,10 @@ import { UpdateLiveLocationDto } from './dto/update-live-location.dto';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { UserRole, UserStatus } from '@prisma/client';
 
+const DEFAULT_LIVE_LOCATION_STALE_MINUTES = 10;
+
+export type LiveTrackingStatus = 'ONLINE' | 'OUTSIDE' | 'SIGNAL_LOST';
+
 @Injectable()
 export class LocationService {
   constructor(private readonly prisma: PrismaService) {}
@@ -133,6 +137,20 @@ export class LocationService {
       })
       .map((u) => {
         const loc = u.liveLocations[0];
+        const configuredStaleMinutes = Number(
+          process.env.LIVE_LOCATION_STALE_MINUTES ??
+            DEFAULT_LIVE_LOCATION_STALE_MINUTES,
+        );
+        const staleMinutes = Number.isFinite(configuredStaleMinutes)
+          ? Math.min(60, Math.max(3, configuredStaleMinutes))
+          : DEFAULT_LIVE_LOCATION_STALE_MINUTES;
+        const isStale =
+          Date.now() - loc.createdAt.getTime() > staleMinutes * 60_000;
+        const trackingStatus: LiveTrackingStatus = isStale
+          ? 'SIGNAL_LOST'
+          : loc.isOutside
+            ? 'OUTSIDE'
+            : 'ONLINE';
         const geoLat =
           u.employee?.gpsLat ??
           u.employee?.position?.gpsLat ??
@@ -163,6 +181,9 @@ export class LocationService {
           checkIn: u.employee?.attendances?.[0]?.checkIn ?? null,
           checkOut: u.employee?.attendances?.[0]?.checkOut ?? null,
           attendanceStatus: u.employee?.attendances?.[0]?.status ?? null,
+          isStale,
+          trackingStatus,
+          staleAfterMinutes: staleMinutes,
           ...loc,
         };
       });

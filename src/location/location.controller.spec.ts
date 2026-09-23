@@ -160,6 +160,8 @@ describe('LocationController.updateLiveLocation', () => {
         positionName: 'Lavozim',
         departmentName: "Bo'lim",
         hospitalName: 'Hospital',
+        isStale: false,
+        trackingStatus: 'ONLINE',
       }),
     );
   });
