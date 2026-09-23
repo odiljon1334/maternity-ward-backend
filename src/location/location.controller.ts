@@ -10,7 +10,6 @@ import { UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PushService } from '../push/push.service';
 import { TelegramService } from '../telegram/telegram.service';
-import { DateUtil } from '../common/utils/date.util';
 import { TenantScopeGuard } from '../common/guards/tenant-scope.guard';
 
 @Controller('location')
@@ -23,6 +22,59 @@ export class LocationController {
     private readonly pushService: PushService,
     private readonly telegramService: TelegramService,
   ) {}
+
+  /**
+   * Joriy ochiq davomat yozuvini workDate bilan cheklamaymiz: 20:00–08:00
+   * tungi smena yarim tundan keyin ham avvalgi kun yozuvi bilan davom etadi.
+   */
+  private findOpenAttendance(employeeId: string) {
+    return this.prisma.attendanceRecord.findFirst({
+      where: {
+        employeeId,
+        checkIn: { not: null },
+        checkOut: null,
+      },
+      orderBy: { checkIn: 'desc' },
+      select: {
+        checkIn: true,
+        checkOut: true,
+        expectedCheckOut: true,
+        status: true,
+      },
+    });
+  }
+
+  @Get('tracking-session')
+  @Roles(UserRole.EMPLOYEE)
+  async getTrackingSession(@CurrentUser() user: { sub: string }) {
+    const account = await this.prisma.user.findUnique({
+      where: { id: user.sub },
+      select: { employee: { select: { id: true } } },
+    });
+
+    if (!account?.employee) {
+      return { active: false, reason: 'EMPLOYEE_NOT_FOUND' };
+    }
+
+    const attendance = await this.findOpenAttendance(account.employee.id);
+    const expectedCheckOut = attendance?.expectedCheckOut ?? null;
+    const active =
+      !!attendance?.checkIn &&
+      !!expectedCheckOut &&
+      expectedCheckOut.getTime() > Date.now();
+
+    return {
+      active,
+      checkIn: attendance?.checkIn ?? null,
+      expectedCheckOut,
+      reason: active
+        ? null
+        : attendance?.checkIn
+          ? 'SHIFT_ENDED'
+          : 'NOT_CHECKED_IN',
+      heartbeatMs: 3 * 60 * 1000,
+    };
+  }
 
   @Post('live')
   @Roles(UserRole.EMPLOYEE)
@@ -70,19 +122,12 @@ export class LocationController {
     // ── 1. Ish vaqti tugagan/check-out qilingan bo'lsa — kuzatishni to'xtatish ──
     // Xodim check-out qilishni unutgan taqdirda ham GPS tracking abadiy davom
     // etmasligi kerak (production muammosi: xodim ketgach ham GPS saqlanaverar edi).
-    const today = DateUtil.startOfDay(new Date());
-    const attendance = await this.prisma.attendanceRecord.findFirst({
-      where: { employeeId: employee.id, workDate: today },
-      select: {
-        checkIn: true,
-        checkOut: true,
-        expectedCheckOut: true,
-        status: true,
-      },
-    });
+    const attendance = await this.findOpenAttendance(employee.id);
 
     const workEnded =
+      !attendance?.checkIn ||
       !!attendance?.checkOut ||
+      !attendance.expectedCheckOut ||
       (!!attendance?.expectedCheckOut &&
         new Date() > attendance.expectedCheckOut);
 
@@ -93,7 +138,9 @@ export class LocationController {
         stopTracking: true,
         reason: attendance?.checkOut
           ? 'Check-out qilingan'
-          : 'Ish vaqti tugagan',
+          : attendance?.checkIn
+            ? 'Ish vaqti tugagan'
+            : 'Faol check-in topilmadi',
       };
     }
 
@@ -125,7 +172,14 @@ export class LocationController {
           dto.longitude,
         ),
       );
-      isOutside = distance > geoRadius;
+      // GPS bergan `accuracy` — haqiqiy nuqta shu radius ichida bo'lishi
+      // ehtimoli borligini bildiradi. Aniqlik past paytda xodimni noto'g'ri
+      // ravishda tashqarida deb belgilamaslik uchun butun noaniqlik doirasi
+      // geofence'dan tashqariga chiqqandagina violation hisoblaymiz.
+      const uncertainty = Number.isFinite(dto.accuracy)
+        ? Math.max(0, dto.accuracy)
+        : 0;
+      isOutside = distance > geoRadius + uncertainty;
     }
 
     // Yangi nuqta saqlanishidan OLDIN — oldingi nuqtani olib qo'yamiz

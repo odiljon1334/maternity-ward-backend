@@ -48,6 +48,7 @@ describe('LocationController.updateLiveLocation', () => {
       },
       attendanceRecord: {
         findFirst: jest.fn().mockResolvedValue({
+          checkIn: new Date(),
           checkOut: null,
           expectedCheckOut: new Date(Date.now() + 60 * 60 * 1000), // 1 soatdan keyin
         }),
@@ -95,6 +96,7 @@ describe('LocationController.updateLiveLocation', () => {
 
   it("check-out qilingan xodim uchun GPS saqlanmaydi va 'stopTracking' qaytadi", async () => {
     prisma.attendanceRecord.findFirst.mockResolvedValue({
+      checkIn: new Date(Date.now() - 2 * 60 * 60 * 1000),
       checkOut: new Date(),
       expectedCheckOut: new Date(Date.now() - 60 * 60 * 1000),
     });
@@ -116,8 +118,55 @@ describe('LocationController.updateLiveLocation', () => {
     );
   });
 
+  it("faol check-in bo'lmasa GPS qabul qilinmaydi", async () => {
+    prisma.attendanceRecord.findFirst.mockResolvedValue(null);
+
+    const res = await controller.updateLiveLocation(
+      currentUser as any,
+      baseDto as any,
+    );
+
+    expect(res).toEqual({
+      ok: false,
+      stopTracking: true,
+      reason: 'Faol check-in topilmadi',
+    });
+    expect(locationService.saveLiveLocation).not.toHaveBeenCalled();
+  });
+
+  it("tungi smena uchun tracking-session avvalgi kun ochiq davomatini davom ettiradi", async () => {
+    const checkIn = new Date(Date.now() - 5 * 60 * 60 * 1000);
+    const expectedCheckOut = new Date(Date.now() + 3 * 60 * 60 * 1000);
+    prisma.attendanceRecord.findFirst.mockResolvedValue({
+      checkIn,
+      checkOut: null,
+      expectedCheckOut,
+      status: 'PRESENT',
+    });
+
+    const res = await controller.getTrackingSession(currentUser as any);
+
+    expect(res).toEqual({
+      active: true,
+      checkIn,
+      expectedCheckOut,
+      reason: null,
+      heartbeatMs: 180_000,
+    });
+    expect(prisma.attendanceRecord.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          employeeId: 'emp-1',
+          checkIn: { not: null },
+          checkOut: null,
+        }),
+      }),
+    );
+  });
+
   it("ish vaqti tugagan (check-out qilinmagan) xodim uchun ham to'xtatiladi", async () => {
     prisma.attendanceRecord.findFirst.mockResolvedValue({
+      checkIn: new Date(Date.now() - 8 * 60 * 60 * 1000),
       checkOut: null,
       expectedCheckOut: new Date(Date.now() - 5 * 60 * 1000), // 5 daqiqa oldin tugagan
     });
@@ -180,6 +229,26 @@ describe('LocationController.updateLiveLocation', () => {
       'user-1',
       outsideDto,
       true,
+    );
+    expect(pushService.notifyGeofenceViolation).not.toHaveBeenCalled();
+  });
+
+  it("GPS aniqligi past bo'lsa noaniq nuqta geofence violation hisoblanmaydi", async () => {
+    const inaccurateDto = {
+      latitude: 41.5,
+      longitude: 69.5,
+      accuracy: 6000,
+    };
+
+    await controller.updateLiveLocation(
+      currentUser as any,
+      inaccurateDto as any,
+    );
+
+    expect(locationService.saveLiveLocation).toHaveBeenCalledWith(
+      'user-1',
+      inaccurateDto,
+      false,
     );
     expect(pushService.notifyGeofenceViolation).not.toHaveBeenCalled();
   });
