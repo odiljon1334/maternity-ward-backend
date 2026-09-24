@@ -23,6 +23,7 @@ import { PlaceSearchService } from './place-search.service';
 import {
   ApproveLegacyCenterDto,
   CreateWorkSiteDto,
+  SetEmployeeWorkSitesDto,
   SetWorkSiteEmployeesDto,
   UpdateWorkSiteDto,
 } from './dto/work-site.dto';
@@ -118,6 +119,35 @@ export class WorkSitesController {
     @Query('targetHospitalId') target?: string,
   ) {
     return this.svc.create(resolveWorkSiteHospital(jwt, target), dto);
+  }
+
+  /** Xodim sahifasi: uning GPS markazlari (barcha ish joylari + belgi) */
+  @Get('employee/:employeeId')
+  @Roles(...MANAGERS)
+  employeeSites(
+    @CurrentUser('hospitalId') jwt: string | null,
+    @Param('employeeId', ParseUUIDPipe) employeeId: string,
+    @Query('targetHospitalId') target?: string,
+  ) {
+    return this.svc.employeeSites(
+      resolveWorkSiteHospital(jwt, target),
+      employeeId,
+    );
+  }
+
+  @Put('employee/:employeeId')
+  @Roles(...MANAGERS)
+  setEmployeeSites(
+    @CurrentUser('hospitalId') jwt: string | null,
+    @Param('employeeId', ParseUUIDPipe) employeeId: string,
+    @Body() dto: SetEmployeeWorkSitesDto,
+    @Query('targetHospitalId') target?: string,
+  ) {
+    return this.svc.setEmployeeSites(
+      resolveWorkSiteHospital(jwt, target),
+      employeeId,
+      dto.workSiteIds,
+    );
   }
 
   @Get('legacy-centers')

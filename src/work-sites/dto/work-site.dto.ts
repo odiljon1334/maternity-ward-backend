@@ -99,6 +99,13 @@ export class SetWorkSiteEmployeesDto {
   employeeIds!: string[];
 }
 
+export class SetEmployeeWorkSitesDto {
+  @IsArray()
+  @ArrayMaxSize(200)
+  @IsUUID('all', { each: true })
+  workSiteIds!: string[];
+}
+
 export class ApproveLegacyCenterDto {
   @IsString()
   @MinLength(2)

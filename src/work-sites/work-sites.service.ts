@@ -129,6 +129,95 @@ export class WorkSitesService {
   }
 
   /**
+   * Bitta xodimning GPS markazlari (xodim sahifasi uchun): muassasaning
+   * barcha ish joylari `assigned` belgisi bilan, asosiy bino va eski
+   * shaxsiy markaz (bo'lsa).
+   */
+  async employeeSites(hospitalId: string, employeeId: string) {
+    const employee = await this.prisma.employee.findFirst({
+      where: { id: employeeId, hospitalId },
+      select: {
+        id: true,
+        fullName: true,
+        gpsLat: true,
+        gpsLng: true,
+        gpsRadius: true,
+        workSites: { select: { workSiteId: true } },
+        hospital: { select: { gpsLat: true, gpsLng: true, gpsRadius: true } },
+      },
+    });
+    if (!employee) throw new NotFoundException('Xodim topilmadi');
+    const assigned = new Set(employee.workSites.map((w) => w.workSiteId));
+    const sites = await this.prisma.workSite.findMany({
+      where: { hospitalId },
+      orderBy: [{ isActive: 'desc' }, { name: 'asc' }],
+      select: {
+        id: true,
+        name: true,
+        address: true,
+        gpsLat: true,
+        gpsLng: true,
+        gpsRadius: true,
+        isActive: true,
+      },
+    });
+    const h = employee.hospital;
+    return {
+      employeeId: employee.id,
+      fullName: employee.fullName,
+      sites: sites.map((s) => ({ ...s, assigned: assigned.has(s.id) })),
+      hospitalCenter:
+        h?.gpsLat != null && h?.gpsLng != null
+          ? { lat: h.gpsLat, lng: h.gpsLng, radius: h.gpsRadius }
+          : null,
+      legacyCenter:
+        employee.gpsLat != null && employee.gpsLng != null
+          ? {
+              lat: employee.gpsLat,
+              lng: employee.gpsLng,
+              radius: employee.gpsRadius,
+            }
+          : null,
+    };
+  }
+
+  /** Xodimning ish joylarini to'liq almashtiradi (xodim sahifasidan) */
+  async setEmployeeSites(
+    hospitalId: string,
+    employeeId: string,
+    workSiteIds: string[],
+  ) {
+    const employee = await this.prisma.employee.findFirst({
+      where: { id: employeeId, hospitalId, firedAt: null },
+      select: { id: true },
+    });
+    if (!employee) {
+      throw new NotFoundException("Xodim topilmadi yoki ishdan bo'shagan");
+    }
+    const unique = [...new Set(workSiteIds)];
+    if (unique.length) {
+      const valid = await this.prisma.workSite.count({
+        where: { id: { in: unique }, hospitalId },
+      });
+      if (valid !== unique.length) {
+        throw new BadRequestException(
+          "Ro'yxatda bu muassasaga tegishli bo'lmagan ish joyi bor",
+        );
+      }
+    }
+    await this.prisma.$transaction([
+      this.prisma.employeeWorkSite.deleteMany({
+        where: { employeeId, workSiteId: { notIn: unique } },
+      }),
+      this.prisma.employeeWorkSite.createMany({
+        data: unique.map((workSiteId) => ({ employeeId, workSiteId })),
+        skipDuplicates: true,
+      }),
+    ]);
+    return { employeeId, workSiteCount: unique.length };
+  }
+
+  /**
    * Xodimlar o'zlari (eski, 2026-09-23 gacha bo'lgan oqimda) qo'ygan
    * shaxsiy markazlar — admin ko'rib chiqishi uchun.
    */

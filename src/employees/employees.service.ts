@@ -189,6 +189,12 @@ export class EmployeesService {
           department: true,
           position: true,
           user: { select: { username: true, status: true } },
+          // Biriktirilgan ish joylari (GPS markazlari) — ro'yxatda ko'rinadi
+          workSites: {
+            select: {
+              workSite: { select: { id: true, name: true, isActive: true } },
+            },
+          },
         },
         orderBy: { fullName: 'asc' },
       }),
@@ -212,6 +218,11 @@ export class EmployeesService {
         position: true,
         user: {
           select: { id: true, username: true, role: true, status: true },
+        },
+        workSites: {
+          select: {
+            workSite: { select: { id: true, name: true, isActive: true } },
+          },
         },
       },
     });

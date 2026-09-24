@@ -91,6 +91,67 @@ describe('WorkSites — muassasa chegarasi', () => {
     });
   });
 
+  it("xodim sahifasidan: faqat o'z muassasasi ish joylari biriktiriladi", async () => {
+    const prisma = makePrisma();
+    prisma.workSite.count = jest.fn(
+      async ({ where }: any) =>
+        where.id.in.filter(
+          (id: string) => id === 's1' && where.hospitalId === 'hA',
+        ).length,
+    );
+    const svc = new WorkSitesService(prisma);
+    // boshqa muassasa xodimi
+    await expect(svc.setEmployeeSites('hA', 'e2', ['s1'])).rejects.toThrow(
+      NotFoundException,
+    );
+    // boshqa muassasa ish joyi
+    await expect(
+      svc.setEmployeeSites('hA', 'e1', ['s1', 'sX']),
+    ).rejects.toThrow(BadRequestException);
+    expect(prisma.employeeWorkSite.createMany).not.toHaveBeenCalled();
+
+    await svc.setEmployeeSites('hA', 'e1', ['s1', 's1']);
+    expect(prisma.employeeWorkSite.deleteMany).toHaveBeenCalledWith({
+      where: { employeeId: 'e1', workSiteId: { notIn: ['s1'] } },
+    });
+    expect(prisma.employeeWorkSite.createMany).toHaveBeenCalledWith({
+      data: [{ employeeId: 'e1', workSiteId: 's1' }],
+      skipDuplicates: true,
+    });
+  });
+
+  it("xodimning GPS markazlari: barcha ish joylari 'assigned' bilan, shaxsiy markaz", async () => {
+    const prisma = makePrisma();
+    prisma.employee.findFirst = jest.fn(async ({ where }: any) =>
+      where.id === 'e1' && where.hospitalId === 'hA'
+        ? {
+            id: 'e1',
+            fullName: 'Ali',
+            gpsLat: 40.8,
+            gpsLng: 72.3,
+            gpsRadius: 100,
+            workSites: [{ workSiteId: 's1' }],
+            hospital: { gpsLat: 40.7, gpsLng: 72.2, gpsRadius: 300 },
+          }
+        : null,
+    );
+    prisma.workSite.findMany = jest.fn(async () => [
+      { id: 's1', name: 'Bino', isActive: true },
+      { id: 's2', name: 'Maktab', isActive: true },
+    ]);
+    const svc = new WorkSitesService(prisma);
+    const r = await svc.employeeSites('hA', 'e1');
+    expect(r.sites.map((x: any) => [x.id, x.assigned])).toEqual([
+      ['s1', true],
+      ['s2', false],
+    ]);
+    expect(r.legacyCenter).toEqual({ lat: 40.8, lng: 72.3, radius: 100 });
+    expect(r.hospitalCenter).toEqual({ lat: 40.7, lng: 72.2, radius: 300 });
+    await expect(svc.employeeSites('hB', 'e1')).rejects.toThrow(
+      NotFoundException,
+    );
+  });
+
   it("koordinataning faqat bittasini o'zgartirib bo'lmaydi", async () => {
     const svc = new WorkSitesService(makePrisma());
     await expect(svc.update('hA', 's1', { lat: 40 })).rejects.toThrow(
