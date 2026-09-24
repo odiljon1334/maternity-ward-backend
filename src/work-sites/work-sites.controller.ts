@@ -77,6 +77,22 @@ export class WorkSitesController {
     );
   }
 
+  /** Qidiruv natijasi tanlanganda uning koordinatasi (Yandex `uri` bo'yicha) */
+  @Get('place-resolve')
+  @Roles(...MANAGERS)
+  placeResolve(
+    @Query('uri') uri: string,
+    @CurrentUser('hospitalId') jwt: string | null,
+    @CurrentUser('sub') userId: string,
+    @Query('targetHospitalId') target?: string,
+  ) {
+    return this.places.resolve(
+      uri,
+      resolveWorkSiteHospital(jwt, target),
+      userId,
+    );
+  }
+
   /** Xodim uchun: check-in qila oladigan joylari */
   @Get('my')
   @Roles(UserRole.EMPLOYEE)

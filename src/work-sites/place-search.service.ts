@@ -1,4 +1,12 @@
-import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  HttpException,
+  HttpStatus,
+  Injectable,
+  Logger,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import axios from 'axios';
 import { PrismaService } from '../prisma/prisma.service';
 import { haversineMeters } from '../common/utils/geo.util';
@@ -14,16 +22,33 @@ export type PlaceSource = 'COORDS' | 'YANDEX_ORG' | 'YANDEX_GEO' | 'OSM';
 export interface PlaceResult {
   name: string;
   address: string | null;
-  lat: number;
-  lng: number;
+  /**
+   * Geosaggest natijalarida koordinata bo'lmaydi (lat/lng = null, `uri` bor):
+   * foydalanuvchi tanlaganda `resolve(uri)` bilan geokoderdan olinadi. Shunda
+   * har qidiruvda 7 ta emas, faqat tanlangan joy uchun 1 ta geokoder so'rovi ketadi.
+   */
+  lat: number | null;
+  lng: number | null;
   source: PlaceSource;
   /** Muassasa markazidan masofa (metr) — tartiblash va ko'rsatish uchun */
   distance: number | null;
+  uri?: string | null;
 }
+
+export type ResolvedPlace = PlaceResult & { lat: number; lng: number };
 
 /** Muassasa markazi belgilanmagan bo'lsa qidiruv shu nuqta atrofida (Andijon) */
 const DEFAULT_NEAR: LatLng = { lat: 40.7821, lng: 72.3442 };
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+/**
+ * Yandex shartlari natijalarni saqlashni taqiqlaydi — ular faqat qisqa vaqt
+ * (takroriy bosishlardan himoya uchun) xotirada turadi. OSM natijalari 24 soat.
+ */
+const YANDEX_CACHE_TTL_MS = 10 * 60 * 1000;
+/** Har bir Yandex mahsuloti uchun kunlik so'rov chegarasi (bepul tarif 1000) */
+const DEFAULT_YANDEX_DAILY_CAP = 900;
+const RESOLVE_LIMIT_PER_MIN = 30;
+const SUGGEST_URI_RE = /^ymapsbm1:\/\/[\w\-.~:/?#[\]@!$&'()*+,;=%]+$/;
 const CACHE_MAX = 500;
 const HTTP_TIMEOUT_MS = 6000;
 /** Nominatim foydalanish qoidasi: sekundiga ko'pi bilan 1 so'rov */
@@ -38,22 +63,32 @@ const DEDUPE_M = 40;
  *
  * Manbalar (natijalar birlashtiriladi, muassasa markaziga yaqinlari oldinda):
  *  1. Koordinata yoki xarita havolasi — tarmoqsiz, darhol.
- *  2. Yandex qidiruv API (`YANDEX_SEARCH_API_KEY` bo'lsa) — tashkilotlar
- *     (maktab, bog'cha...) VA manzillar bitta so'rovda; O'zbekiston uchun
- *     eng to'liq baza.
- *  3. Yandex geokoder (`YANDEX_GEOCODER_API_KEY` bo'lsa, ixtiyoriy) —
- *     qo'shimcha ko'cha/uy manzili.
- *  4. OpenStreetMap (Nominatim) — kalitsiz, bepul; foydalanish qoidasiga
+ *  2. Yandex Geosaggest (`YANDEX_SUGGEST_API_KEY` + `YANDEX_GEOCODER_API_KEY`)
+ *     — bepul tarif: tashkilotlar (maktab, bog'cha...) va manzillar. Koordinata
+ *     tanlanganda geokoder orqali `uri` bo'yicha olinadi (`resolve`).
+ *  3. Yandex tashkilot qidiruvi (`YANDEX_SEARCH_API_KEY`, pullik, ixtiyoriy).
+ *  4. Yandex geokoder matn bo'yicha — Geosaggest hech narsa bermasa yoki
+ *     uning kaliti bo'lmasa.
+ *  5. OpenStreetMap (Nominatim) — kalitsiz, bepul; foydalanish qoidasiga
  *     ko'ra sekundiga 1 so'rov, natijalar 24 soat keshlanadi.
+ *
+ * Har bir Yandex mahsulotiga kunlik chegara qo'yilgan (`YANDEX_DAILY_CAP`,
+ * standart 900): bepul limitdan muntazam oshish kalitning butunlay
+ * bloklanishiga olib keladi, chegaraga yetganda faqat OSM ishlaydi.
  */
 @Injectable()
 export class PlaceSearchService {
   private readonly logger = new Logger(PlaceSearchService.name);
   private readonly cache = new Map<
     string,
-    { at: number; results: PlaceResult[] }
+    { at: number; ttl: number; results: PlaceResult[] }
+  >();
+  private readonly resolved = new Map<
+    string,
+    { at: number; place: ResolvedPlace }
   >();
   private readonly userHits = new Map<string, number[]>();
+  private readonly quota = new Map<string, { day: string; used: number }>();
   private nominatimChain: Promise<unknown> = Promise.resolve();
   private nominatimLastAt = 0;
 
@@ -87,39 +122,159 @@ export class PlaceSearchService {
 
     const cacheKey = `${query.toLowerCase()}|${near.lat.toFixed(2)},${near.lng.toFixed(2)}`;
     const cached = this.cache.get(cacheKey);
-    if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.results;
+    if (cached && Date.now() - cached.at < cached.ttl) return cached.results;
 
     this.checkUserLimit(userId);
 
-    const [yandexOrg, yandexGeo] = await Promise.all([
+    const [suggest, places] = await Promise.all([
+      this.yandexSuggest(query, near),
       this.yandexOrganizations(query, near),
-      this.yandexGeocoder(query, near),
     ]);
+    // Geokoder matn qidiruvi faqat Geosaggest/qidiruv hech narsa bermasa —
+    // kunlik limit tanlangan joy koordinatasi (resolve) uchun asraladi.
+    const geo =
+      suggest.length || places.length
+        ? []
+        : await this.yandexGeocoder(query, near);
+    const yandex = [...suggest, ...places, ...geo];
+
     let osm: PlaceResult[] = [];
-    // OSM faqat Yandex qidiruv hech narsa bermagan bo'lsa (tezlik va qoida uchun)
-    if (!yandexOrg.length && process.env.GEO_OSM_DISABLED !== 'true') {
+    // OSM faqat Yandex tashkilot topmagan bo'lsa (tezlik va foydalanish qoidasi uchun)
+    const hasOrg = yandex.some((r) => r.source === 'YANDEX_ORG');
+    if (!hasOrg && process.env.GEO_OSM_DISABLED !== 'true') {
       for (const variant of buildQueryVariants(query)) {
         osm = await this.nominatim(variant, near);
         if (osm.length) break;
       }
     }
 
-    const results = this.mergeAndRank(
-      [...yandexOrg, ...yandexGeo, ...osm],
-      near,
+    const results = this.mergeAndRank([...yandex, ...osm], near);
+    this.remember(
+      cacheKey,
+      results,
+      yandex.length ? YANDEX_CACHE_TTL_MS : CACHE_TTL_MS,
     );
-    this.remember(cacheKey, results);
     return results;
   }
 
+  /**
+   * Geosaggest natijasining koordinatasi — foydalanuvchi ro'yxatdan joy
+   * tanlaganda chaqiriladi (geokoder `uri` parametri).
+   */
+  async resolve(
+    rawUri: string,
+    hospitalId: string,
+    userId: string,
+  ): Promise<ResolvedPlace> {
+    const uri = String(rawUri ?? '').trim();
+    if (!uri || uri.length > 2000 || !SUGGEST_URI_RE.test(uri)) {
+      throw new BadRequestException("Noto'g'ri joy identifikatori");
+    }
+    const apikey = process.env.YANDEX_GEOCODER_API_KEY;
+    if (!apikey) {
+      throw new ServiceUnavailableException(
+        'Joy koordinatasini aniqlash sozlanmagan. Nuqtani xaritadan tanlang.',
+      );
+    }
+    const near = await this.hospitalCenter(hospitalId);
+    const hit = this.resolved.get(uri);
+    if (hit && Date.now() - hit.at < YANDEX_CACHE_TTL_MS) {
+      return this.withDistance(hit.place, near);
+    }
+
+    this.checkUserLimit(`${userId}:resolve`, RESOLVE_LIMIT_PER_MIN);
+    if (!this.takeQuota('geocoder')) {
+      throw new ServiceUnavailableException(
+        "Bugungi manzil aniqlash limiti tugadi. Nuqtani xaritadan tanlang yoki xarita havolasini qo'ying.",
+      );
+    }
+
+    let obj: any;
+    try {
+      const { data } = await axios.get('https://geocode-maps.yandex.ru/1.x/', {
+        params: { apikey, uri, format: 'json', lang: this.lang(), results: 1 },
+        timeout: HTTP_TIMEOUT_MS,
+      });
+      obj = data?.response?.GeoObjectCollection?.featureMember?.[0]?.GeoObject;
+    } catch (e) {
+      this.warnHttp('Yandex geokoder (uri)', e);
+      throw new ServiceUnavailableException(
+        "Joy koordinatasini olib bo'lmadi. Birozdan so'ng urinib ko'ring yoki nuqtani xaritadan tanlang.",
+      );
+    }
+    const place = this.fromGeoObject(obj, 'YANDEX_GEO');
+    if (!place) {
+      throw new NotFoundException(
+        'Bu joyning koordinatasi topilmadi. Nuqtani xaritadan tanlang.',
+      );
+    }
+    this.resolved.set(uri, { at: Date.now(), place });
+    if (this.resolved.size > CACHE_MAX) {
+      const oldest = this.resolved.keys().next().value;
+      if (oldest !== undefined) this.resolved.delete(oldest);
+    }
+    return this.withDistance(place, near);
+  }
+
   // ── Manbalar ────────────────────────────────────────────────────────────────
+
+  /** Yandex Geosaggest — tashkilot va manzillar, koordinatasiz (`uri` bilan) */
+  private async yandexSuggest(q: string, near: LatLng): Promise<PlaceResult[]> {
+    const apikey = process.env.YANDEX_SUGGEST_API_KEY;
+    // uri → koordinata uchun geokoder kerak; usiz natijani ishlatib bo'lmaydi
+    if (!apikey || !process.env.YANDEX_GEOCODER_API_KEY) return [];
+    if (!this.takeQuota('suggest')) return [];
+    try {
+      const ll = `${near.lng},${near.lat}`;
+      const { data } = await axios.get(
+        'https://suggest-maps.yandex.ru/v1/suggest',
+        {
+          params: {
+            apikey,
+            text: q,
+            lang: this.lang().slice(0, 2),
+            ll,
+            ull: ll,
+            spn: '1.0,1.0',
+            types: 'biz,geo',
+            print_address: 1,
+            attrs: 'uri',
+            highlight: 0,
+            results: MAX_RESULTS,
+          },
+          timeout: HTTP_TIMEOUT_MS,
+        },
+      );
+      return (data?.results ?? [])
+        .map((r: any): PlaceResult | null => {
+          const uri = typeof r?.uri === 'string' ? r.uri : null;
+          const name = String(r?.title?.text ?? '').trim();
+          if (!uri || !name) return null;
+          const tags: string[] = Array.isArray(r?.tags) ? r.tags : [];
+          const dist = Number(r?.distance?.value);
+          return {
+            name,
+            address: r?.address?.formatted_address ?? r?.subtitle?.text ?? null,
+            lat: null,
+            lng: null,
+            source: tags.includes('business') ? 'YANDEX_ORG' : 'YANDEX_GEO',
+            distance: Number.isFinite(dist) ? Math.round(dist) : null,
+            uri,
+          };
+        })
+        .filter(Boolean) as PlaceResult[];
+    } catch (e) {
+      this.warnHttp('Yandex Geosaggest', e);
+      return [];
+    }
+  }
 
   private async yandexOrganizations(
     q: string,
     near: LatLng,
   ): Promise<PlaceResult[]> {
     const apikey = process.env.YANDEX_SEARCH_API_KEY;
-    if (!apikey) return [];
+    if (!apikey || !this.takeQuota('search')) return [];
     // `type` berilmaydi — tashkilotlar (biz) ham, manzillar (geo) ham qaytadi,
     // shuning uchun alohida geokoder kaliti shart emas. Til: uz_UZ qo'llanmasa
     // (400) — ru_RU bilan qayta so'raladi.
@@ -157,9 +312,7 @@ export class PlaceSearchService {
       } catch (e: any) {
         const status = e?.response?.status;
         if (status === 400 && lang !== 'ru_RU') continue;
-        this.logger.warn(
-          `Yandex qidiruv API ishlamadi${status ? ` (HTTP ${status}${status === 403 ? ' — kalit, uning ruxsatlari yoki kunlik limitini tekshiring' : ''})` : ''}: ${this.errText(e)}`,
-        );
+        this.warnHttp('Yandex tashkilot qidiruvi', e);
         return [];
       }
     }
@@ -171,14 +324,15 @@ export class PlaceSearchService {
     near: LatLng,
   ): Promise<PlaceResult[]> {
     const apikey = process.env.YANDEX_GEOCODER_API_KEY;
-    if (!apikey) return [];
+    if (!apikey || !this.takeQuota('geocoder')) return [];
     try {
       const { data } = await axios.get('https://geocode-maps.yandex.ru/1.x/', {
         params: {
           apikey,
           geocode: q,
           format: 'json',
-          lang: 'uz_UZ',
+          // Geokoder uz_UZ ni qo'llamaydi (ru_RU, en_RU, en_US, uk_UA, be_BY, tr_TR)
+          lang: this.lang(),
           ll: `${near.lng},${near.lat}`,
           spn: '1.0,1.0',
           results: 5,
@@ -187,24 +341,10 @@ export class PlaceSearchService {
       });
       const members = data?.response?.GeoObjectCollection?.featureMember ?? [];
       return members
-        .map((m: any): PlaceResult | null => {
-          const obj = m?.GeoObject;
-          const [lng, lat] = String(obj?.Point?.pos ?? '')
-            .split(' ')
-            .map(Number);
-          if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-          return {
-            name: String(obj?.name ?? q),
-            address: obj?.description ?? null,
-            lat,
-            lng,
-            source: 'YANDEX_GEO',
-            distance: null,
-          };
-        })
+        .map((m: any) => this.fromGeoObject(m?.GeoObject, 'YANDEX_GEO'))
         .filter(Boolean) as PlaceResult[];
     } catch (e) {
-      this.logger.warn(`Yandex geokoder ishlamadi: ${this.errText(e)}`);
+      this.warnHttp('Yandex geokoder', e);
       return [];
     }
   }
@@ -271,6 +411,73 @@ export class PlaceSearchService {
 
   // ── Yordamchilar ────────────────────────────────────────────────────────────
 
+  /** Yandex javob tili (geokoder formati). Standart ru_RU. */
+  private lang(): string {
+    const l = (process.env.YANDEX_MAPS_LANG || 'ru_RU').trim();
+    return /^[a-z]{2}_[A-Z]{2}$/.test(l) ? l : 'ru_RU';
+  }
+
+  private fromGeoObject(obj: any, source: PlaceSource): ResolvedPlace | null {
+    const [lng, lat] = String(obj?.Point?.pos ?? '')
+      .split(' ')
+      .map(Number);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    const meta = obj?.metaDataProperty?.GeocoderMetaData;
+    return {
+      name: String(obj?.name ?? meta?.text ?? '').trim() || 'Tanlangan joy',
+      address: meta?.text ?? obj?.description ?? null,
+      lat,
+      lng,
+      source,
+      distance: null,
+    };
+  }
+
+  private withDistance(p: ResolvedPlace, near: LatLng): ResolvedPlace {
+    return {
+      ...p,
+      distance: Math.round(haversineMeters(near.lat, near.lng, p.lat, p.lng)),
+    };
+  }
+
+  /**
+   * Kunlik chegara (Toshkent kuni bo'yicha, jarayon xotirasida). Chegaraga
+   * yetganda `false` — chaqiruvchi o'sha manbani o'tkazib yuboradi.
+   */
+  private takeQuota(product: string): boolean {
+    const cap =
+      Number(process.env.YANDEX_DAILY_CAP) || DEFAULT_YANDEX_DAILY_CAP;
+    const day = new Date(Date.now() + 5 * 3600_000).toISOString().slice(0, 10);
+    const q = this.quota.get(product);
+    const cur = q && q.day === day ? q : { day, used: 0 };
+    if (cur.used >= cap) {
+      if (cur.used === cap) {
+        this.logger.warn(
+          `Yandex ${product}: kunlik chegara (${cap}) tugadi — ertagacha faqat zaxira manbalar`,
+        );
+        cur.used++; // ogohlantirish bir marta
+      }
+      this.quota.set(product, cur);
+      return false;
+    }
+    cur.used++;
+    this.quota.set(product, cur);
+    return true;
+  }
+
+  private warnHttp(what: string, e: any) {
+    const status = e?.response?.status;
+    const hint =
+      status === 403
+        ? ' — kalit shu mahsulotga ulanganini, uning cheklovlarini (IP/Referer) va kunlik limitini tekshiring'
+        : status === 429
+          ? ' — kunlik yoki soniyalik limit'
+          : '';
+    this.logger.warn(
+      `${what} ishlamadi${status ? ` (HTTP ${status}${hint})` : ''}: ${this.errText(e)}`,
+    );
+  }
+
   private async hospitalCenter(hospitalId: string): Promise<LatLng> {
     const h = await this.prisma.hospital.findUnique({
       where: { id: hospitalId },
@@ -284,16 +491,24 @@ export class PlaceSearchService {
   /** Dublikatlarni birlashtiradi, masofani qo'yadi, yaqinini oldinga chiqaradi */
   mergeAndRank(items: PlaceResult[], near: LatLng): PlaceResult[] {
     const out: PlaceResult[] = [];
+    const key = (r: PlaceResult) =>
+      `${r.name} ${r.address ?? ''}`
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}]+/gu, ' ')
+        .trim();
     for (const it of items) {
-      const dup = out.find(
-        (o) => haversineMeters(o.lat, o.lng, it.lat, it.lng) < DEDUPE_M,
+      const hasCoords = it.lat != null && it.lng != null;
+      const dup = out.find((o) =>
+        hasCoords && o.lat != null && o.lng != null
+          ? haversineMeters(o.lat, o.lng, it.lat!, it.lng!) < DEDUPE_M
+          : key(o) === key(it),
       );
       if (dup) continue; // birinchi (ishonchliroq) manba qoladi
       out.push({
         ...it,
-        distance: Math.round(
-          haversineMeters(near.lat, near.lng, it.lat, it.lng),
-        ),
+        distance: hasCoords
+          ? Math.round(haversineMeters(near.lat, near.lng, it.lat!, it.lng!))
+          : it.distance,
       });
     }
     // Manba ustuvorligi saqlanadi, lekin 50 km dan uzoq natijalar oxiriga tushadi
@@ -309,20 +524,20 @@ export class PlaceSearchService {
       .slice(0, MAX_RESULTS);
   }
 
-  private remember(key: string, results: PlaceResult[]) {
+  private remember(key: string, results: PlaceResult[], ttl: number) {
     if (this.cache.size >= CACHE_MAX) {
       const oldest = this.cache.keys().next().value;
       if (oldest !== undefined) this.cache.delete(oldest);
     }
-    this.cache.set(key, { at: Date.now(), results });
+    this.cache.set(key, { at: Date.now(), ttl, results });
   }
 
-  private checkUserLimit(userId: string) {
+  private checkUserLimit(userId: string, limit = USER_LIMIT_PER_MIN) {
     const now = Date.now();
     const hits = (this.userHits.get(userId) ?? []).filter(
       (t) => now - t < 60_000,
     );
-    if (hits.length >= USER_LIMIT_PER_MIN) {
+    if (hits.length >= limit) {
       throw new HttpException(
         "Juda ko'p qidiruv. Bir daqiqadan so'ng qayta urinib ko'ring.",
         HttpStatus.TOO_MANY_REQUESTS,
