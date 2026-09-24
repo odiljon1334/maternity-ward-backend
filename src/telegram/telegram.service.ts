@@ -176,6 +176,20 @@ export class TelegramService implements OnModuleInit {
     }
 
     this.bot = new Telegraf(token);
+    // To'lov tokeni formati: <provayder_id>:TEST|LIVE:<...> (BotFather → Payments)
+    const payToken = this.config.get<string>('TELEGRAM_PAYMENT_TOKEN');
+    if (payToken) {
+      const m = /^\d+:(TEST|LIVE):\S+$/.exec(payToken.trim());
+      if (!m) {
+        this.logger.warn(
+          "TELEGRAM_PAYMENT_TOKEN formati noto'g'ri (kutilgan: 123456:LIVE:xxxx) — bot to'lovlari ishlamaydi",
+        );
+      } else if (m[1] === 'TEST') {
+        this.logger.warn(
+          'TELEGRAM_PAYMENT_TOKEN — TEST rejimi: haqiqiy pul yechilmaydi',
+        );
+      }
+    }
     this.setupCommands();
     await this.bot.telegram
       .setMyCommands([
@@ -544,8 +558,12 @@ export class TelegramService implements OnModuleInit {
         await (ctx as Context).replyWithInvoice(invoice);
       } catch (e) {
         // Masalan summa to'lov tizimi chegarasidan katta — invoys ochiq qolmasin
+        const msg = e instanceof Error ? e.message : String(e);
         this.logger.error(
-          `Invoys yuborilmadi (invoice=${inv.invoiceId}, ${inv.amountSom} so'm): ${e instanceof Error ? e.message : String(e)}`,
+          `Invoys yuborilmadi (invoice=${inv.invoiceId}, ${inv.amountSom} so'm): ${msg}` +
+            (msg.includes('PAYMENT_PROVIDER_INVALID')
+              ? " — TELEGRAM_PAYMENT_TOKEN shu botga tegishli emas yoki bekor qilingan. BotFather → HR bot (TELEGRAM_BOT_TOKEN egasi) → Payments'dan olingan tokenni qo'ying."
+              : ''),
         );
         await this.billing.cancelInvoice(inv.invoiceId).catch(() => undefined);
         await ctx.reply(

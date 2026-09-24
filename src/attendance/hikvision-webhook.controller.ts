@@ -15,10 +15,26 @@ import { AttendanceService, HikvisionEvent } from './attendance.service';
 import { TelegramService } from '../telegram/telegram.service';
 import { mapHikvisionStatus } from './constants/terminal-event.map';
 
+/** Terminalning heartBeat hodisasi (JSON yoki XML) */
+export function isHeartbeat(raw: unknown): boolean {
+  if (!raw) return false;
+  if (typeof raw === 'string') {
+    return /<eventType>\s*heartBeat\s*<\/eventType>/i.test(raw);
+  }
+  if (typeof raw === 'object') {
+    const o = raw as Record<string, unknown>;
+    const t = o.eventType ?? (o.AccessControllerEvent as any)?.eventType;
+    return typeof t === 'string' && t.toLowerCase() === 'heartbeat';
+  }
+  return false;
+}
+
 /** Hikvision qurilmalari tez-tez so'rov yuboradi — rate limit o'chirilgan */
 @Controller('hikvision')
 export class HikvisionWebhookController {
   private readonly logger = new Logger(HikvisionWebhookController.name);
+  /** employeeNo'siz hodisalar ogohlantirishini siyraklashtirish (device → vaqt) */
+  private readonly noEmployeeWarnAt = new Map<string, number>();
 
   constructor(
     private readonly attendanceService: AttendanceService,
@@ -40,23 +56,34 @@ export class HikvisionWebhookController {
     const ct = String(req.headers['content-type'] || '');
     const body = req.body as Buffer;
 
-    this.logger.log(
-      `Webhook ct=${ct.split(';')[0]} size=${body?.length ?? 0}b`,
-    );
-
     const parsed = this.parsePayload(ct, body);
 
-    this.logger.log(
-      `Parsed: no=${parsed.employeeNo} time=${parsed.eventTime} ` +
-        `status=${parsed.terminalEventType ?? 'auto'} device=${parsed.deviceId}`,
-    );
+    // Terminal "tirikman" signali (har necha soniyada) — davomat hodisasi
+    // emas. Ilgari har biri WARN "employeeNo topilmadi" bo'lib loglarni
+    // to'ldirardi.
+    if (isHeartbeat(parsed.eventRaw)) {
+      return { status: 'ok' };
+    }
 
     if (!parsed.employeeNo) {
-      this.logger.warn(
-        `employeeNo topilmadi. Raw (500ch): ${JSON.stringify(parsed.eventRaw).slice(0, 500)}`,
-      );
+      // Eshik/signalizatsiya kabi xodimsiz hodisalar ham keladi — har
+      // terminal uchun 10 daqiqada ko'pi bilan bitta ogohlantirish
+      const key = String(parsed.deviceId ?? req.ip ?? 'unknown');
+      const now = Date.now();
+      if (now - (this.noEmployeeWarnAt.get(key) ?? 0) > 10 * 60_000) {
+        this.noEmployeeWarnAt.set(key, now);
+        if (this.noEmployeeWarnAt.size > 1000) this.noEmployeeWarnAt.clear();
+        this.logger.warn(
+          `employeeNo'siz hodisa (device=${key}, 10 daqiqada bir marta loglanadi). Raw (500ch): ${JSON.stringify(parsed.eventRaw).slice(0, 500)}`,
+        );
+      }
       return { status: 'ignored', reason: 'no_employee_no' };
     }
+
+    this.logger.log(
+      `Webhook ct=${ct.split(';')[0]} size=${body?.length ?? 0}b no=${parsed.employeeNo} ` +
+        `time=${parsed.eventTime} status=${parsed.terminalEventType ?? 'auto'} device=${parsed.deviceId}`,
+    );
 
     const event: HikvisionEvent = {
       employeeNo: parsed.employeeNo,
