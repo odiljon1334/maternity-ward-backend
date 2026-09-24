@@ -67,6 +67,24 @@ describe('place-search.util', () => {
   it('oddiy matn koordinata deb olinmaydi', () => {
     expect(parseCoordinates('1-maktab Andijon')).toBeNull();
     expect(parseCoordinates("Navoiy ko'chasi 12")).toBeNull();
+    expect(parseCoordinates('Navoiy 12, 5-uy')).toBeNull();
+    expect(parseCoordinates('info@1,2 street')).toBeNull();
+  });
+
+  it("imkonsiz qiymat koordinata bo'lmaydi; Yandex poi[point] — belgilangan nuqta", () => {
+    expect(parseCoordinates('120.5, 40.2')).toEqual({ lat: 40.2, lng: 120.5 });
+    expect(parseCoordinates('120.5, 140.2')).toBeNull();
+    expect(
+      parseCoordinates(
+        'https://yandex.uz/maps/?ll=72.30%2C40.70&poi%5Bpoint%5D=72.3442%2C40.7821&z=17',
+      ),
+    ).toEqual({ lat: 40.7821, lng: 72.3442 });
+  });
+
+  it("buzilgan %-kodli uzun havola ham o'qiladi", () => {
+    const url =
+      'https://yandex.uz/maps/10329/andijan/?ll=72.344200%2C40.782100&mode=search&text=%D0%B';
+    expect(parseCoordinates(url)).toEqual({ lat: 40.7821, lng: 72.3442 });
   });
 
   it("raqamli muassasa uchun OSM'dagi yozilish variantlari", () => {
@@ -79,6 +97,13 @@ describe('place-search.util', () => {
       "5-son bog'cha Asaka",
     );
     expect(buildQueryVariants('Navoiy ko‘chasi')).toEqual(["Navoiy ko'chasi"]);
+    // Tur so'zi yonidagi raqam olinadi (uy raqami emas)
+    expect(buildQueryVariants('Andijon 5-uy 1-maktab')[1]).toMatch(
+      /^1-son maktab/,
+    );
+    expect(buildQueryVariants('школа 12 Андижан')[1]).toBe(
+      '12-son maktab Андижан',
+    );
   });
 });
 
@@ -159,7 +184,10 @@ describe('PlaceSearchService', () => {
               },
               {
                 geometry: { coordinates: [72.3451, 40.7811] },
-                properties: { name: 'Dublikat', CompanyMetaData: {} },
+                properties: {
+                  name: '1-sonli maktab (Andijon)',
+                  CompanyMetaData: {},
+                },
               },
               {
                 geometry: { coordinates: [69.24, 41.31] },
@@ -362,6 +390,7 @@ describe('PlaceSearchService', () => {
         },
       });
       const svc = new PlaceSearchService(prisma);
+      (svc as any).issueUri('ymapsbm1://org?oid=123456', 'h1');
       const p = await svc.resolve('ymapsbm1://org?oid=123456', 'h1', 'u1');
       expect(p).toMatchObject({
         lat: 40.781,
@@ -392,6 +421,8 @@ describe('PlaceSearchService', () => {
 
     it('resolve: geokoder xato bersa 503, topilmasa 404', async () => {
       const svc = new PlaceSearchService(prisma);
+      (svc as any).issueUri('ymapsbm1://org?oid=1', 'h1');
+      (svc as any).issueUri('ymapsbm1://org?oid=2', 'h1');
       mockedGet.mockRejectedValueOnce(
         Object.assign(new Error('forbidden'), { response: { status: 403 } }),
       );
@@ -404,6 +435,40 @@ describe('PlaceSearchService', () => {
       await expect(
         svc.resolve('ymapsbm1://org?oid=2', 'h1', 'u1'),
       ).rejects.toMatchObject({ status: 404 });
+    });
+
+    it("resolve: qidiruvda berilmagan yoki boshqa muassasaga berilgan uri rad etiladi (limitni bekorga yeb bo'lmaydi)", async () => {
+      mockedGet.mockResolvedValue({ data: suggestData });
+      const svc = new PlaceSearchService(prisma);
+      await expect(
+        svc.resolve('ymapsbm1://org?oid=999', 'h1', 'u1'),
+      ).rejects.toThrow(/eskirgan/);
+      await svc.search('1-maktab Andijon', 'h1', 'u1');
+      await expect(
+        svc.resolve('ymapsbm1://org?oid=123456', 'h2', 'u1'),
+      ).rejects.toThrow(/eskirgan/);
+      const callsBefore = mockedGet.mock.calls.length;
+      mockedGet.mockResolvedValue({
+        data: {
+          response: {
+            GeoObjectCollection: { featureMember: [{ GeoObject: geoObject }] },
+          },
+        },
+      });
+      await expect(
+        svc.resolve('ymapsbm1://org?oid=123456', 'h1', 'u1'),
+      ).resolves.toMatchObject({ lat: 40.781 });
+      expect(mockedGet.mock.calls.length).toBe(callsBefore + 1);
+    });
+
+    it("bo'sh natija keshlanmaydi (tarmoq uzilishi so'rovni yashirmasin)", async () => {
+      mockedGet.mockResolvedValue({ data: { results: [] } });
+      process.env.YANDEX_GEOCODER_API_KEY = 'g';
+      const svc = new PlaceSearchService(prisma);
+      await svc.search('yoq joy', 'h1', 'u1');
+      const n = mockedGet.mock.calls.length;
+      await svc.search('yoq joy', 'h1', 'u1');
+      expect(mockedGet.mock.calls.length).toBeGreaterThan(n);
     });
 
     it("kunlik chegara: YANDEX_DAILY_CAP dan keyin Yandex'ga so'rov ketmaydi", async () => {

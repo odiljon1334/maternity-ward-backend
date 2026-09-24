@@ -57,6 +57,22 @@ const USER_LIMIT_PER_MIN = 20;
 const MAX_RESULTS = 8;
 /** Bir joy turli manbadan kelsa — shu masofadan yaqin natijalar birlashtiriladi */
 const DEDUPE_M = 40;
+/** Geosaggest bergan uri shuncha vaqt tanlash uchun yaroqli */
+const ISSUED_URI_TTL_MS = 30 * 60 * 1000;
+/** Butun qidiruv uchun vaqt byudjeti (frontend 15 s kutadi) */
+const SEARCH_BUDGET_MS = 11_000;
+/** Nominatim navbatida shundan ko'p kutayotgan bo'lsa OSM o'tkazib yuboriladi */
+const NOMINATIM_MAX_QUEUE = 3;
+/** Qidiruv matni (koordinata/havola emas) uzunligi */
+const MAX_TEXT_QUERY = 200;
+const YANDEX_LANGS = new Set([
+  'ru_RU',
+  'en_RU',
+  'en_US',
+  'uk_UA',
+  'be_BY',
+  'tr_TR',
+]);
 
 /**
  * Ish joyi manzilini nomi bo'yicha qidirish (Sozlamalar → Ish joylari).
@@ -89,6 +105,12 @@ export class PlaceSearchService {
   >();
   private readonly userHits = new Map<string, number[]>();
   private readonly quota = new Map<string, { day: string; used: number }>();
+  /** Geosaggest bergan uri'lar (uri → {at, hospitalId}) — faqat shular aniqlanadi */
+  private readonly issuedUris = new Map<
+    string,
+    { at: number; hospitalId: string }
+  >();
+  private nominatimPending = 0;
   private nominatimChain: Promise<unknown> = Promise.resolve();
   private nominatimLastAt = 0;
 
@@ -99,12 +121,11 @@ export class PlaceSearchService {
     hospitalId: string,
     userId: string,
   ): Promise<PlaceResult[]> {
-    const query = normalizeQuery(rawQuery ?? '');
-    if (query.length < 2) return [];
-
+    const raw = String(rawQuery ?? '');
     const near = await this.hospitalCenter(hospitalId);
 
-    const coords = parseCoordinates(rawQuery);
+    // Havola uzun bo'lishi mumkin — koordinata avval to'liq matndan olinadi
+    const coords = parseCoordinates(raw);
     if (coords) {
       return [
         {
@@ -119,6 +140,10 @@ export class PlaceSearchService {
         },
       ];
     }
+
+    const query = normalizeQuery(raw.slice(0, MAX_TEXT_QUERY));
+    if (query.length < 2) return [];
+    const startedAt = Date.now();
 
     const cacheKey = `${query.toLowerCase()}|${near.lat.toFixed(2)},${near.lng.toFixed(2)}`;
     const cached = this.cache.get(cacheKey);
@@ -139,22 +164,51 @@ export class PlaceSearchService {
     const yandex = [...suggest, ...places, ...geo];
 
     let osm: PlaceResult[] = [];
-    // OSM faqat Yandex tashkilot topmagan bo'lsa (tezlik va foydalanish qoidasi uchun)
+    let osmAnswered = false;
+    // OSM faqat Yandex tashkilot topmagan bo'lsa (tezlik va foydalanish
+    // qoidasi uchun). Vaqt byudjeti tugasa yoki navbat uzun bo'lsa — o'tkaziladi.
     const hasOrg = yandex.some((r) => r.source === 'YANDEX_ORG');
     if (!hasOrg && process.env.GEO_OSM_DISABLED !== 'true') {
       for (const variant of buildQueryVariants(query)) {
-        osm = await this.nominatim(variant, near);
+        const left = SEARCH_BUDGET_MS - (Date.now() - startedAt);
+        if (left < 2500 || this.nominatimPending >= NOMINATIM_MAX_QUEUE) break;
+        const r = await this.nominatim(variant, near, left - 500);
+        if (r === null) break; // xato — keyingi variant ham ishlamaydi
+        osmAnswered = true;
+        osm = r;
         if (osm.length) break;
       }
     }
 
     const results = this.mergeAndRank([...yandex, ...osm], near);
-    this.remember(
-      cacheKey,
-      results,
-      yandex.length ? YANDEX_CACHE_TTL_MS : CACHE_TTL_MS,
-    );
+    for (const r of results) {
+      if (r.uri) this.issueUri(r.uri, hospitalId);
+    }
+    // Bo'sh natija keshlanmaydi (tarmoq uzilishi so'rovni bir kunga
+    // "topilmadi" qilib qo'ymasin). Yandex natijalari qisqa muddat.
+    if (results.length) {
+      this.remember(
+        cacheKey,
+        results,
+        yandex.length || !osmAnswered ? YANDEX_CACHE_TTL_MS : CACHE_TTL_MS,
+      );
+    }
     return results;
+  }
+
+  private issueUri(uri: string, hospitalId: string) {
+    const now = Date.now();
+    if (this.issuedUris.size > 5000) {
+      for (const [k, v] of this.issuedUris) {
+        if (now - v.at > ISSUED_URI_TTL_MS) this.issuedUris.delete(k);
+      }
+      if (this.issuedUris.size > 5000) {
+        const oldest = this.issuedUris.keys().next().value;
+        if (oldest !== undefined) this.issuedUris.delete(oldest);
+      }
+    }
+    this.issuedUris.delete(uri);
+    this.issuedUris.set(uri, { at: now, hospitalId });
   }
 
   /**
@@ -174,6 +228,18 @@ export class PlaceSearchService {
     if (!apikey) {
       throw new ServiceUnavailableException(
         'Joy koordinatasini aniqlash sozlanmagan. Nuqtani xaritadan tanlang.',
+      );
+    }
+    // Faqat shu muassasa uchun yaqinda qidiruvda berilgan uri — aks holda
+    // istalgan satr bilan umumiy kunlik geokoder limitini tugatish mumkin edi
+    const issued = this.issuedUris.get(uri);
+    if (
+      !issued ||
+      issued.hospitalId !== hospitalId ||
+      Date.now() - issued.at > ISSUED_URI_TTL_MS
+    ) {
+      throw new BadRequestException(
+        'Qidiruv natijasi eskirgan. Qidiruvni qaytadan bajaring.',
       );
     }
     const near = await this.hospitalCenter(hospitalId);
@@ -274,11 +340,12 @@ export class PlaceSearchService {
     near: LatLng,
   ): Promise<PlaceResult[]> {
     const apikey = process.env.YANDEX_SEARCH_API_KEY;
-    if (!apikey || !this.takeQuota('search')) return [];
+    if (!apikey) return [];
     // `type` berilmaydi — tashkilotlar (biz) ham, manzillar (geo) ham qaytadi,
     // shuning uchun alohida geokoder kaliti shart emas. Til: uz_UZ qo'llanmasa
     // (400) — ru_RU bilan qayta so'raladi.
     for (const lang of ['uz_UZ', 'ru_RU']) {
+      if (!this.takeQuota('search')) return [];
       try {
         const { data } = await axios.get('https://search-maps.yandex.ru/v1/', {
           params: {
@@ -350,8 +417,13 @@ export class PlaceSearchService {
   }
 
   /** Nominatim — global navbat bilan (sekundiga ≤ 1 so'rov, bir nechta foydalanuvchi bo'lsa ham) */
-  private nominatim(q: string, near: LatLng): Promise<PlaceResult[]> {
-    const run = async (): Promise<PlaceResult[]> => {
+  /** null — xizmat javob bermadi (xato/timeout), [] — hech narsa topilmadi */
+  private nominatim(
+    q: string,
+    near: LatLng,
+    timeoutMs = HTTP_TIMEOUT_MS,
+  ): Promise<PlaceResult[] | null> {
+    const run = async (): Promise<PlaceResult[] | null> => {
       const wait =
         this.nominatimLastAt + NOMINATIM_MIN_INTERVAL_MS - Date.now();
       if (wait > 0) await new Promise((r) => setTimeout(r, wait));
@@ -377,7 +449,7 @@ export class PlaceSearchService {
               // Nominatim qoidasi: ilovani aniqlaydigan User-Agent majburiy
               'User-Agent': `StaffPlusPRO/1.0 (+${process.env.FRONTEND_URL || 'https://clinicuk24.com'})`,
             },
-            timeout: HTTP_TIMEOUT_MS,
+            timeout: Math.max(1000, Math.min(HTTP_TIMEOUT_MS, timeoutMs)),
           },
         );
         return (Array.isArray(data) ? data : [])
@@ -401,10 +473,13 @@ export class PlaceSearchService {
         this.logger.warn(
           `OSM (Nominatim) qidiruvi ishlamadi: ${this.errText(e)}`,
         );
-        return [];
+        return null;
       }
     };
-    const next = this.nominatimChain.then(run, run);
+    this.nominatimPending++;
+    const next = this.nominatimChain
+      .then(run, run)
+      .finally(() => this.nominatimPending--);
     this.nominatimChain = next.catch(() => undefined);
     return next;
   }
@@ -414,7 +489,7 @@ export class PlaceSearchService {
   /** Yandex javob tili (geokoder formati). Standart ru_RU. */
   private lang(): string {
     const l = (process.env.YANDEX_MAPS_LANG || 'ru_RU').trim();
-    return /^[a-z]{2}_[A-Z]{2}$/.test(l) ? l : 'ru_RU';
+    return YANDEX_LANGS.has(l) ? l : 'ru_RU';
   }
 
   private fromGeoObject(obj: any, source: PlaceSource): ResolvedPlace | null {
@@ -491,18 +566,35 @@ export class PlaceSearchService {
   /** Dublikatlarni birlashtiradi, masofani qo'yadi, yaqinini oldinga chiqaradi */
   mergeAndRank(items: PlaceResult[], near: LatLng): PlaceResult[] {
     const out: PlaceResult[] = [];
-    const key = (r: PlaceResult) =>
-      `${r.name} ${r.address ?? ''}`
+    const norm = (v: string) =>
+      v
         .toLowerCase()
         .replace(/[^\p{L}\p{N}]+/gu, ' ')
         .trim();
+    // Nom o'xshashligi: biri ikkinchisini o'z ichiga oladi ("1-maktab" ~
+    // "1-maktab (Andijon)"). Qo'shni ikki bino faqat masofa bilan birlashmasin.
+    const similarName = (a: PlaceResult, b: PlaceResult) => {
+      const x = norm(a.name);
+      const y = norm(b.name);
+      return !!x && !!y && (x === y || x.includes(y) || y.includes(x));
+    };
+    const distOf = (r: PlaceResult) =>
+      r.lat != null && r.lng != null
+        ? haversineMeters(near.lat, near.lng, r.lat, r.lng)
+        : r.distance;
     for (const it of items) {
       const hasCoords = it.lat != null && it.lng != null;
-      const dup = out.find((o) =>
-        hasCoords && o.lat != null && o.lng != null
-          ? haversineMeters(o.lat, o.lng, it.lat!, it.lng!) < DEDUPE_M
-          : key(o) === key(it),
-      );
+      const dup = out.find((o) => {
+        if (!similarName(o, it)) return false;
+        if (hasCoords && o.lat != null && o.lng != null)
+          return haversineMeters(o.lat, o.lng, it.lat!, it.lng!) < DEDUPE_M;
+        // Koordinatasiz (Geosaggest) natija: muassasagacha masofa deyarli bir xil
+        const da = distOf(o);
+        const db = distOf(it);
+        return da != null && db != null
+          ? Math.abs(da - db) < 150
+          : norm(o.address ?? '') === norm(it.address ?? '');
+      });
       if (dup) continue; // birinchi (ishonchliroq) manba qoladi
       out.push({
         ...it,

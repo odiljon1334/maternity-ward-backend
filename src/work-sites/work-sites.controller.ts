@@ -70,8 +70,9 @@ export class WorkSitesController {
     @CurrentUser('sub') userId: string,
     @Query('targetHospitalId') target?: string,
   ) {
+    // ?q=a&q=b massiv bo'lib kelishi mumkin; xarita havolasi uzun bo'ladi
     return this.places.search(
-      (q ?? '').slice(0, 200),
+      String(Array.isArray(q) ? q[0] : (q ?? '')).slice(0, 2000),
       resolveWorkSiteHospital(jwt, target),
       userId,
     );
@@ -87,7 +88,7 @@ export class WorkSitesController {
     @Query('targetHospitalId') target?: string,
   ) {
     return this.places.resolve(
-      uri,
+      String(Array.isArray(uri) ? uri[0] : (uri ?? '')),
       resolveWorkSiteHospital(jwt, target),
       userId,
     );
