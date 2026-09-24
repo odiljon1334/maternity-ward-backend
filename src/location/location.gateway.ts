@@ -10,6 +10,11 @@ import {
 import { Server, Socket } from 'socket.io';
 import { JwtService } from '@nestjs/jwt';
 import { UserRole } from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+import {
+  tokenFromCookie,
+  verifySocketUser,
+} from '../common/utils/ws-auth.util';
 
 @WebSocketGateway({
   namespace: '/live-location',
@@ -28,7 +33,10 @@ export class LocationGateway
   @WebSocketServer()
   server: Server;
 
-  constructor(private readonly jwtService: JwtService) {}
+  constructor(
+    private readonly jwtService: JwtService,
+    private readonly prisma: PrismaService,
+  ) {}
 
   handleConnection(client: Socket) {
     console.log(`[LiveLocation] connected: ${client.id}`);
@@ -39,47 +47,57 @@ export class LocationGateway
   }
 
   @SubscribeMessage('join:admin')
-  handleAdminJoin(
+  async handleAdminJoin(
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: { token?: string },
   ) {
-    try {
-      // Yangi browser UI HttpOnly cookie ishlatadi; eski clientlar esa
-      // rollout davomida tokenni event payload'ida yuborishi mumkin.
-      const cookie = client.handshake.headers.cookie ?? '';
-      const cookieToken = cookie.match(/(?:^|;\s*)access_token=([^;]+)/)?.[1];
-      const token = cookieToken
-        ? decodeURIComponent(cookieToken)
-        : payload?.token;
-      if (!token) throw new Error('token_missing');
-      const user = this.jwtService.verify(token);
-      const adminRoles = [
-        UserRole.DIRECTOR,
-        UserRole.ADMIN,
-        UserRole.SUPER_ADMIN,
-        UserRole.DEPARTMENT_HEAD,
-        UserRole.ASSISTANT_ADMIN,
-        UserRole.MINISTRY,
-      ];
-
-      if (adminRoles.includes(user.role)) {
-        if (
-          user.role === UserRole.SUPER_ADMIN ||
-          user.role === UserRole.MINISTRY
-        ) {
-          // SUPER_ADMIN barcha hospital room'lariga kiradi
-          client.join('super-admins');
-          client.emit('join:success', { room: 'super-admins' });
-        } else {
-          client.join(`hospital:${user.hospitalId}`);
-          client.emit('join:success', { room: `hospital:${user.hospitalId}` });
-        }
-      } else {
-        client.emit('join:error', { message: "Ruxsat yo'q" });
-      }
-    } catch {
+    // Yangi browser UI HttpOnly cookie ishlatadi; eski clientlar esa
+    // rollout davomida tokenni event payload'ida yuborishi mumkin.
+    // Tekshiruv HTTP bilan bir xil: bazada ACTIVE, parol almashgan bo'lsa
+    // eski token rad etiladi (ilgari faqat imzo tekshirilardi).
+    const token =
+      tokenFromCookie(client.handshake.headers.cookie) ??
+      (typeof payload?.token === 'string' ? payload.token : null);
+    const user = await verifySocketUser(this.jwtService, this.prisma, token);
+    if (!user) {
       client.emit('join:error', { message: "Token noto'g'ri" });
+      return;
     }
+
+    if (user.role === UserRole.SUPER_ADMIN || user.role === UserRole.MINISTRY) {
+      // SUPER_ADMIN/MINISTRY barcha hospital room'lariga kiradi
+      await client.join('super-admins');
+      client.emit('join:success', { room: 'super-admins' });
+      return;
+    }
+
+    if (user.role === UserRole.ASSISTANT_ADMIN) {
+      // JWT'da muassasa yo'q — biriktirilgan muassasalar room'lariga
+      const links = await this.prisma.hospitalAssistant.findMany({
+        where: { userId: user.id },
+        select: { hospitalId: true },
+      });
+      const rooms = links.map((l) => `hospital:${l.hospitalId}`);
+      if (!rooms.length) {
+        client.emit('join:error', { message: "Ruxsat yo'q" });
+        return;
+      }
+      await client.join(rooms);
+      client.emit('join:success', { room: rooms[0], rooms });
+      return;
+    }
+
+    const adminRoles: UserRole[] = [
+      UserRole.DIRECTOR,
+      UserRole.ADMIN,
+      UserRole.DEPARTMENT_HEAD,
+    ];
+    if (!adminRoles.includes(user.role) || !user.hospitalId) {
+      client.emit('join:error', { message: "Ruxsat yo'q" });
+      return;
+    }
+    await client.join(`hospital:${user.hospitalId}`);
+    client.emit('join:success', { room: `hospital:${user.hospitalId}` });
   }
 
   broadcastLocation(hospitalId: string, data: object) {

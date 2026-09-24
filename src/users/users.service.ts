@@ -13,6 +13,8 @@ import {
 
 // Platforma darajasidagi rollar — shu umumiy panel orqali tayinlanmaydi/olib
 // tashlanmaydi (alohida, ataylab qilinadigan jarayon talab qiladi).
+import { assertCanManageRole } from '../common/utils/role-rank.util';
+
 const PLATFORM_ROLES: UserRole[] = [UserRole.SUPER_ADMIN, UserRole.MINISTRY];
 
 @Injectable()
@@ -85,8 +87,16 @@ export class UsersService {
     id: string,
     status: UserStatus,
     hospitalId: string | null,
+    actorRole?: UserRole,
   ) {
     const user = await this.findOneOrThrow(id, hospitalId);
+    if (actorRole) {
+      assertCanManageRole(
+        actorRole,
+        user.role,
+        "bu hisob holatini o'zgartirish",
+      );
+    }
 
     if (PLATFORM_ROLES.includes(user.role)) {
       throw new BadRequestException(

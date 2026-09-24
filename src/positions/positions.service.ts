@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Injectable,
   ConflictException,
   NotFoundException,
@@ -26,16 +27,24 @@ export class PositionsService {
   }
 
   async create(data: { name: string }, hospitalId: string) {
+    if (!hospitalId) {
+      throw new BadRequestException('Muassasani tanlang (targetHospitalId)');
+    }
     const exists = await this.prisma.position.findFirst({
       where: { hospitalId, name: data.name },
     });
     if (exists) throw new ConflictException('Bu lavozim mavjud');
-    return this.prisma.position.create({ data: { ...data, hospitalId } });
+    return this.prisma.position.create({
+      data: { name: data.name, hospitalId },
+    });
   }
 
   async update(id: string, data: { name: string }, hospitalId: string | null) {
     await this.findOne(id, hospitalId);
-    return this.prisma.position.update({ where: { id }, data });
+    return this.prisma.position.update({
+      where: { id },
+      data: { name: data.name },
+    });
   }
 
   async updateGps(

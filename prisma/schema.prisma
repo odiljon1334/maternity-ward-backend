@@ -392,6 +392,8 @@ model PasswordResetToken {
   channel    ResetChannel
   expiresAt  DateTime
   consumedAt DateTime?
+  // Noto'g'ri OTP urinishlari — limitdan keyin kod yaroqsiz bo'ladi
+  attempts   Int          @default(0)
 
   createdAt DateTime @default(now())
 

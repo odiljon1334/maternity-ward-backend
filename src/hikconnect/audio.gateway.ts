@@ -10,7 +10,22 @@ import * as WebSocket from 'ws';
 import * as http from 'http';
 import * as crypto from 'crypto';
 import { Logger } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
+import { UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  SocketUser,
+  tokenFromRequest,
+  verifySocketUser,
+} from '../common/utils/ws-auth.util';
+
+/** Kamera orqali gapira oladigan rollar (MINISTRY — faqat kuzatuvchi) */
+const AUDIO_ROLES: ReadonlySet<string> = new Set([
+  UserRole.SUPER_ADMIN,
+  UserRole.ASSISTANT_ADMIN,
+  UserRole.DIRECTOR,
+  UserRole.ADMIN,
+]);
 
 // ─── G.711 μ-law encoder (PCM Int16 → μ-law 8-bit) ─────────────────────────
 const EXP_LUT = [
@@ -107,15 +122,54 @@ export class AudioGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer() server: Server;
   private readonly logger = new Logger(AudioGateway.name);
   private sessions = new Map<WebSocket, AudioSession>();
+  /** Ulanishdagi autentifikatsiya natijasi (start-audio shuni kutadi) */
+  private auth = new WeakMap<WebSocket, Promise<SocketUser | null>>();
+  private readonly jwt = new JwtService({});
 
   constructor(private readonly prisma: PrismaService) {}
 
-  handleConnection(client: WebSocket) {
+  handleConnection(client: WebSocket, req?: http.IncomingMessage) {
+    // Ilgari /ws/audio hech qanday tekshiruvsiz edi: kamera ID'sini bilgan
+    // har kim muassasa kamerasi orqali gapira olardi. Endi sessiya cookie'si
+    // (HttpOnly access_token — brauzer WS handshake'da o'zi yuboradi) talab
+    // qilinadi.
+    const pending = verifySocketUser(
+      this.jwt,
+      this.prisma,
+      tokenFromRequest(req),
+    ).then((user) => {
+      if (!user || !AUDIO_ROLES.has(user.role)) {
+        this.send(client, 'error', "Ruxsat yo'q — qayta kiring");
+        try {
+          client.close(4401, 'unauthorized');
+        } catch {}
+        return null;
+      }
+      return user;
+    });
+    this.auth.set(client, pending);
+
     // Binary frames (audio PCM) — NestJS @SubscribeMessage handles JSON only,
     // so we hook into the raw ws 'message' event for binary data.
     (client as any).on('message', (raw: Buffer, isBinary: boolean) => {
       if (isBinary) this.onAudioFrame(client, raw);
     });
+  }
+
+  /** Foydalanuvchi shu kamera muassasasiga kira oladimi */
+  private async canUseCamera(
+    user: SocketUser,
+    cameraHospitalId: string,
+  ): Promise<boolean> {
+    if (user.role === UserRole.SUPER_ADMIN) return true;
+    if (user.role === UserRole.ASSISTANT_ADMIN) {
+      const link = await this.prisma.hospitalAssistant.findFirst({
+        where: { userId: user.id, hospitalId: cameraHospitalId },
+        select: { hospitalId: true },
+      });
+      return !!link;
+    }
+    return !!user.hospitalId && user.hospitalId === cameraHospitalId;
   }
 
   handleDisconnect(client: WebSocket) {
@@ -133,11 +187,21 @@ export class AudioGateway implements OnGatewayConnection, OnGatewayDisconnect {
   async onStartAudio(client: WebSocket, payload: { cameraId: string }) {
     if (this.sessions.has(client)) return; // already active
 
-    const camera = await this.prisma.camera.findUnique({
-      where: { id: payload.cameraId },
-    });
+    const actor = await (this.auth.get(client) ?? Promise.resolve(null));
+    if (!actor) return; // ulanish allaqachon yopilgan
 
-    if (!camera?.deviceSerial) {
+    const cameraId =
+      typeof payload?.cameraId === 'string' ? payload.cameraId : '';
+    const camera = cameraId
+      ? await this.prisma.camera.findUnique({ where: { id: cameraId } })
+      : null;
+    if (!camera || !(await this.canUseCamera(actor, camera.hospitalId))) {
+      this.send(client, 'error', 'Kamera topilmadi');
+      return;
+    }
+    if (this.sessions.has(client)) return; // kutish paytida boshlangan
+
+    if (!camera.deviceSerial) {
       this.send(client, 'error', "RTSP URL sozlanmagan (deviceSerial bo'sh)");
       return;
     }

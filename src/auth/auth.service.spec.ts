@@ -80,7 +80,7 @@ function makeFakePrisma() {
 
     passwordResetToken: {
       create: jest.fn(async ({ data }: any) => {
-        const token = { id: nextId(), consumedAt: null, createdAt: new Date(), ...data };
+        const token = { id: nextId(), consumedAt: null, attempts: 0, createdAt: new Date(), ...data };
         passwordResetTokens.push(token);
         return token;
       }),
@@ -105,9 +105,30 @@ function makeFakePrisma() {
       }),
       update: jest.fn(async ({ where, data }: any) => {
         const t = passwordResetTokens.find((x) => x.id === where.id);
-        Object.assign(t, data);
+        const { attempts, ...rest } = data;
+        if (attempts?.increment) t.attempts = (t.attempts ?? 0) + attempts.increment;
+        Object.assign(t, rest);
         return t;
       }),
+      updateMany: jest.fn(async ({ where, data }: any) => {
+        const hit = passwordResetTokens.filter(
+          (t) =>
+            (!where.id || t.id === where.id) &&
+            (!where.userId || t.userId === where.userId) &&
+            (!where.channel?.in || where.channel.in.includes(t.channel)) &&
+            (where.consumedAt !== null || t.consumedAt === null),
+        );
+        hit.forEach((t) => Object.assign(t, data));
+        return { count: hit.length };
+      }),
+      count: jest.fn(async ({ where }: any) =>
+        passwordResetTokens.filter(
+          (t) =>
+            t.userId === where.userId &&
+            t.channel === where.channel &&
+            t.createdAt >= where.createdAt.gte,
+        ).length,
+      ),
     },
 
     $transaction: jest.fn(async (ops: Promise<any>[]) => Promise.all(ops)),
@@ -228,6 +249,72 @@ describe('AuthService — Email tasdiqlash va parolni tiklash (1.1-band)', () =>
     } as any);
 
     expect(await bcrypt.compare('YangiParolTG789', user.passwordHash)).toBe(true);
+  });
+
+  function addTgUser(id = 'user-tg') {
+    return prisma.__addUser({
+      id,
+      username: `u_${id}`,
+      passwordHash: 'x',
+      email: null,
+      emailVerifiedAt: null,
+      employee: { fullName: 'TG', telegramChatId: '555' },
+    });
+  }
+  const lastCode = () =>
+    telegramService.sendToChat.mock.calls.at(-1)[1].match(/(\d{6})/)[1];
+
+  it("OTP: 5 ta noto'g'ri urinishdan keyin kod yopiladi (to'g'ri kod ham o'tmaydi)", async () => {
+    const u = addTgUser();
+    await service.forgotPassword({ username: u.username } as any);
+    const code = lastCode();
+    const wrong = code === '000000' ? '111111' : '000000';
+    for (let i = 0; i < 4; i++) {
+      await expect(
+        service.verifyResetOtp({ username: u.username, code: wrong, newPassword: 'YangiParol1' } as any),
+      ).rejects.toThrow("Kod noto'g'ri");
+    }
+    await expect(
+      service.verifyResetOtp({ username: u.username, code: wrong, newPassword: 'YangiParol1' } as any),
+    ).rejects.toThrow('Urinishlar soni tugadi');
+    await expect(
+      service.verifyResetOtp({ username: u.username, code, newPassword: 'YangiParol1' } as any),
+    ).rejects.toThrow();
+    expect(u.passwordHash).toBe('x');
+  });
+
+  it('OTP: yangi kod eskisini bekor qiladi, soatiga 3 tadan ortiq kod yuborilmaydi', async () => {
+    const u = addTgUser('user-rl');
+    await service.forgotPassword({ username: u.username } as any);
+    const first = lastCode();
+    await service.forgotPassword({ username: u.username } as any);
+    await service.forgotPassword({ username: u.username } as any);
+    await service.forgotPassword({ username: u.username } as any); // 4-chi — yuborilmaydi
+    expect(telegramService.sendToChat).toHaveBeenCalledTimes(3);
+    const latest = lastCode();
+    if (first !== latest) {
+      await expect(
+        service.verifyResetOtp({ username: u.username, code: first, newPassword: 'YangiParol1' } as any),
+      ).rejects.toThrow();
+    }
+    await service.verifyResetOtp({ username: u.username, code: latest, newPassword: 'YangiParol1' } as any);
+    expect(await bcrypt.compare('YangiParol1', u.passwordHash)).toBe(true);
+    expect(u.credentialsChangedAt).toBeInstanceOf(Date);
+    // Ishlatilgan kod qayta ishlamaydi
+    await expect(
+      service.verifyResetOtp({ username: u.username, code: latest, newPassword: 'Boshqa12345' } as any),
+    ).rejects.toThrow();
+  });
+
+  it('OTP xeshi foydalanuvchiga bog\'langan — bir xil kod ikki hisobda unique xatosiz', async () => {
+    const a = addTgUser('ua');
+    const b = addTgUser('ub');
+    const spy = jest.spyOn(service as any, 'generateOtp').mockReturnValue('123456');
+    await service.forgotPassword({ username: a.username } as any);
+    await service.forgotPassword({ username: b.username } as any);
+    const hashes = prisma.__state.passwordResetTokens.map((t: any) => t.tokenHash);
+    expect(new Set(hashes).size).toBe(2);
+    spy.mockRestore();
   });
 
   it('Na email, na Telegram — xavfsiz umumiy xabar qaytadi, xatolik tashlamaydi', async () => {

@@ -246,6 +246,29 @@ export class AttendanceService {
       return null;
     }
 
+    // 1b. Terminal boshqa muassasaniki bo'lsa — rad etiladi. Webhook secret
+    // barcha muassasalar uchun bitta: bir muassasa terminali (yoki secret'ni
+    // bilgan kishi) boshqa muassasa xodimiga davomat yoza olmasin. deviceId
+    // ro'yxatdagi terminalga mos kelmasa (format farq qilishi mumkin) —
+    // faqat log, event o'tkaziladi.
+    if (deviceId) {
+      const terminal = await this.prisma.hikTerminal.findUnique({
+        where: { devIndex: deviceId },
+        select: { hospitalId: true },
+      });
+      if (terminal && terminal.hospitalId !== employee.hospitalId) {
+        this.logger.warn(
+          `Terminal ${deviceId} (muassasa ${terminal.hospitalId}) boshqa muassasa xodimi ${employeeNo} uchun event yubordi — rad etildi`,
+        );
+        return null;
+      }
+      if (!terminal) {
+        this.logger.debug?.(
+          `Webhook deviceId=${deviceId} ro'yxatdagi terminallarga mos emas`,
+        );
+      }
+    }
+
     // 2. Kasalxona blok tekshiruvi
     if (await isHospitalBlocked(this.prisma, employee.hospitalId)) {
       this.logger.warn(
@@ -1251,8 +1274,15 @@ export class AttendanceService {
   // PUBLIC: CRON — Kunning oxirida grafigi bor lekin kelmaganlarni ABSENT qiladi
   // ──────────────────────────────────────────────────────────────────────────────
 
-  async markAbsentForToday() {
+  /**
+   * Bugun kelmaganlarni ABSENT qiladi. `hospitalId` berilsa — faqat shu
+   * muassasa (qo'lda chaqirilganda). Berilmasa (cron) — barcha muassasalar.
+   * XAVFSIZLIK (3-paket): ilgari ADMIN qo'lda bosganda ham BARCHA
+   * muassasalar xodimlari "kelmadi" bo'lardi.
+   */
+  async markAbsentForToday(hospitalId?: string | null) {
     const workDate = DateUtil.startOfDay(new Date());
+    const scope = hospitalId ? { employee: { hospitalId } } : {};
 
     // Dam olish kunida ishlatmaymiz
     if (this.isWeekend(workDate)) {
@@ -1262,7 +1292,7 @@ export class AttendanceService {
 
     // Faqat grafigi WORKING bo'lgan xodimlar
     const scheduledToday = await this.prisma.schedule.findMany({
-      where: { date: workDate, status: 'WORKING' },
+      where: { date: workDate, status: 'WORKING', ...scope },
       select: { id: true, employeeId: true, shiftId: true, shift: true },
     });
 
@@ -1272,7 +1302,7 @@ export class AttendanceService {
 
     // Bugun allaqachon davomat yozuvi bor xodimlar
     const existingRecords = await this.prisma.attendanceRecord.findMany({
-      where: { workDate },
+      where: { workDate, ...scope },
       select: { employeeId: true },
     });
     const attendedSet = new Set(existingRecords.map((r) => r.employeeId));
@@ -1320,13 +1350,27 @@ export class AttendanceService {
     });
   }
 
-  async manualCheckIn(employeeId: string, checkInTime: string, note?: string) {
-    const emp = await this.prisma.employee.findUnique({
-      where: { id: employeeId },
+  async manualCheckIn(
+    employeeId: string,
+    checkInTime: string,
+    note?: string,
+    hospitalId?: string | null,
+  ) {
+    // XAVFSIZLIK (3-paket): faqat o'z muassasasi xodimi
+    const emp = await this.prisma.employee.findFirst({
+      where: { id: employeeId, ...(hospitalId && { hospitalId }) },
     });
     if (!emp) throw new NotFoundException('Hodim topilmadi');
 
     const eventDate = new Date(checkInTime);
+    if (Number.isNaN(eventDate.getTime())) {
+      throw new BadRequestException("Kelish vaqti noto'g'ri");
+    }
+    if (eventDate.getTime() > Date.now() + 5 * 60_000) {
+      throw new BadRequestException(
+        "Kelish vaqti kelajakda bo'lishi mumkin emas",
+      );
+    }
     const workDate = DateUtil.startOfDay(eventDate);
     const schedule = await this.findTodaySchedule(
       employeeId,

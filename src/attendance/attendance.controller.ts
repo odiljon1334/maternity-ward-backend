@@ -153,17 +153,26 @@ export class AttendanceController {
   @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
   manualCheckIn(
     @Body() body: { employeeId: string; checkInTime: string; note?: string },
+    @CurrentUser('hospitalId') hospitalId: string | null,
   ) {
     return this.service.manualCheckIn(
       body.employeeId,
       body.checkInTime,
       body.note,
+      hospitalId,
     );
   }
 
   @Post('mark-absent')
   @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN)
-  markAbsent() {
-    return this.service.markAbsentForToday();
+  markAbsent(
+    @CurrentUser('hospitalId') jwtHospitalId: string | null,
+    @Query('targetHospitalId') targetHospitalId?: string,
+  ) {
+    // ADMIN — faqat o'z muassasasi; SUPER_ADMIN — tanlangan muassasa
+    // (tanlanmasa — hammasi, cron bilan bir xil)
+    return this.service.markAbsentForToday(
+      jwtHospitalId || targetHospitalId || null,
+    );
   }
 }

@@ -48,7 +48,14 @@ export class TelegramController {
 
   private assertValidWebhookSecret(provided?: string) {
     const expected = this.config.get<string>('TELEGRAM_WEBHOOK_SECRET');
-    if (!expected) return; // O'tish davri: BotFather webhook sozlamasi hali yangilanmagan bo'lishi mumkin.
+    if (!expected) {
+      // Productionda secret'siz webhook qabul qilinmaydi (fail-closed):
+      // aks holda istalgan kishi soxta update (masalan to'lov) yubora oladi.
+      if (process.env.NODE_ENV === 'production') {
+        throw new UnauthorizedException('Webhook secret not configured');
+      }
+      return; // dev/o'tish davri
+    }
     const actual = Buffer.from(provided ?? '');
     const wanted = Buffer.from(expected);
     if (actual.length !== wanted.length || !timingSafeEqual(actual, wanted)) {

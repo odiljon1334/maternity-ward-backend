@@ -396,6 +396,47 @@ export class SchedulesService {
   // ──────────────────────────────────────────
   // GENERATE schedule by pattern
   // ──────────────────────────────────────────
+  /**
+   * Smena shu muassasaga tegishli ekanini tekshiradi. Boshqa muassasaning
+   * (yoki mavjud bo'lmagan) smena ID'si bilan grafik yozilmasligi kerak.
+   */
+  private async ownShift(shiftId: string, hospitalId: string | null) {
+    const shift = await this.prisma.shiftTemplate.findUnique({
+      where: { id: shiftId },
+    });
+    if (!shift || !hospitalId || shift.hospitalId !== hospitalId) {
+      throw new BadRequestException(
+        'Smena topilmadi yoki boshqa muassasaga tegishli',
+      );
+    }
+    return shift;
+  }
+
+  /** Bir nechta smena ID'si — barchasi berilgan muassasalardan biriga tegishli */
+  private async assertShiftsBelong(
+    shiftIds: Array<string | null | undefined>,
+    hospitalIds: Array<string | null>,
+  ) {
+    const ids = Array.from(new Set(shiftIds.filter((x): x is string => !!x)));
+    if (!ids.length) return;
+    const hospitals = Array.from(new Set(hospitalIds));
+    // Smena bitta muassasaniki — xodimlar turli muassasadan bo'lsa u
+    // hammasiga to'g'ri kelmaydi
+    if (hospitals.length !== 1 || !hospitals[0]) {
+      throw new BadRequestException(
+        "Smena tanlanganda xodimlar bitta muassasadan bo'lishi kerak",
+      );
+    }
+    const found = await this.prisma.shiftTemplate.count({
+      where: { id: { in: ids }, hospitalId: hospitals[0] },
+    });
+    if (found !== ids.length) {
+      throw new BadRequestException(
+        'Smena topilmadi yoki boshqa muassasaga tegishli',
+      );
+    }
+  }
+
   async generate(dto: GenerateScheduleDto, hospitalId?: string) {
     const { employeeId, month, year, pattern, customWeeks, shiftId } = dto;
     // FIXED_DAY/FIXED_NIGHT uchun startsWith shart emas; rotating uchun default DAYTIME
@@ -414,22 +455,18 @@ export class SchedulesService {
 
     // Get shift templates (with auto-seed fallback)
     let [dayShift, nightShift] = await Promise.all([
-      this.prisma.shiftTemplate
-        .findFirst({ where: { hospitalId: emp.hospitalId, type: 'DAYTIME' } })
-        .then(
-          (s) =>
-            s ||
-            this.prisma.shiftTemplate.findFirst({ where: { type: 'DAYTIME' } }),
-        ),
-      this.prisma.shiftTemplate
-        .findFirst({ where: { hospitalId: emp.hospitalId, type: 'NIGHTTIME' } })
-        .then(
-          (s) =>
-            s ||
-            this.prisma.shiftTemplate.findFirst({
-              where: { type: 'NIGHTTIME' },
-            }),
-        ),
+      // Faqat xodimning o'z muassasasi smenalari — boshqa muassasaning
+      // smenasiga "global fallback" qilinmaydi (yo'q bo'lsa quyida yaratiladi)
+      emp.hospitalId
+        ? this.prisma.shiftTemplate.findFirst({
+            where: { hospitalId: emp.hospitalId, type: 'DAYTIME' },
+          })
+        : null,
+      emp.hospitalId
+        ? this.prisma.shiftTemplate.findFirst({
+            where: { hospitalId: emp.hospitalId, type: 'NIGHTTIME' },
+          })
+        : null,
     ]);
 
     if (!dayShift || !nightShift) {
@@ -486,26 +523,16 @@ export class SchedulesService {
 
     // Bitta xodim uchun aniq shift berilgan bo'lsa — uni ishlatamiz
     if (shiftId) {
-      const specific = await this.prisma.shiftTemplate.findUnique({
-        where: { id: shiftId },
-      });
-      if (specific) {
-        if (specific.type === 'DAYTIME') dayShift = specific;
-        else nightShift = specific;
-      }
+      const specific = await this.ownShift(shiftId, emp.hospitalId);
+      if (specific.type === 'DAYTIME') dayShift = specific;
+      else nightShift = specific;
     }
     // Bulk generate'dan kelgan aniq shift IDlar (custom vaqt)
-    if ((dto as any).dayShiftId) {
-      const s = await this.prisma.shiftTemplate.findUnique({
-        where: { id: (dto as any).dayShiftId },
-      });
-      if (s) dayShift = s;
+    if (dto.dayShiftId) {
+      dayShift = await this.ownShift(dto.dayShiftId, emp.hospitalId);
     }
-    if ((dto as any).nightShiftId) {
-      const s = await this.prisma.shiftTemplate.findUnique({
-        where: { id: (dto as any).nightShiftId },
-      });
-      if (s) nightShift = s;
+    if (dto.nightShiftId) {
+      nightShift = await this.ownShift(dto.nightShiftId, emp.hospitalId);
     }
 
     // Generate dates for the month
@@ -593,16 +620,21 @@ export class SchedulesService {
     const results = [];
     for (const empId of employeeIds) {
       try {
-        const result = await this.generate({
-          employeeId: empId,
-          month: dto.month,
-          year: dto.year,
-          pattern: dto.pattern,
-          startsWith: dto.startsWith,
-          workDays: dto.workDays,
-          dayShiftId: dto.dayShiftId,
-          nightShiftId: dto.nightShiftId,
-        } as any);
+        // hospitalId albatta uzatiladi: employeeIds yo'li orqali boshqa
+        // muassasa xodimiga grafik yozib bo'lmaydi (generate tekshiradi)
+        const result = await this.generate(
+          {
+            employeeId: empId,
+            month: dto.month,
+            year: dto.year,
+            pattern: dto.pattern,
+            startsWith: dto.startsWith,
+            workDays: dto.workDays,
+            dayShiftId: dto.dayShiftId,
+            nightShiftId: dto.nightShiftId,
+          },
+          dto.hospitalId ?? undefined,
+        );
         results.push({ employeeId: empId, ...result });
       } catch (e) {
         results.push({
@@ -633,13 +665,25 @@ export class SchedulesService {
 
     const found = await this.prisma.employee.findMany({
       where: { id: { in: ids }, ...(hospitalId ? { hospitalId } : {}) },
-      select: { id: true },
+      select: { id: true, hospitalId: true },
     });
     if (found.length !== ids.length) {
       throw new ForbiddenException(
         "Ro'yxatdagi xodimlardan biri boshqa muassasaga tegishli",
       );
     }
+    for (const e of entries) {
+      if (
+        e.status !== undefined &&
+        !Object.values(ScheduleStatus).includes(e.status as ScheduleStatus)
+      ) {
+        throw new BadRequestException(`Noto'g'ri holat: ${e.status}`);
+      }
+    }
+    await this.assertShiftsBelong(
+      entries.map((e) => e.shiftId),
+      found.map((e) => e.hospitalId),
+    );
     const validIds = new Set(found.map((e) => e.id));
 
     // Sanalarni bir marta normalizatsiya qilamiz — har xodim uchun qayta emas
@@ -679,11 +723,16 @@ export class SchedulesService {
   // ──────────────────────────────────────────
   async updateEntry(
     id: string,
-    data: { shiftId?: string; status?: ScheduleStatus; note?: string },
+    data: {
+      shiftId?: string | null;
+      status?: ScheduleStatus;
+      note?: string | null;
+    },
     hospitalId?: string | null,
   ) {
     const entry = await this.prisma.schedule.findFirst({
       where: { id, ...(hospitalId && { employee: { hospitalId } }) },
+      include: { employee: { select: { hospitalId: true } } },
     });
     if (!entry) throw new NotFoundException('Grafik yozuvi topilmadi');
     if (entry.sourcePlanId) {
@@ -691,7 +740,34 @@ export class SchedulesService {
         'Tasdiqlangan post rejasidan kelgan grafikni bu yerdan o‘zgartirib bo‘lmaydi. Post rejasidagi o‘zgarish jarayonidan foydalaning.',
       );
     }
-    return this.prisma.schedule.update({ where: { id }, data });
+    // Body DTO'siz keladi — faqat ruxsat etilgan maydonlar olinadi
+    // (employeeId/date/sourcePlanId kabi maydonlarni o'zgartirib bo'lmaydi)
+    const patch: {
+      shiftId?: string | null;
+      status?: ScheduleStatus;
+      note?: string | null;
+    } = {};
+    if (data?.shiftId !== undefined) {
+      if (data.shiftId === null || data.shiftId === '') {
+        patch.shiftId = null;
+      } else {
+        await this.ownShift(String(data.shiftId), entry.employee.hospitalId);
+        patch.shiftId = String(data.shiftId);
+      }
+    }
+    if (data?.status !== undefined) {
+      if (!Object.values(ScheduleStatus).includes(data.status)) {
+        throw new BadRequestException(`Noto'g'ri holat: ${data.status}`);
+      }
+      patch.status = data.status;
+    }
+    if (data?.note !== undefined) {
+      patch.note = data.note === null ? null : String(data.note).slice(0, 500);
+    }
+    if (!Object.keys(patch).length) {
+      throw new BadRequestException("O'zgartirish uchun maydon yuborilmadi");
+    }
+    return this.prisma.schedule.update({ where: { id }, data: patch });
   }
 
   // ──────────────────────────────────────────

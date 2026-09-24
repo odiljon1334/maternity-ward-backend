@@ -33,7 +33,14 @@ export class SupportBotController {
 
   private assertValidWebhookSecret(provided?: string) {
     const expected = this.config.get<string>('SUPPORT_BOT_WEBHOOK_SECRET');
-    if (!expected) return; // Env qo'yilmaguncha mavjud webhook uzilmaydi.
+    if (!expected) {
+      // Productionda secret'siz webhook qabul qilinmaydi (fail-closed):
+      // aks holda istalgan kishi soxta update (masalan to'lov) yubora oladi.
+      if (process.env.NODE_ENV === 'production') {
+        throw new UnauthorizedException('Webhook secret not configured');
+      }
+      return; // dev/o'tish davri
+    }
     const actual = Buffer.from(provided ?? '');
     const wanted = Buffer.from(expected);
     if (actual.length !== wanted.length || !timingSafeEqual(actual, wanted)) {

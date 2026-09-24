@@ -17,6 +17,7 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
 import { TenantScopeGuard } from '../common/guards/tenant-scope.guard';
+import { PositionNameDto, UpdatePositionGpsDto } from './dto/position.dto';
 
 function resolveHospitalId(
   jwtHospId: string | null,
@@ -60,7 +61,7 @@ export class PositionsController {
     UserRole.DIRECTOR,
   )
   create(
-    @Body() body: { name: string },
+    @Body() body: PositionNameDto,
     @CurrentUser('hospitalId') hospitalId: string | null,
     @Query('targetHospitalId') targetHospitalId?: string,
   ) {
@@ -79,7 +80,7 @@ export class PositionsController {
   )
   update(
     @Param('id') id: string,
-    @Body() body: { name: string },
+    @Body() body: PositionNameDto,
     @CurrentUser('hospitalId') hospitalId: string | null,
     @Query('targetHospitalId') targetHospitalId?: string,
   ) {
@@ -99,12 +100,7 @@ export class PositionsController {
   )
   updateGps(
     @Param('id') id: string,
-    @Body()
-    body: {
-      gpsLat?: number | null;
-      gpsLng?: number | null;
-      gpsRadius?: number | null;
-    },
+    @Body() body: UpdatePositionGpsDto,
     @CurrentUser('hospitalId') hospitalId: string | null,
     @Query('targetHospitalId') targetHospitalId?: string,
   ) {

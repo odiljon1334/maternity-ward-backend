@@ -23,6 +23,11 @@ import { UserRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
 
+/** Bitta OTP kodga noto'g'ri urinishlar chegarasi */
+const RESET_OTP_MAX_ATTEMPTS = 5;
+/** Bitta hisob uchun soatiga yuboriladigan parol tiklash kodlari */
+const RESET_OTP_PER_HOUR = 3;
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -50,6 +55,21 @@ export class AuthService {
 
   private hash(value: string): string {
     return crypto.createHash('sha256').update(value).digest('hex');
+  }
+
+  /**
+   * OTP xeshi foydalanuvchiga bog'lanadi: 6 xonali kod bor-yo'g'i 1M
+   * variant, `tokenHash` esa @unique — ikki foydalanuvchiga bir xil kod
+   * tushsa, oddiy xesh unique xatosiga olib kelardi.
+   */
+  private otpHash(userId: string, code: string): string {
+    return this.hash(`otp:${userId}:${code}`);
+  }
+
+  private safeEqual(a: string, b: string): boolean {
+    const x = Buffer.from(a);
+    const y = Buffer.from(b);
+    return x.length === y.length && crypto.timingSafeEqual(x, y);
   }
 
   /** Frontend bazaviy URL — CORS uchun ishlatilgan FRONTEND_URL bilan bir xil manba */
@@ -425,15 +445,46 @@ export class AuthService {
 
     const chatId = user.employee?.telegramChatId;
     if (chatId) {
-      const code = this.generateOtp();
-      await this.prisma.passwordResetToken.create({
-        data: {
+      // Bitta hisob uchun soatiga ko'pi bilan RESET_OTP_PER_HOUR ta kod —
+      // turli IP'lardan cheksiz kod so'rab, har biriga urinib ko'rish
+      // (va Telegram spami) yopiladi. Javob baribir umumiy.
+      const recent = await this.prisma.passwordResetToken.count({
+        where: {
           userId: user.id,
-          tokenHash: this.hash(code),
           channel: 'TELEGRAM',
-          expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+          createdAt: { gte: new Date(Date.now() - 60 * 60 * 1000) },
         },
       });
+      if (recent >= RESET_OTP_PER_HOUR) {
+        this.auditLog.log({
+          userId: user.id,
+          action: 'PASSWORD_RESET_RATE_LIMITED',
+          entity: 'User',
+          entityId: user.id,
+          details: { channel: 'TELEGRAM' },
+        });
+        return { ...generic, channel: 'TELEGRAM' };
+      }
+      const code = this.generateOtp();
+      await this.prisma.$transaction([
+        // Oldingi ishlatilmagan kodlar bekor — faqat oxirgisi amal qiladi
+        this.prisma.passwordResetToken.updateMany({
+          where: {
+            userId: user.id,
+            channel: { in: ['TELEGRAM', 'SMS'] },
+            consumedAt: null,
+          },
+          data: { consumedAt: new Date() },
+        }),
+        this.prisma.passwordResetToken.create({
+          data: {
+            userId: user.id,
+            tokenHash: this.otpHash(user.id, code),
+            channel: 'TELEGRAM',
+            expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+          },
+        }),
+      ]);
       await this.telegramService.sendToChat(
         chatId,
         `🔐 Parolni tiklash kodi: <b>${code}</b>\n\nKod 10 daqiqa amal qiladi. Agar bu so'rovni siz yubormagan bo'lsangiz, e'tiborsiz qoldiring.`,
@@ -512,16 +563,50 @@ export class AuthService {
       orderBy: { createdAt: 'desc' },
     });
 
-    if (!record || record.tokenHash !== this.hash(dto.code)) {
+    if (!record || record.attempts >= RESET_OTP_MAX_ATTEMPTS) {
+      throw new BadRequestException("Kod noto'g'ri yoki muddati o'tgan");
+    }
+    const code = String(dto.code ?? '').trim();
+    const ok =
+      this.safeEqual(record.tokenHash, this.otpHash(user.id, code)) ||
+      // Deploy paytida yuborilgan eski formatdagi kod (10 daqiqa amal qiladi)
+      this.safeEqual(record.tokenHash, this.hash(code));
+    if (!ok) {
+      // Urinish atomik oshiriladi; limitga yetganda kod yopiladi
+      const updated = await this.prisma.passwordResetToken.update({
+        where: { id: record.id },
+        data: { attempts: { increment: 1 } },
+        select: { attempts: true },
+      });
+      if (updated.attempts >= RESET_OTP_MAX_ATTEMPTS) {
+        await this.prisma.passwordResetToken.update({
+          where: { id: record.id },
+          data: { consumedAt: new Date() },
+        });
+        this.auditLog.log({
+          userId: user.id,
+          action: 'PASSWORD_RESET_OTP_LOCKED',
+          entity: 'User',
+          entityId: user.id,
+          details: { channel: record.channel },
+        });
+        throw new BadRequestException(
+          "Urinishlar soni tugadi. Yangi kod so'rang.",
+        );
+      }
       throw new BadRequestException("Kod noto'g'ri yoki muddati o'tgan");
     }
 
     const newHash = await bcrypt.hash(dto.newPassword, 12);
+    // Parallel ikkita to'g'ri so'rov bitta kodni ikki marta ishlata olmasin
+    const claimed = await this.prisma.passwordResetToken.updateMany({
+      where: { id: record.id, consumedAt: null },
+      data: { consumedAt: new Date() },
+    });
+    if (claimed.count !== 1) {
+      throw new BadRequestException("Kod noto'g'ri yoki muddati o'tgan");
+    }
     await this.prisma.$transaction([
-      this.prisma.passwordResetToken.update({
-        where: { id: record.id },
-        data: { consumedAt: new Date() },
-      }),
       this.prisma.user.update({
         where: { id: user.id },
         data: { passwordHash: newHash, credentialsChangedAt: new Date() },

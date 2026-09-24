@@ -9,6 +9,7 @@ import {
   Matches,
 } from 'class-validator';
 import { ShiftType } from '@prisma/client';
+import { PartialType } from '@nestjs/mapped-types';
 
 export class CreateShiftDto {
   @IsString()
@@ -62,3 +63,10 @@ export class CreateShiftDto {
   @IsOptional()
   lunchGraceMin?: number;
 }
+
+/**
+ * `Partial<CreateShiftDto>` TS tipi runtime'da `Object` bo'ladi — ValidationPipe
+ * uni tekshirmaydi va `hospitalId` kabi maydonlar Prisma'ga o'tib ketardi.
+ * PartialType haqiqiy klass yaratadi: validatsiya + whitelist ishlaydi.
+ */
+export class UpdateShiftDto extends PartialType(CreateShiftDto) {}

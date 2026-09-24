@@ -64,12 +64,14 @@ export class UsersController {
     @Body() dto: UpdateUserStatusDto,
     @CurrentUser('sub') actorId: string,
     @CurrentUser('hospitalId') hospitalId: string | null,
+    @CurrentUser('role') actorRole: UserRole,
     @Query('targetHospitalId') targetHospitalId?: string,
   ) {
     const result = await this.service.updateStatus(
       id,
       dto.status,
       resolveHospitalId(hospitalId, targetHospitalId),
+      actorRole,
     );
     this.auditLog.log({
       userId: actorId,

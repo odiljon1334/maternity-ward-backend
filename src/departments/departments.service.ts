@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Injectable,
   ConflictException,
   NotFoundException,
@@ -37,11 +38,21 @@ export class DepartmentsService {
     data: { name: string; code: string; description?: string },
     hospitalId: string,
   ) {
+    if (!hospitalId) {
+      throw new BadRequestException('Muassasani tanlang (targetHospitalId)');
+    }
     const exists = await this.prisma.department.findFirst({
       where: { hospitalId, code: data.code },
     });
     if (exists) throw new ConflictException("Bu kod bilan bo'lim mavjud");
-    return this.prisma.department.create({ data: { ...data, hospitalId } });
+    return this.prisma.department.create({
+      data: {
+        name: data.name,
+        code: data.code,
+        description: data.description,
+        hospitalId,
+      },
+    });
   }
 
   async update(
@@ -50,7 +61,15 @@ export class DepartmentsService {
     hospitalId: string | null,
   ) {
     await this.findOne(id, hospitalId);
-    return this.prisma.department.update({ where: { id }, data });
+    return this.prisma.department.update({
+      where: { id },
+      data: {
+        ...(data.name !== undefined && { name: data.name }),
+        ...(data.description !== undefined && {
+          description: data.description,
+        }),
+      },
+    });
   }
 
   async remove(id: string, hospitalId: string | null) {

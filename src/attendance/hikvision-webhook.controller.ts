@@ -112,6 +112,14 @@ export class HikvisionWebhookController {
     const expected = process.env.HIKVISION_WEBHOOK_SECRET;
     const enforce = process.env.HIKVISION_WEBHOOK_ENFORCE_SECRET === 'true';
     if (!expected) {
+      // Majburiy rejim yoqilgan, lekin secret yo'q — konfiguratsiya xatosi.
+      // Ilgari bu holatda HAMMA so'rov qabul qilinardi (fail-open).
+      if (enforce) {
+        this.logger.error(
+          "HIKVISION_WEBHOOK_ENFORCE_SECRET=true, lekin HIKVISION_WEBHOOK_SECRET yo'q — webhook rad etildi",
+        );
+        throw new UnauthorizedException('Webhook secret not configured');
+      }
       this.logger.warn(
         'HIKVISION_WEBHOOK_SECRET sozlanmagan — webhook monitor rejimida qabul qilindi',
       );

@@ -10,7 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ShiftsService } from './shifts.service';
-import { CreateShiftDto } from './dto/create-shift.dto';
+import { CreateShiftDto, UpdateShiftDto } from './dto/create-shift.dto';
 import { ResolveShiftDto } from './dto/resolve-shift.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -104,7 +104,7 @@ export class ShiftsController {
   )
   update(
     @Param('id') id: string,
-    @Body() dto: Partial<CreateShiftDto>,
+    @Body() dto: UpdateShiftDto,
     @CurrentUser('hospitalId') hospitalId: string | null,
     @Query('targetHospitalId') targetHospitalId?: string,
   ) {

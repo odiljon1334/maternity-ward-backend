@@ -16,6 +16,7 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
 import { TenantScopeGuard } from '../common/guards/tenant-scope.guard';
+import { CreateDepartmentDto, UpdateDepartmentDto } from './dto/department.dto';
 
 function resolveHospitalId(
   jwtHospId: string | null,
@@ -59,7 +60,7 @@ export class DepartmentsController {
     UserRole.DIRECTOR,
   )
   create(
-    @Body() body: { name: string; code: string; description?: string },
+    @Body() body: CreateDepartmentDto,
     @CurrentUser('hospitalId') hospitalId: string | null,
     @Query('targetHospitalId') targetHospitalId?: string,
   ) {
@@ -78,7 +79,7 @@ export class DepartmentsController {
   )
   update(
     @Param('id') id: string,
-    @Body() body: { name?: string; description?: string },
+    @Body() body: UpdateDepartmentDto,
     @CurrentUser('hospitalId') hospitalId: string | null,
     @Query('targetHospitalId') targetHospitalId?: string,
   ) {

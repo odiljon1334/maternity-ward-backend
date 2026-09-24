@@ -111,7 +111,16 @@ export class HospitalsService {
       throw new ConflictException(
         "Bu kod bilan tug'ruq xona allaqachon mavjud",
       );
-    return this.prisma.hospital.create({ data });
+    // Faqat ruxsat etilgan maydonlar (body DTO'siz keladi — isBlocked,
+    // billing maydonlari va h.k. shu yo'l bilan yozilmasin)
+    return this.prisma.hospital.create({
+      data: {
+        name: data.name,
+        code: data.code,
+        address: data.address,
+        phone: data.phone,
+      },
+    });
   }
 
   async update(
@@ -128,7 +137,21 @@ export class HospitalsService {
     },
   ) {
     await this.findOne(id);
-    return this.prisma.hospital.update({ where: { id }, data });
+    const allowed = [
+      'name',
+      'address',
+      'phone',
+      'isActive',
+      'gpsLat',
+      'gpsLng',
+      'gpsRadius',
+      'logoUrl',
+    ] as const;
+    const patch: Record<string, unknown> = {};
+    for (const k of allowed) {
+      if (data[k] !== undefined) patch[k] = data[k];
+    }
+    return this.prisma.hospital.update({ where: { id }, data: patch });
   }
 
   async setSchedulePlanningMode(id: string, mode: SchedulePlanningMode) {

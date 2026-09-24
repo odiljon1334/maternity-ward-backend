@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { CreateShiftDto } from './dto/create-shift.dto';
+import { CreateShiftDto, UpdateShiftDto } from './dto/create-shift.dto';
 import { ResolveShiftDto } from './dto/resolve-shift.dto';
 import { calcAutoLunch } from '../common/utils/shift.util';
 
@@ -132,7 +132,7 @@ export class ShiftsService {
     throw new ConflictException("Smen yaratib bo'lmadi — nom band");
   }
 
-  async update(id: string, dto: Partial<CreateShiftDto>, hospitalId: string) {
+  async update(id: string, dto: UpdateShiftDto, hospitalId: string) {
     await this.findOne(id, hospitalId);
     return this.prisma.shiftTemplate.update({ where: { id }, data: dto });
   }

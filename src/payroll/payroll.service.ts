@@ -249,13 +249,34 @@ export class PayrollService {
     manualBonus = 0,
     manualDeduction = 0,
     note?: string,
+    hospitalId?: string | null,
   ) {
+    // JSON body'da satr bo'lib kelishi mumkin
+    month = Number(month);
+    year = Number(year);
+    if (
+      !Number.isInteger(month) ||
+      month < 1 ||
+      month > 12 ||
+      !Number.isInteger(year) ||
+      year < 2000 ||
+      year > 2100
+    ) {
+      throw new BadRequestException("Oy yoki yil noto'g'ri");
+    }
     if (manualBonus !== 0 || manualDeduction !== 0) {
       throw new BadRequestException(
         'Qo‘l bonus/kesimi o‘rniga sabab va tasdiq auditi bo‘lgan KPI, mukofot yoki qonuniy ushlanma workflowidan foydalaning',
       );
     }
-    const { preview } = await this.calculate(employeeId, month, year);
+    // hospitalId — chaqiruvchi muassasasi (SUPER_ADMIN uchun null): boshqa
+    // muassasa xodimi "topilmadi" bo'ladi
+    const { preview } = await this.calculate(
+      employeeId,
+      month,
+      year,
+      hospitalId,
+    );
 
     const netWithManual = preview.netSalary;
 
@@ -409,9 +430,9 @@ export class PayrollService {
   // ──────────────────────────────────────────
   // APPROVE payroll
   // ──────────────────────────────────────────
-  async approve(id: string) {
-    const record = await this.prisma.payrollRecord.findUnique({
-      where: { id },
+  async approve(id: string, hospitalId?: string | null) {
+    const record = await this.prisma.payrollRecord.findFirst({
+      where: { id, ...(hospitalId && { employee: { hospitalId } }) },
     });
     if (!record) throw new NotFoundException('Maosh yozuvi topilmadi');
     if (record.status !== 'DRAFT')

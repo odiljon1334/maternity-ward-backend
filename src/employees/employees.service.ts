@@ -6,6 +6,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { assertCanManageRole } from '../common/utils/role-rank.util';
 import { CreateEmployeeDto } from './dto/create-employee.dto';
 import { UpdateEmployeeDto } from './dto/update-employee.dto';
 import { QueryEmployeeDto } from './dto/query-employee.dto';
@@ -20,7 +21,7 @@ import archiver from 'archiver';
 import * as fs from 'fs';
 import * as path from 'path';
 import { processAndSavePhoto } from '../common/utils/image.util';
-import { UserStatus, Prisma } from '@prisma/client';
+import { UserStatus, Prisma, UserRole } from '@prisma/client';
 
 // ─── Kirill → Lotin transliteratsiya ────────────────────────────────────────
 const CYR_TO_LAT: Record<string, string> = {
@@ -207,6 +208,15 @@ export class EmployeesService {
     };
   }
 
+  /** Bo'lim boshlig'ining o'z bo'limi (xodim profili orqali), yo'q bo'lsa null */
+  async departmentOfUser(userId: string): Promise<string | null> {
+    const emp = await this.prisma.employee.findFirst({
+      where: { userId, firedAt: null },
+      select: { departmentId: true },
+    });
+    return emp?.departmentId ?? null;
+  }
+
   async findOne(id: string, hospitalId?: string) {
     const where: any = { id };
     if (hospitalId) where.hospitalId = hospitalId;
@@ -309,9 +319,28 @@ export class EmployeesService {
     });
   }
 
-  async update(id: string, dto: UpdateEmployeeDto, hospitalId: string) {
-    await this.findOne(id, hospitalId);
-    const { username, password, ...rest } = dto as any;
+  async update(
+    id: string,
+    dto: UpdateEmployeeDto,
+    hospitalId: string,
+    actorRole?: UserRole | string,
+  ) {
+    const current = await this.findOne(id, hospitalId);
+    const { password, ...rest } = dto as any;
+    // Forma mavjud username'ni har safar qayta yuboradi — faqat haqiqatan
+    // o'zgargan bo'lsa login o'zgarishi hisoblanadi
+    const username =
+      rest.username && rest.username !== current.user?.username
+        ? rest.username
+        : undefined;
+    delete rest.username;
+    if ((username || password) && current.user && actorRole) {
+      assertCanManageRole(
+        actorRole,
+        current.user.role,
+        "bu xodimning login/parolini o'zgartirish",
+      );
+    }
 
     if (rest.departmentId || rest.positionId) {
       const [department, position] = await Promise.all([
@@ -356,8 +385,11 @@ export class EmployeesService {
           // Mavjud user ni yangilash
           const updateData: any = {};
           if (username) updateData.username = username;
-          if (password)
+          if (password) {
             updateData.passwordHash = await bcrypt.hash(password, 12);
+            // Eski sessiyalar (o'g'irlangan token ham) bekor bo'ladi
+            updateData.credentialsChangedAt = new Date();
+          }
           await tx.user.update({ where: { id: emp.userId }, data: updateData });
         } else if (username && password) {
           // userId yo'q — yangi EMPLOYEE user yaratish va bog'lash
@@ -579,8 +611,12 @@ export class EmployeesService {
     firedAt?: string,
     fireReason?: string,
     fireNote?: string,
+    actorRole?: UserRole | string,
   ) {
     const emp = await this.findOne(id, hospitalId);
+    if (actorRole && emp.user) {
+      assertCanManageRole(actorRole, emp.user.role, "bu xodimni bo'shatish");
+    }
 
     // Bajariladigan operatsiyalar ro'yxati — hammasi bitta transactionda
     const ops: Prisma.PrismaPromise<any>[] = [
@@ -876,8 +912,11 @@ export class EmployeesService {
   // ──────────────────────────────────────────
   // REMOVE — xodimni butunlay o'chirish (User ham bloklanadi, atomik)
   // ──────────────────────────────────────────
-  async remove(id: string, hospitalId: string) {
+  async remove(id: string, hospitalId: string, actorRole?: UserRole | string) {
     const emp = await this.findOne(id, hospitalId);
+    if (actorRole && emp.user) {
+      assertCanManageRole(actorRole, emp.user.role, "bu xodimni o'chirish");
+    }
     const isDirector = emp.user?.role === 'DIRECTOR';
 
     // ─── Terminal dan o'chirish ───────────────────────────────────────────────

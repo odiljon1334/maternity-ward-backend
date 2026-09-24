@@ -154,7 +154,10 @@ export class PayrollController {
       manualDeduction?: number;
       note?: string;
     },
+    @CurrentUser('hospitalId') hospitalId: string | null,
   ) {
+    // XAVFSIZLIK (3-paket): ADMIN faqat o'z muassasasi xodimining maoshini
+    // saqlaydi (ilgari istalgan xodim ID'si qabul qilinardi)
     return this.service.createOrUpdate(
       employeeId,
       body.month,
@@ -162,14 +165,18 @@ export class PayrollController {
       body.manualBonus,
       body.manualDeduction,
       body.note,
+      hospitalId,
     );
   }
 
   @Put('approve/:id')
   @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
   @RequirePermission('payroll.approve')
-  approve(@Param('id') id: string) {
-    return this.service.approve(id);
+  approve(
+    @Param('id') id: string,
+    @CurrentUser('hospitalId') hospitalId: string | null,
+  ) {
+    return this.service.approve(id, hospitalId);
   }
 
   // ── DINAMIK PARAMETRLI ROUTELAR (DOIM PASTDA BO'LISHI KERAK) ──

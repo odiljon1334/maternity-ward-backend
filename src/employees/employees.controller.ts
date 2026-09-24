@@ -25,7 +25,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Response } from 'express';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { TenantScopeGuard } from '../common/guards/tenant-scope.guard';
@@ -41,6 +41,28 @@ function resolveHospitalId(
   return jwtHospId || targetHospId || '';
 }
 
+/**
+ * Xodimlar ma'lumotini o'qiy oladigan rollar. EMPLOYEE va MINISTRY bu yerga
+ * kirmaydi: ilgari @Roles yo'q edi va oddiy xodim butun muassasa ro'yxatini
+ * (maosh, telefon bilan), muassasasiz MINISTRY esa BARCHA muassasalarni
+ * ko'ra olardi.
+ */
+const EMPLOYEE_READERS = [
+  UserRole.SUPER_ADMIN,
+  UserRole.ASSISTANT_ADMIN,
+  UserRole.ADMIN,
+  UserRole.DIRECTOR,
+  UserRole.DEPARTMENT_HEAD,
+];
+
+/** Bo'lim boshlig'i maoshni ko'rmaydi */
+function hideSalary<T extends Record<string, any>>(emp: T): T {
+  if (!emp || typeof emp !== 'object') return emp;
+  const rest: Record<string, any> = { ...emp };
+  delete rest.baseSalary;
+  return rest as T;
+}
+
 @Controller('employees')
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard, TenantScopeGuard)
 export class EmployeesController {
@@ -50,11 +72,23 @@ export class EmployeesController {
   ) {}
 
   @Get()
-  findAll(
+  @Roles(...EMPLOYEE_READERS)
+  async findAll(
     @Query() query: QueryEmployeeDto,
     @CurrentUser('hospitalId') hospitalId: string,
+    @CurrentUser('role') role: UserRole,
+    @CurrentUser('sub') userId: string,
     @Query('targetHospitalId') targetHospitalId?: string,
   ) {
+    if (role === UserRole.DEPARTMENT_HEAD) {
+      // Faqat o'z bo'limi (bo'limi aniqlanmasa — muassasa bo'yicha), maoshsiz
+      const deptId = await this.service.departmentOfUser(userId);
+      const res = await this.service.findAll(
+        deptId ? { ...query, departmentId: deptId } : query,
+        hospitalId,
+      );
+      return { ...res, data: res.data.map(hideSalary) };
+    }
     return this.service.findAll(
       query,
       resolveHospitalId(hospitalId, targetHospitalId),
@@ -117,6 +151,12 @@ export class EmployeesController {
   }
 
   @Get('archive')
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+  )
   async getArchive(
     @Query('page') page: string,
     @Query('limit') limit: string,
@@ -133,6 +173,12 @@ export class EmployeesController {
   }
 
   @Get('archive/:id')
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+  )
   async getArchivedEmployee(
     @Param('id') id: string,
     @CurrentUser('hospitalId') hospitalId: string | null,
@@ -142,6 +188,12 @@ export class EmployeesController {
   }
 
   @Get('lookup')
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+  )
   async lookup(
     @Query('fullName') fullName: string,
     @Query('birthDate') birthDate: string,
@@ -156,11 +208,22 @@ export class EmployeesController {
   }
 
   @Get(':id')
-  findOne(
+  @Roles(...EMPLOYEE_READERS)
+  async findOne(
     @Param('id') id: string,
     @CurrentUser('hospitalId') hospitalId: string,
+    @CurrentUser('role') role: UserRole,
+    @CurrentUser('sub') userId: string,
     @Query('targetHospitalId') targetHospitalId?: string,
   ) {
+    if (role === UserRole.DEPARTMENT_HEAD) {
+      const emp = await this.service.findOne(id, hospitalId);
+      const deptId = await this.service.departmentOfUser(userId);
+      if (deptId && emp.departmentId !== deptId) {
+        throw new NotFoundException('Hodim topilmadi');
+      }
+      return hideSalary(emp);
+    }
     return this.service.findOne(
       id,
       resolveHospitalId(hospitalId, targetHospitalId),
@@ -209,10 +272,11 @@ export class EmployeesController {
     @Body() dto: UpdateEmployeeDto,
     @CurrentUser('sub') userId: string,
     @CurrentUser('hospitalId') hospitalId: string,
+    @CurrentUser('role') role: UserRole,
     @Query('targetHospitalId') targetHospitalId?: string,
   ) {
     const hId = resolveHospitalId(hospitalId, targetHospitalId);
-    const result = await this.service.update(id, dto, hId);
+    const result = await this.service.update(id, dto, hId, role);
     this.auditLog.log({
       userId,
       hospitalId: hId,
@@ -292,10 +356,11 @@ export class EmployeesController {
     @Param('id') id: string,
     @CurrentUser('sub') userId: string,
     @CurrentUser('hospitalId') hospitalId: string,
+    @CurrentUser('role') role: UserRole,
     @Query('targetHospitalId') targetHospitalId?: string,
     @Body('firedAt') firedAt?: string,
-    @Body('fireReason') fireReason?: string, // ← qo'shilmagan!
-    @Body('fireNote') fireNote?: string, // ← qo'shilmagan!
+    @Body('fireReason') fireReason?: string,
+    @Body('fireNote') fireNote?: string,
   ) {
     const hId = resolveHospitalId(hospitalId, targetHospitalId);
     const result = await this.service.fire(
@@ -304,6 +369,7 @@ export class EmployeesController {
       firedAt,
       fireReason,
       fireNote,
+      role,
     );
     this.auditLog.log({
       userId,
@@ -375,10 +441,11 @@ export class EmployeesController {
     @Param('id') id: string,
     @CurrentUser('sub') userId: string,
     @CurrentUser('hospitalId') hospitalId: string,
+    @CurrentUser('role') role: UserRole,
     @Query('targetHospitalId') targetHospitalId?: string,
   ) {
     const hId = resolveHospitalId(hospitalId, targetHospitalId);
-    const result = await this.service.remove(id, hId);
+    const result = await this.service.remove(id, hId, role);
     this.auditLog.log({
       userId,
       hospitalId: hId,
