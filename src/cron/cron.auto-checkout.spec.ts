@@ -29,6 +29,7 @@ describe('CronService.autoCloseMissingCheckoutsCron', () => {
       {} as any,
       {} as any,
       {} as any,
+      {} as any, // faceRecheckService
     );
 
     await service.autoCloseMissingCheckoutsCron();
@@ -77,6 +78,7 @@ describe('CronService.autoCloseMissingCheckoutsCron', () => {
       {} as any,
       {} as any,
       {} as any,
+      {} as any, // faceRecheckService
     );
 
     await expect(

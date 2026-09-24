@@ -37,7 +37,9 @@ export class FaceMatchMonitorService {
       const sent = await this.supportBot.notifyOperationalAlert(
         `🔴 StaffPlusPRO texnik ogohlantirish\n\n` +
           `Face Match xizmati ketma-ket ${transition.failures} marta javob bermadi.\n` +
-          `Ta'sir: strict rejimda mobil yuz orqali check-in rad etiladi.\n` +
+          (process.env.FACE_MATCH_FALLBACK === 'block'
+            ? `Ta'sir: mobil check-in rad etiladi (FACE_MATCH_FALLBACK=block).\n`
+            : `Ta'sir: mobil check-in qabul qilinmoqda, yuz tekshiruvi xizmat tiklangach avtomatik o'tkaziladi.\n`) +
           `Vaqt: ${this.formatTime(transition.at)}`,
       );
       if (!sent) {

@@ -153,6 +153,81 @@ describe('AttendanceService.selfCheckIn — Qaror 4 yuz tekshiruvi gate', () => 
     );
   });
 
+  it.each(['SERVICE_ERROR', 'NO_REFERENCE_PHOTO', 'REFERENCE_FACE_NOT_FOUND'])(
+    'strict rejimda %s — check-in QABUL QILINADI, yuz keyinroq tekshiriladi (faceCheckPending)',
+    async (reason) => {
+      faceMatch.verify.mockResolvedValue({
+        mismatch: true,
+        skipped: false,
+        reason,
+      });
+
+      const res = await service.selfCheckIn('user-1', dto as any, selfieBuffer);
+
+      expect(res.action).toBe('CHECK_IN');
+      expect(prisma.attendanceRecord.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            faceVerified: false,
+            faceCheckPending: true,
+            faceCheckReason: reason,
+            selfieUrl: '/uploads/selfies/x.jpg',
+          }),
+        }),
+      );
+      expect(auditLog.log).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'FACE_MATCH_DEFERRED' }),
+      );
+    },
+  );
+
+  it('FACE_MATCH_FALLBACK=block — xizmat ishlamasa eski xulq: check-in rad etiladi', async () => {
+    process.env.FACE_MATCH_FALLBACK = 'block';
+    try {
+      faceMatch.verify.mockResolvedValue({
+        mismatch: true,
+        skipped: false,
+        reason: 'SERVICE_ERROR',
+      });
+      await expect(
+        service.selfCheckIn('user-1', dto as any, selfieBuffer),
+      ).rejects.toThrow(/vaqtincha ishlamayapti/);
+      expect(prisma.attendanceRecord.create).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.FACE_MATCH_FALLBACK;
+    }
+  });
+
+  it('selfida yuz topilmasa (LIVE_FACE_NOT_FOUND) — xodim qayta suratga tushishi kerak, rad etiladi', async () => {
+    faceMatch.verify.mockResolvedValue({
+      mismatch: true,
+      skipped: false,
+      reason: 'LIVE_FACE_NOT_FOUND',
+    });
+    await expect(
+      service.selfCheckIn('user-1', dto as any, selfieBuffer),
+    ).rejects.toThrow(/yuzingiz aniqlanmadi/);
+    expect(prisma.attendanceRecord.create).not.toHaveBeenCalled();
+  });
+
+  it('muvaffaqiyatli tekshiruvda faceCheckPending=false, faceVerified=true', async () => {
+    faceMatch.verify.mockResolvedValue({
+      mismatch: false,
+      skipped: false,
+      similarity: 0.8,
+    });
+    await service.selfCheckIn('user-1', dto as any, selfieBuffer);
+    expect(prisma.attendanceRecord.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          faceVerified: true,
+          faceCheckPending: false,
+          faceCheckReason: null,
+        }),
+      }),
+    );
+  });
+
   it("selfie yuborilmagan check-in RAD ETILADI (yuz tekshiruvini chetlab o'tib bo'lmaydi)", async () => {
     await expect(
       service.selfCheckIn('user-1', dto as any, undefined),

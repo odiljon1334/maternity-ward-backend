@@ -49,6 +49,7 @@ function makeService(overrides: {
     fakePaymentsService,
     {} as any, // hikvisionService
     {} as any, // faceMatchMonitorService
+    {} as any, // faceRecheckService
   );
 
   return { service, notifyPaymentReminder, markPaymentReminderSent };

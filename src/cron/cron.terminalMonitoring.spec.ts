@@ -54,6 +54,7 @@ function makeService(options: {
     {} as any,
     hikvision as any,
     {} as any,
+    {} as any, // faceRecheckService
   );
 
   return { service, prisma, push, telegram, hikvision };

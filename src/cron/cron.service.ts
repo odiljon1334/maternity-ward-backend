@@ -10,6 +10,7 @@ import { PushService } from '../push/push.service';
 import { PaymentsService, currentPeriod } from '../payments/payments.service';
 import { HikvisionService } from '../hikvision/hikvision.service';
 import { FaceMatchMonitorService } from '../face-match/face-match-monitor.service';
+import { FaceRecheckService } from '../face-match/face-recheck.service';
 import dayjs from 'dayjs';
 import timezone from 'dayjs/plugin/timezone';
 import utc from 'dayjs/plugin/utc';
@@ -31,6 +32,7 @@ export class CronService {
     private readonly paymentsService: PaymentsService,
     private readonly hikvisionService: HikvisionService,
     private readonly faceMatchMonitorService: FaceMatchMonitorService,
+    private readonly faceRecheckService: FaceRecheckService,
   ) {}
 
   /** Face Match strict rejimda mobil check-in uchun kritik dependency. */
@@ -41,6 +43,21 @@ export class CronService {
     } catch (err) {
       this.logger.error(
         `Face Match monitoring o'tkazib yuborildi: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * Check-in paytida yuzi tekshirilmay qolgan (xizmat ishlamagan, profil
+   * rasmi yo'q) yozuvlarni har 5 daqiqada qayta tekshiradi.
+   */
+  @Cron('*/5 * * * *', { timeZone: TZ })
+  async recheckDeferredFaces() {
+    try {
+      await this.faceRecheckService.run();
+    } catch (err) {
+      this.logger.error(
+        `Yuzni qayta tekshirish o'tkazib yuborildi: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }

@@ -776,6 +776,11 @@ model AttendanceRecord {
   gpsAccuracy   Float? // GPS aniqligi (metr)
   gpsVerified   Boolean @default(false)
   faceVerified  Boolean @default(false)
+  // Yuzni check-in paytida tekshirib bo'lmadi (xizmat ishlamadi, profil
+  // rasmi yo'q/yaroqsiz) — davomat qabul qilindi, fon vazifasi keyinroq
+  // qayta tekshiradi. faceCheckReason — oxirgi natija sababi.
+  faceCheckPending Boolean @default(false)
+  faceCheckReason  String?
 
   // Mobil check-in qaysi ish joyida qilingani (null — asosiy bino, eski
   // shaxsiy/lavozim markazi yoki markaz belgilanmagan).
@@ -810,6 +815,7 @@ model AttendanceRecord {
 
   @@unique([employeeId, workDate])
   @@index([employeeId, workDate])
+  @@index([faceCheckPending, workDate])
 }
 
 // ─────────────────────────────────────────────

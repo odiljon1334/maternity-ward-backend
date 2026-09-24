@@ -998,6 +998,9 @@ export class TelegramService implements OnModuleInit {
     } else if (!isCheckIn && attendance.earlyLeaveMin > 0) {
       extra = `\n⚡ <b>${formatMinutes(attendance.earlyLeaveMin)} erta ketdi</b>`;
     }
+    if (isCheckIn && attendance.faceCheckPending) {
+      extra += `\n🕓 Yuz hali tekshirilmadi — keyinroq avtomatik tekshiriladi`;
+    }
 
     // GPS — check-in uchun gpsLat/gpsLng, check-out uchun checkOutGps*
     const lat = isCheckIn

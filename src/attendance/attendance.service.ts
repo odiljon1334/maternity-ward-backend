@@ -104,6 +104,21 @@ export interface AutoClosedAttendance {
 
 // ─── SERVICE ──────────────────────────────────────────────────────────────────
 
+/** Check-in'ni to'xtatmaydigan (xodimga bog'liq bo'lmagan) yuz tekshiruvi sabablari */
+export const DEFERRABLE_FACE_REASONS = new Set([
+  'SERVICE_ERROR',
+  'NO_REFERENCE_PHOTO',
+  'REFERENCE_FACE_NOT_FOUND',
+]);
+
+interface FaceCheckOutcome {
+  /** Yuz profil rasmi bilan mos keldi */
+  verified: boolean;
+  /** Tekshirib bo'lmadi — check-in qabul qilindi, keyinroq qayta tekshiriladi */
+  deferred: boolean;
+  reason: string | null;
+}
+
 @Injectable()
 export class AttendanceService {
   private readonly logger = new Logger(AttendanceService.name);
@@ -1361,7 +1376,7 @@ export class AttendanceService {
     employee: { id: string; hospitalId: string; photoUrl: string | null },
     selfie: Buffer,
     stage: 'CHECK_IN' | 'CHECK_OUT',
-  ): Promise<boolean> {
+  ): Promise<FaceCheckOutcome> {
     const t0 = Date.now();
     let referenceRaw: Buffer | null = null;
     if (employee.photoUrl) {
@@ -1409,13 +1424,47 @@ export class AttendanceService {
       },
     });
 
-    if (!faceResult.mismatch) return !faceResult.skipped;
+    if (!faceResult.mismatch) {
+      return {
+        verified: !faceResult.skipped,
+        deferred: false,
+        reason: faceResult.reason ?? null,
+      };
+    }
 
     if (stage === 'CHECK_OUT' && faceResult.reason === 'SERVICE_ERROR') {
       this.logger.warn(
         `Face-match xizmati ishlamadi — check-out bloklanmadi: employee=${employee.id}`,
       );
-      return false;
+      return { verified: false, deferred: false, reason: 'SERVICE_ERROR' };
+    }
+
+    // Xodimga bog'liq bo'lmagan sabablar (xizmat ishlamadi, profil rasmi yo'q
+    // yoki unda yuz topilmadi) — butun muassasa davomati to'xtab qolmasligi
+    // uchun check-in qabul qilinadi, yuz keyinroq fon vazifasida tekshiriladi
+    // (FaceRecheckService). GPS baribir majburiy, selfie saqlanadi.
+    // FACE_MATCH_FALLBACK=block — eski qat'iy xulq (rad etish).
+    if (
+      stage === 'CHECK_IN' &&
+      DEFERRABLE_FACE_REASONS.has(faceResult.reason ?? '') &&
+      process.env.FACE_MATCH_FALLBACK !== 'block'
+    ) {
+      this.logger.warn(
+        `Face-match kechiktirildi (${faceResult.reason}) — check-in qabul qilindi, keyinroq tekshiriladi: employee=${employee.id}`,
+      );
+      this.auditLog.log({
+        userId,
+        hospitalId: employee.hospitalId,
+        action: 'FACE_MATCH_DEFERRED',
+        entity: 'AttendanceRecord',
+        entityId: employee.id,
+        details: { stage, reason: faceResult.reason },
+      });
+      return {
+        verified: false,
+        deferred: true,
+        reason: faceResult.reason ?? null,
+      };
     }
 
     const action = stage === 'CHECK_IN' ? 'check-in' : 'check-out';
@@ -1615,9 +1664,13 @@ export class AttendanceService {
 
     // 4a. Yuz tekshiruvi (Qaror 4) — check-in'da har doim; check-out'da
     //     faqat shubhali holatda (checkoutNeedsFaceMatch, pastda).
-    let faceVerified = false;
+    let faceCheck: FaceCheckOutcome = {
+      verified: false,
+      deferred: false,
+      reason: null,
+    };
     if (isCheckIn) {
-      faceVerified = await this.verifyFaceOrThrow(
+      faceCheck = await this.verifyFaceOrThrow(
         userId,
         employee,
         selfieBuffer as Buffer,
@@ -1676,7 +1729,9 @@ export class AttendanceService {
         gpsLng: dto.gpsLng,
         gpsAccuracy: dto.gpsAccuracy,
         gpsVerified: !!geoMatch?.inside,
-        faceVerified,
+        faceVerified: faceCheck.verified,
+        faceCheckPending: faceCheck.deferred,
+        faceCheckReason: faceCheck.deferred ? faceCheck.reason : null,
         checkInWorkSiteId: geoMatch?.inside ? geoMatch.center.workSiteId : null,
       };
 
