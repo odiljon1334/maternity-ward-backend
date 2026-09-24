@@ -35,7 +35,7 @@ export function makeHarness() {
     findLinkCandidates: jest.fn(async () => []),
     linkChat: jest.fn(async () => true),
   };
-  const service = new TelegramService(config, prisma, access);
+  const service = new TelegramService(config, prisma, access, {} as any);
 
   const bot = new Telegraf('123:TEST');
   // Telegraf har bir update uchun yangi Telegram instansiyasini yaratadi —

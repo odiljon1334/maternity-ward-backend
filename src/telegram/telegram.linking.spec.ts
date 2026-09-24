@@ -23,6 +23,7 @@ function makeHarness(candidates: BotLinkCandidate[] = []) {
     { get: jest.fn(() => undefined) } as any,
     prisma,
     access,
+    {} as any,
   );
   const bot = new Telegraf('123:TEST');
   const callApi = jest

@@ -7,6 +7,8 @@ import * as path from 'path';
 import * as https from 'https';
 import { formatMinutes, isHospitalBlocked } from '../common/utils/payment.util';
 import { getStaffPricing } from '../common/utils/pricing.util';
+import { SubscriptionBillingService } from '../payments/subscription-billing.service';
+import { coverageLabel } from '../payments/billing.util';
 import {
   BotLinkCandidate,
   TelegramAccessService,
@@ -162,6 +164,7 @@ export class TelegramService implements OnModuleInit {
     private readonly config: ConfigService,
     private readonly prisma: PrismaService,
     private readonly access: TelegramAccessService,
+    private readonly billing: SubscriptionBillingService,
   ) {}
 
   async onModuleInit() {
@@ -398,22 +401,19 @@ export class TelegramService implements OnModuleInit {
         where: { hospitalId: linked.id, firedAt: null },
       });
 
-      // Oxirgi faol obunani tekshirish
-      const activeSub = await this.prisma.payment.findFirst({
-        where: {
-          hospitalId: linked.id,
-          status: 'PAID',
-          validUntil: { gte: new Date() },
-        },
-        orderBy: { validUntil: 'desc' },
-      });
-
+      // Obuna holati — to'lovlar qoplamasi bo'yicha (qo'lda kiritilgan va
+      // Telegram to'lovlari birga, yillik to'lov 12 oyni qoplaydi)
       const pricing = getStaffPricing(empCount);
-
-      const subLine = activeSub
-        ? `✅ <b>Faol obuna:</b> ${activeSub.type === 'MONTHLY' ? 'Oylik' : 'Yillik'}\n` +
-          `📅 Tugash sanasi: <b>${activeSub.validUntil!.toLocaleDateString('uz-UZ', { timeZone: 'Asia/Tashkent' })}</b>`
-        : `❌ <b>Faol obuna yo'q</b>`;
+      const state = await this.billing.getState(linked.id);
+      const fmtDate = (d: Date) =>
+        d.toLocaleDateString('uz-UZ', { timeZone: 'Asia/Tashkent' });
+      const subLine =
+        state.paidThrough && state.paidThrough.getTime() >= Date.now()
+          ? `✅ <b>Obuna to'langan:</b> ${fmtDate(state.paidThrough)} gacha`
+          : state.overduePeriods.length
+            ? `⚠️ <b>To'lanmagan oylar:</b> ${state.overduePeriods.map((p) => coverageLabel(p, 1)).join(', ')}`
+            : `❌ <b>Joriy oy hali to'lanmagan</b>`;
+      const nextLine = `🗓 Keyingi to'lov: <b>${coverageLabel(state.nextPeriod, 1)}</b> dan boshlab`;
 
       if (pricing.negotiated) {
         await ctx.reply(
@@ -446,7 +446,7 @@ export class TelegramService implements OnModuleInit {
         `💳 <b>Obuna boshqaruvi</b>\n\n` +
           `🏥 ${linked.name}\n` +
           `👥 Faol xodimlar: <b>${empCount} nafar</b>\n\n` +
-          `${subLine}\n\n` +
+          `${subLine}\n${nextLine}\n\n` +
           `📌 <b>Tarif (${pricing.planLabel}):</b>\n` +
           breakdownLine +
           `   <i>(${saving.toLocaleString()} so'm tejaysiz)</i>`,
@@ -485,44 +485,51 @@ export class TelegramService implements OnModuleInit {
 
       const hospital = await this.prisma.hospital.findUnique({
         where: { id: hospitalId },
+        select: { name: true },
       });
       if (!hospital) return;
 
-      const empCount = await this.prisma.employee.count({
-        where: { hospitalId, firedAt: null },
-      });
-
-      const pricing = getStaffPricing(empCount);
-      if (pricing.negotiated) {
+      // Summa, qoplanadigan oylar va invoys yozuvi — serverda (SubscriptionBillingService)
+      const inv = await this.billing.createInvoice(
+        hospitalId,
+        this.chatIdFromCtx(ctx),
+        type,
+      );
+      if ('reason' in inv) {
+        if (inv.reason === 'NEGOTIATED') {
+          return ctx.reply(
+            '⚠️ 500 nafardan ortiq xodim uchun narx individual kelishiladi. ' +
+              "Iltimos, operator bilan bog'laning: +998 95 577 54 54",
+          );
+        }
         return ctx.reply(
-          '⚠️ 500 nafardan ortiq xodim uchun narx individual kelishiladi. ' +
-            "Iltimos, operator bilan bog'laning: +998 95 577 54 54",
+          "⚠️ Hozircha to'lov yaratib bo'lmadi. Operator bilan bog'laning: +998 95 577 54 54",
         );
       }
 
+      const { pricing } = inv;
       const isMonthly = type === 'MONTHLY';
-      const totalSom = isMonthly ? pricing.monthlyTotal! : pricing.annualTotal!;
       const title = isMonthly ? '📅 Oylik obuna' : '📆 Yillik obuna';
-      const period = isMonthly ? '1 oy' : '1 yil';
       const perUnitLabel = isMonthly
         ? pricing.perEmployeeMonthly
         : pricing.perEmployeeAnnual;
-      const descriptionLine = pricing.isFlat
-        ? `${hospital.name} uchun ${period}lik obuna\n📦 ${pricing.planLabel} — FIKS narx`
-        : `${hospital.name} uchun ${period}lik obuna\n👥 ${empCount} nafar xodim × ${perUnitLabel!.toLocaleString()} so'm`;
+      const descriptionLine =
+        `${hospital.name} — ${inv.coverage}\n` +
+        (pricing.isFlat
+          ? `📦 ${pricing.planLabel} — FIKS narx`
+          : `👥 ${inv.employeeCount} nafar xodim × ${perUnitLabel!.toLocaleString()} so'm`);
 
       await ctx.replyWithInvoice(
         title,
         descriptionLine,
-        `${type}:${hospitalId}`, // payload
+        inv.payload, // "inv:<id>" — summa/muddat serverdagi yozuvdan olinadi
         paymentToken,
         'UZS',
         [
           {
-            label: pricing.isFlat
-              ? `${pricing.planLabel} (${period})`
-              : `${empCount} xodim (${period})`,
-            amount: totalSom,
+            label: inv.coverage,
+            // Telegram eng kichik birlikda kutadi: UZS exp=2 → so'm × 100
+            amount: inv.amountMinor,
           },
         ],
         {
@@ -543,62 +550,65 @@ export class TelegramService implements OnModuleInit {
       await sendSubscriptionInvoice(ctx, hospitalId, type);
     });
 
-    // ── PRE-CHECKOUT: tasdiqlash ─────────────────────────────────────────────
+    // ── PRE-CHECKOUT: invoys va summani tekshirish ───────────────────────────
+    // Ilgari har qanday so'rov tekshiruvsiz tasdiqlanardi.
     bot.on('pre_checkout_query', async (ctx) => {
-      await ctx.answerPreCheckoutQuery(true);
+      const q = ctx.preCheckoutQuery;
+      try {
+        const res = await this.billing.validatePreCheckout({
+          payload: q.invoice_payload,
+          currency: q.currency,
+          totalAmount: q.total_amount,
+        });
+        if ('message' in res)
+          await ctx.answerPreCheckoutQuery(false, res.message);
+        else await ctx.answerPreCheckoutQuery(true);
+      } catch (e) {
+        this.logger.error(
+          `pre_checkout tekshiruvi xatosi: ${e instanceof Error ? e.message : String(e)}`,
+        );
+        await ctx.answerPreCheckoutQuery(
+          false,
+          "Texnik xatolik. Birozdan so'ng qayta urinib ko'ring.",
+        );
+      }
     });
 
-    // ── MUVAFFAQIYATLI TO'LOV ────────────────────────────────────────────────
+    // ── MUVAFFAQIYATLI TO'LOV (idempotent) ───────────────────────────────────
     bot.on('message', async (ctx: any, next: () => Promise<void>) => {
       const payment = ctx.message?.successful_payment;
       if (!payment) return next(); // text va boshqa xabarlarni on('text') ga o'tkazish
 
-      const payload = payment.invoice_payload as string;
-      const [type, hospitalId] = payload.split(':');
-      const chatId = String(ctx.chat.id);
-      const firstName = ctx.from?.first_name || 'Foydalanuvchi';
-      const totalSom = payment.total_amount;
-
-      const hospital = await this.prisma.hospital.findUnique({
-        where: { id: hospitalId },
-      });
-      if (!hospital) return;
-
-      const empCount = await this.prisma.employee.count({
-        where: { hospitalId, firedAt: null },
+      const result = await this.billing.recordSuccessfulPayment({
+        payload: payment.invoice_payload,
+        currency: payment.currency,
+        totalAmount: payment.total_amount,
+        telegramChargeId: payment.telegram_payment_charge_id,
+        providerChargeId: payment.provider_payment_charge_id,
+        chatId: String(ctx.chat.id),
+        payerName: ctx.from?.first_name || 'Foydalanuvchi',
       });
 
-      const now = new Date();
-      const validUntil = new Date(now);
-      if (type === 'MONTHLY') validUntil.setMonth(validUntil.getMonth() + 1);
-      else validUntil.setFullYear(validUntil.getFullYear() + 1);
+      if (result.status === 'UNKNOWN_INVOICE') {
+        await ctx.reply(
+          "✅ To'lov qabul qilindi. Hisobingizga biriktirish uchun operator siz bilan bog'lanadi: +998 95 577 54 54",
+        );
+        return;
+      }
 
-      const period = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-
-      await this.prisma.payment.create({
-        data: {
-          hospitalId,
-          payerName: firstName,
-          amount: totalSom,
-          type: type as any,
-          period,
-          status: 'PAID',
-          employeeCount: empCount,
-          validUntil,
-          telegramPaymentId: payment.telegram_payment_charge_id,
-          paidByChatId: chatId,
-          note: `Telegram orqali to\'lov`,
-        },
-      });
-
-      const typeLabel = type === 'MONTHLY' ? 'oylik' : 'yillik';
+      const validLine = result.validUntil
+        ? `📅 Amal qilish muddati: <b>${result.validUntil.toLocaleDateString('uz-UZ', { timeZone: 'Asia/Tashkent' })}</b> gacha\n`
+        : '';
       await ctx.reply(
-        `✅ <b>To'lov muvaffaqiyatli!</b>\n\n` +
-          `🏥 ${hospital.name}\n` +
-          `💰 ${totalSom.toLocaleString()} so'm (${typeLabel})\n` +
-          `👥 ${empCount} nafar xodim\n` +
-          `📅 Amal qilish muddati: <b>${validUntil.toLocaleDateString('uz-UZ', { timeZone: 'Asia/Tashkent' })}</b>\n\n` +
-          `Rahmat! 🙏`,
+        `✅ <b>To'lov ${result.status === 'DUPLICATE' ? 'avval qabul qilingan' : 'muvaffaqiyatli'}!</b>\n\n` +
+          `🏥 ${result.hospitalName}\n` +
+          `💰 ${result.amountSom.toLocaleString()} so'm\n` +
+          `🗓 Davr: <b>${result.coverage}</b>\n` +
+          (result.employeeCount != null
+            ? `👥 ${result.employeeCount} nafar xodim\n`
+            : '') +
+          validLine +
+          `\nRahmat! 🙏`,
         { parse_mode: 'HTML', ...mainKeyboard(true) },
       );
     });

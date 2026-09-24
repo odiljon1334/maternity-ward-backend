@@ -248,6 +248,7 @@ model Hospital {
   telegramSubs           TelegramSubscription[]
   notifications          Notification[]
   payments               Payment[]
+  subscriptionInvoices   SubscriptionInvoice[]
   cameras                Camera[]
   hikTerminals           HikTerminal[]
   leaveRequests          LeaveRequest[]
@@ -1227,16 +1228,54 @@ model Payment {
   status            PaymentStatus @default(PAID)
   paidAt            DateTime      @default(now())
   note              String?
+  // Qoplama: `period` oyidan boshlab nechta kalendar oyi (oylik = 1, yillik = 12).
+  // Hisob-kitob — src/payments/billing.util.ts
+  months            Int           @default(1)
   // Telegram to'lov uchun qo'shimcha fieldlar
   employeeCount     Int? // To'lov vaqtidagi xodimlar soni
-  validUntil        DateTime? // Obuna tugash sanasi
-  telegramPaymentId String? // Telegram charge_id
+  validUntil        DateTime? // Qoplamaning oxirgi oyining oxiri
+  telegramPaymentId String?       @unique // Telegram charge_id — bir to'lov ikki marta yozilmasin
+  providerPaymentId String? // To'lov provayderining (Click/Payme) charge id si
   paidByChatId      String? // Kim to'ladi (chatId)
+  invoiceId         String?       @unique
+  invoice           SubscriptionInvoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @updatedAt
 
   @@index([hospitalId, period])
   @@index([hospitalId, validUntil])
+  @@index([hospitalId, status, period])
+}
+
+enum SubscriptionInvoiceStatus {
+  OPEN // Telegram'da invoys yuborildi, to'lov kutilmoqda
+  PAID
+  EXPIRED // Muddati o'tdi yoki shu oylar boshqa to'lov bilan yopildi
+}
+
+/// Telegram bot orqali yuborilgan obuna invoysi. Summa va qoplanadigan oylar
+/// invoys yaratilganda qat'iy belgilanadi; pre_checkout_query shu yozuv bilan
+/// solishtiriladi (summani/muddatni foydalanuvchi o'zgartira olmaydi).
+model SubscriptionInvoice {
+  id            String                    @id @default(uuid())
+  hospitalId    String
+  hospital      Hospital                  @relation(fields: [hospitalId], references: [id], onDelete: Cascade)
+  type          PaymentType
+  months        Int
+  startPeriod   String // "YYYY-MM" — qoplama shu oydan boshlanadi
+  amount        Decimal                   @db.Decimal(12, 2) // so'mda
+  currency      String                    @default("UZS")
+  employeeCount Int
+  chatId        String
+  status        SubscriptionInvoiceStatus @default(OPEN)
+  expiresAt     DateTime
+  paidAt        DateTime?
+  payment       Payment?
+  createdAt     DateTime                  @default(now())
+  updatedAt     DateTime                  @updatedAt
+
+  @@index([hospitalId, status])
+  @@index([status, expiresAt])
 }
 
 // ─────────────────────────────────────────────

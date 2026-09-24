@@ -1,41 +1,134 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { UpdatePaymentDto } from './dto/update-payment.dto';
 import { getMonthlyExpectedAmount } from '../common/utils/pricing.util';
+import {
+  addPeriods,
+  buildCoverage,
+  isValidPeriod,
+  lastNPeriods,
+  lastPaidPeriod,
+  monthsForType,
+  nextBillablePeriod,
+  PeriodCoverage,
+  periodEnd,
+  periodOf,
+  periodPaidAmount,
+  periodStart,
+  periodStatus,
+} from './billing.util';
 
+/** Joriy oy (Toshkent vaqti bo'yicha), "YYYY-MM" */
 export function currentPeriod(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  return periodOf(new Date());
 }
 
-function getPeriodStatus(
-  paidAmount: number,
-  expectedAmount: number,
-  period: string,
-): 'PAID' | 'PENDING' | 'OVERDUE' {
-  if (expectedAmount === 0 || paidAmount >= expectedAmount) return 'PAID';
+/** Yillik to'lov oldingi 11 oyni ham qoplashi mumkin — so'rov oynasi shuncha kengaytiriladi */
+const COVERAGE_LOOKBACK_MONTHS = 11;
 
-  const [y, m] = period.split('-').map(Number);
-  const periodEnd = new Date(y, m, 0, 23, 59, 59); // last day of month
-
-  return new Date() <= periodEnd ? 'PENDING' : 'OVERDUE';
-}
-
-/** Oxirgi N oy davri ("YYYY-MM"), eskisidan yangisiga qarab tartiblangan — joriy oy ham kiradi. */
-function lastNPeriods(n: number): string[] {
-  const out: string[] = [];
-  const now = new Date();
-  for (let i = n - 1; i >= 0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    out.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
-  }
-  return out;
+export interface HospitalBillingState {
+  employeeCount: number;
+  expectedMonthly: number;
+  /** Oxirgi to'liq to'langan oy (null — hech qachon) */
+  lastPaidPeriod: string | null;
+  /** Qoplama tugaydigan lahza (lastPaidPeriod oxiri) */
+  paidThrough: Date | null;
+  /** Bot orqali keyingi to'lov shu oydan boshlanadi */
+  nextPeriod: string;
+  /** Muddati o'tgan, to'lanmagan oylar (oxirgi 3 oy ichida) */
+  overduePeriods: string[];
 }
 
 @Injectable()
 export class PaymentsService {
   constructor(private readonly prisma: PrismaService) {}
+
+  /**
+   * Shifoxonalar bo'yicha oy → qoplama xaritasi. Faqat PAID to'lovlar
+   * hisobga olinadi (ilgari PENDING/OVERDUE yozuvlar ham "to'langan"
+   * summaga qo'shilib ketardi).
+   */
+  private async loadCoverage(
+    hospitalIds: string[],
+    fromPeriod: string,
+  ): Promise<Map<string, Map<string, PeriodCoverage>>> {
+    const result = new Map<string, Map<string, PeriodCoverage>>();
+    if (!hospitalIds.length) return result;
+    const since = addPeriods(fromPeriod, -COVERAGE_LOOKBACK_MONTHS);
+    const payments = await this.prisma.payment.findMany({
+      where: {
+        hospitalId: { in: hospitalIds },
+        status: 'PAID',
+        OR: [
+          { period: { gte: since } },
+          { period: null, paidAt: { gte: periodStart(since) } },
+        ],
+      },
+      select: {
+        hospitalId: true,
+        period: true,
+        months: true,
+        amount: true,
+        paidAt: true,
+      },
+    });
+    const byHospital = new Map<string, typeof payments>();
+    for (const p of payments) {
+      const list = byHospital.get(p.hospitalId) ?? [];
+      list.push(p);
+      byHospital.set(p.hospitalId, list);
+    }
+    for (const id of hospitalIds) {
+      result.set(id, buildCoverage(byHospital.get(id) ?? []));
+    }
+    return result;
+  }
+
+  /** Muddati o'tgan ochiq Telegram invoyslarini yopadi (cron) */
+  async expireStaleInvoices(now: Date = new Date()): Promise<number> {
+    const res = await this.prisma.subscriptionInvoice.updateMany({
+      where: { status: 'OPEN', expiresAt: { lt: now } },
+      data: { status: 'EXPIRED' },
+    });
+    return res.count;
+  }
+
+  /** Bitta shifoxonaning obuna holati — Telegram bot va avto-blok shu yerdan o'qiydi */
+  async getBillingState(
+    hospitalId: string,
+    now: Date = new Date(),
+  ): Promise<HospitalBillingState> {
+    const employeeCount = await this.prisma.employee.count({
+      where: { hospitalId, firedAt: null },
+    });
+    const expectedMonthly = getMonthlyExpectedAmount(employeeCount);
+    const current = periodOf(now);
+    // Oldindan to'langan kelgusi oylarni ham ko'rish uchun oyna keng olinadi
+    const coverage =
+      (await this.loadCoverage([hospitalId], addPeriods(current, -24))).get(
+        hospitalId,
+      ) ?? new Map();
+    const last = lastPaidPeriod(coverage, expectedMonthly);
+    const overduePeriods = [-3, -2, -1]
+      .map((i) => addPeriods(current, i))
+      .filter(
+        (p) =>
+          periodStatus(p, expectedMonthly, coverage.get(p), now) === 'OVERDUE',
+      );
+    return {
+      employeeCount,
+      expectedMonthly,
+      lastPaidPeriod: last,
+      paidThrough: last ? periodEnd(last) : null,
+      nextPeriod: nextBillablePeriod(last, now),
+      overduePeriods,
+    };
+  }
 
   // ─── Overview — per-hospital payment dashboard ──────────────────────────────
   async getOverview(hospitalIds?: string[]) {
@@ -60,6 +153,8 @@ export class PaymentsService {
             amount: true,
             type: true,
             period: true,
+            months: true,
+            status: true,
             paidAt: true,
             note: true,
             createdAt: true,
@@ -69,23 +164,17 @@ export class PaymentsService {
       orderBy: { name: 'asc' },
     });
 
-    const periodTotals = await this.prisma.payment.groupBy({
-      by: ['hospitalId'],
-      where: {
-        period,
-        ...(hospitalIds && { hospitalId: { in: hospitalIds } }),
-      },
-      _sum: { amount: true },
-    });
-    const totalsMap = new Map(
-      periodTotals.map((r) => [r.hospitalId, Number(r._sum.amount ?? 0)]),
+    const coverage = await this.loadCoverage(
+      hospitals.map((h) => h.id),
+      period,
     );
 
     return hospitals.map((h) => {
       const employeeCount = h._count.employees;
       const expectedAmount = getMonthlyExpectedAmount(employeeCount);
-      const paidAmount = totalsMap.get(h.id) ?? 0;
-      const status = getPeriodStatus(paidAmount, expectedAmount, period);
+      const cov = coverage.get(h.id)?.get(period);
+      const paidAmount = periodPaidAmount(expectedAmount, cov);
+      const status = periodStatus(period, expectedAmount, cov);
 
       return {
         id: h.id,
@@ -94,8 +183,10 @@ export class PaymentsService {
         employeeCount,
         expectedAmount,
         paidAmount,
-        remainingAmount: Math.max(0, expectedAmount - paidAmount),
+        remainingAmount:
+          status === 'PAID' ? 0 : Math.max(0, expectedAmount - paidAmount),
         status,
+        prepaid: !!cov?.prepaid,
         period,
         recentPayments: h.payments,
       };
@@ -128,7 +219,14 @@ export class PaymentsService {
     });
     if (!exists) throw new NotFoundException('Kasalxona topilmadi');
 
-    const period = currentPeriod();
+    // Qaysi oy(lar) uchun: berilmasa — joriy oy (eski xulq)
+    const period = dto.period ?? currentPeriod();
+    if (!isValidPeriod(period)) {
+      throw new BadRequestException(
+        "Davr noto'g'ri: YYYY-MM ko'rinishida bo'lishi kerak",
+      );
+    }
+    const months = monthsForType(dto.type);
 
     return this.prisma.payment.create({
       data: {
@@ -137,6 +235,9 @@ export class PaymentsService {
         amount: dto.amount,
         type: dto.type,
         period,
+        months,
+        status: 'PAID',
+        validUntil: periodEnd(addPeriods(period, months - 1)),
         note: dto.note,
       },
       include: { hospital: { select: { id: true, name: true, code: true } } },
@@ -172,22 +273,11 @@ export class PaymentsService {
     });
     const hospitalIds = hospitals.map((h) => h.id);
 
-    const periodTotals = await this.prisma.payment.groupBy({
-      by: ['hospitalId', 'period'],
-      where: { hospitalId: { in: hospitalIds }, period: { in: periods } },
-      _sum: { amount: true },
-    });
-    const paidMap = new Map<string, number>();
-    for (const row of periodTotals) {
-      paidMap.set(
-        `${row.hospitalId}|${row.period}`,
-        Number(row._sum.amount ?? 0),
-      );
-    }
+    const coverage = await this.loadCoverage(hospitalIds, periods[0]);
 
     const lastPayments = await this.prisma.payment.groupBy({
       by: ['hospitalId'],
-      where: { hospitalId: { in: hospitalIds } },
+      where: { hospitalId: { in: hospitalIds }, status: 'PAID' },
       _max: { paidAt: true },
     });
     const lastPaidMap = new Map(
@@ -199,19 +289,21 @@ export class PaymentsService {
         h._count.employees,
       );
 
+      const hCoverage = coverage.get(h.id);
       const monthly = periods.map((period) => {
-        const paidAmount = paidMap.get(`${h.id}|${period}`) ?? 0;
-        const status = getPeriodStatus(
-          paidAmount,
-          expectedAmountPerMonth,
-          period,
-        );
+        const cov = hCoverage?.get(period);
+        const paidAmount = periodPaidAmount(expectedAmountPerMonth, cov);
+        const status = periodStatus(period, expectedAmountPerMonth, cov);
         return {
           period,
           expectedAmount: expectedAmountPerMonth,
           paidAmount,
-          remainingAmount: Math.max(0, expectedAmountPerMonth - paidAmount),
+          remainingAmount:
+            status === 'PAID'
+              ? 0
+              : Math.max(0, expectedAmountPerMonth - paidAmount),
           status,
+          prepaid: !!cov?.prepaid,
         };
       });
 
@@ -277,25 +369,53 @@ export class PaymentsService {
     const periods = lastNPeriods(clampedMonths);
     const period = currentPeriod();
 
-    // MRR trendi — har bir davr uchun HAQIQIY to'langan jami summa
-    // (barcha shifoxonalar bo'yicha, kutilgan emas — bu haqiqiy daromad).
-    const periodSums = await this.prisma.payment.groupBy({
-      by: ['period'],
+    // MRR — tan olingan (recognized) daromad: har bir to'lov qoplagan oylarga
+    // teng taqsimlanadi. Ilgari yillik to'lov bitta oyga tushib, o'sha oyda
+    // MRR 12 barobar oshib, qolgan 11 oyda 0 ko'rinardi (ARR = MRR×12 ham
+    // shunga ko'ra noto'g'ri edi). `collected` — shu oyda haqiqatda tushgan pul.
+    const scopeHospitals = await this.prisma.hospital.findMany({
+      where: allowedHospitalIds
+        ? { id: { in: allowedHospitalIds } }
+        : undefined,
+      select: { id: true },
+    });
+    const coverage = await this.loadCoverage(
+      scopeHospitals.map((h) => h.id),
+      periods[0],
+    );
+    const recognizedByPeriod = new Map<string, number>();
+    for (const hMap of coverage.values()) {
+      for (const [p, c] of hMap) {
+        recognizedByPeriod.set(
+          p,
+          (recognizedByPeriod.get(p) ?? 0) + c.recognized,
+        );
+      }
+    }
+    const collected = await this.prisma.payment.findMany({
       where: {
-        period: { in: periods },
+        status: 'PAID',
+        paidAt: { gte: periodStart(periods[0]) },
         ...(allowedHospitalIds && { hospitalId: { in: allowedHospitalIds } }),
       },
-      _sum: { amount: true },
+      select: { amount: true, paidAt: true },
     });
-    const sumsMap = new Map(
-      periodSums.map((r) => [r.period, Number(r._sum.amount ?? 0)]),
-    );
+    const collectedByPeriod = new Map<string, number>();
+    for (const c of collected) {
+      const p = periodOf(c.paidAt);
+      collectedByPeriod.set(
+        p,
+        (collectedByPeriod.get(p) ?? 0) + Number(c.amount),
+      );
+    }
+    const round = (n: number) => Math.round(n);
     const trend = periods.map((p) => ({
       period: p,
-      amount: sumsMap.get(p) ?? 0,
+      amount: round(recognizedByPeriod.get(p) ?? 0),
+      collected: round(collectedByPeriod.get(p) ?? 0),
     }));
 
-    const mrr = sumsMap.get(period) ?? 0;
+    const mrr = round(recognizedByPeriod.get(period) ?? 0);
     const arr = mrr * 12;
 
     // To'lov holati taqsimoti (joriy oy) — mavjud getOverview()'ni qayta ishlatamiz.
@@ -338,21 +458,16 @@ export class PaymentsService {
       select: { id: true, name: true, code: true, isActive: true },
     });
     const activeIds = allHospitals.filter((h) => h.isActive).map((h) => h.id);
+    // "Yaqinda to'lagan" — oxirgi 2 oydan biri to'lov (yoki yillik qoplama) bilan
+    // qoplangan. Yillik mijoz endi churn ro'yxatiga tushib qolmaydi.
     const last2Periods = lastNPeriods(2);
-    const recentPayments = activeIds.length
-      ? await this.prisma.payment.groupBy({
-          by: ['hospitalId'],
-          where: {
-            hospitalId: { in: activeIds },
-            period: { in: last2Periods },
-          },
-          _sum: { amount: true },
-        })
-      : [];
     const paidRecentSet = new Set(
-      recentPayments
-        .filter((r) => Number(r._sum.amount ?? 0) > 0)
-        .map((r) => r.hospitalId),
+      activeIds.filter((id) =>
+        last2Periods.some((p) => {
+          const c = coverage.get(id)?.get(p);
+          return !!c && (c.prepaid || c.paidAmount > 0);
+        }),
+      ),
     );
     const churn = allHospitals
       .filter(

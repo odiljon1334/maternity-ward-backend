@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { NotFoundException } from '@nestjs/common';
-import { PaymentsService } from './payments.service';
+import { PaymentsService, currentPeriod } from './payments.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { getMonthlyExpectedAmount } from '../common/utils/pricing.util';
 
@@ -15,11 +15,6 @@ import { getMonthlyExpectedAmount } from '../common/utils/pricing.util';
  * ishlashini tekshirish — bular to'g'ridan-to'g'ri moliyaviy hisobotga
  * ta'sir qiladi.
  */
-
-function currentPeriod(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-}
 
 function makeFakePrisma() {
   const hospitals: any[] = [];
@@ -139,11 +134,24 @@ function makeFakePrisma() {
       findMany: jest.fn(async ({ where, take }: any) => {
         return payments
           .filter((p) => {
-            if (where?.hospitalId && p.hospitalId !== where.hospitalId)
+            if (
+              typeof where?.hospitalId === 'string' &&
+              p.hospitalId !== where.hospitalId
+            )
               return false;
-            if (where?.period && p.period !== where.period) return false;
+            if (
+              where?.hospitalId?.in &&
+              !where.hospitalId.in.includes(p.hospitalId)
+            )
+              return false;
+            if (typeof where?.period === 'string' && p.period !== where.period)
+              return false;
+            // Test yozuvlarida status berilmasa — PAID (odatiy qo'lda kiritilgan to'lov)
+            if (where?.status && (p.status ?? 'PAID') !== where.status)
+              return false;
             return true;
           })
+          .map((p) => ({ months: 1, status: 'PAID', ...p }))
           .slice(0, take ?? payments.length);
       }),
       create: jest.fn(async ({ data }: any) => {
@@ -560,6 +568,136 @@ describe('PaymentsService', () => {
       const stats = await service.getPlatformStats(6);
 
       expect(stats.churn.some((c) => c.id === 'h1')).toBe(false);
+    });
+  });
+
+  describe('qoplama (FAZA 6 · 2-paket)', () => {
+    function periodsAgo(n: number): string {
+      const [y, m] = currentPeriod().split('-').map(Number);
+      const idx = y * 12 + (m - 1) - n;
+      return `${Math.floor(idx / 12)}-${String((idx % 12) + 1).padStart(2, '0')}`;
+    }
+    const withStaff = (n: number) =>
+      Array.from({ length: n }, () => ({ firedAt: null }));
+
+    it("yillik to'lov 12 oyni yopadi: qarzdorlik 0, joriy oy PAID (ilgari faqat bitta oy yopilardi)", async () => {
+      prisma.__state.hospitals.push({
+        id: 'h1',
+        name: 'K1',
+        code: 'K1',
+        isActive: true,
+        employees: withStaff(20),
+      });
+      prisma.__state.payments.push({
+        id: 'p1',
+        hospitalId: 'h1',
+        period: periodsAgo(5),
+        months: 12,
+        type: 'ANNUAL',
+        amount: 1_000,
+        createdAt: 1,
+      });
+
+      const [debtor] = await service.getDebtorsReport(6);
+      expect(debtor.monthly.map((m) => m.status)).toEqual([
+        'PAID',
+        'PAID',
+        'PAID',
+        'PAID',
+        'PAID',
+        'PAID',
+      ]);
+      expect(debtor.totalDebt).toBe(0);
+      expect(debtor.consecutiveUnpaidMonths).toBe(0);
+
+      const [overview] = await service.getOverview();
+      expect(overview.status).toBe('PAID');
+      expect(overview.remainingAmount).toBe(0);
+    });
+
+    it("PAID bo'lmagan yozuvlar to'langan summaga qo'shilmaydi", async () => {
+      prisma.__state.hospitals.push({
+        id: 'h1',
+        name: 'K1',
+        code: 'K1',
+        isActive: true,
+        employees: withStaff(20),
+      });
+      prisma.__state.payments.push({
+        id: 'p1',
+        hospitalId: 'h1',
+        period: currentPeriod(),
+        status: 'PENDING',
+        amount: 10_000_000,
+        createdAt: 1,
+      });
+      const [overview] = await service.getOverview();
+      expect(overview.paidAmount).toBe(0);
+      expect(overview.status).toBe('PENDING');
+    });
+
+    it("MRR: yillik to'lov 12 oyga bo'linadi (bitta oyda ×12 sakrash yo'q)", async () => {
+      prisma.__state.hospitals.push({
+        id: 'h1',
+        name: 'K1',
+        code: 'K1',
+        isActive: true,
+        employees: [],
+      });
+      prisma.__state.payments.push({
+        id: 'p1',
+        hospitalId: 'h1',
+        period: currentPeriod(),
+        months: 12,
+        type: 'ANNUAL',
+        amount: 1_200_000,
+        createdAt: 1,
+      });
+      const stats = await service.getPlatformStats(3);
+      expect(stats.mrr).toBe(100_000);
+      expect(stats.arr).toBe(1_200_000);
+    });
+
+    it("qo'lda yillik to'lov kiritilganda 12 oylik qoplama va muddat yoziladi", async () => {
+      prisma.__state.hospitals.push({
+        id: 'h1',
+        name: 'K1',
+        code: 'K1',
+        isActive: true,
+        employees: [],
+      });
+      const p: any = await service.create({
+        hospitalId: 'h1',
+        payerName: 'A',
+        amount: 900_000,
+        type: 'ANNUAL' as any,
+        period: '2026-09',
+      });
+      expect(p).toMatchObject({
+        months: 12,
+        period: '2026-09',
+        status: 'PAID',
+      });
+      expect(p.validUntil.toISOString()).toBe('2027-08-31T18:59:59.999Z');
+    });
+
+    it("noto'g'ri davr rad etiladi", async () => {
+      prisma.__state.hospitals.push({
+        id: 'h1',
+        name: 'K1',
+        code: 'K1',
+        isActive: true,
+        employees: [],
+      });
+      await expect(
+        service.create({
+          hospitalId: 'h1',
+          payerName: 'A',
+          amount: 1,
+          type: 'MONTHLY' as any,
+          period: '2026-13',
+        }),
+      ).rejects.toThrow(/Davr/);
     });
   });
 

@@ -502,6 +502,16 @@ export class CronService {
   @Cron('0 9 25 * *', { timeZone: TZ })
   async paymentReminderCron() {
     try {
+      // To'lanmagan eski Telegram invoyslari yopiladi (tugmasi eskirgan)
+      try {
+        const expired = await this.paymentsService.expireStaleInvoices();
+        if (expired) this.logger.log(`Eskirgan invoyslar yopildi: ${expired}`);
+      } catch (e) {
+        this.logger.warn(
+          `Invoyslarni yopib bo'lmadi: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+
       const period = currentPeriod();
       const debtors = await this.paymentsService.getDebtorsReport(6);
       const overdue = debtors.filter((d) => d.consecutiveUnpaidMonths > 0);
@@ -608,8 +618,11 @@ export class CronService {
   async monthlyReport() {
     this.logger.log('Sending monthly report via Telegram...');
     try {
-      const prevMonth = new Date();
-      prevMonth.setMonth(prevMonth.getMonth() - 1);
+      // ⚠️ setMonth(-1) oyning 29–31-sanalarida o'tgan oy o'rniga joriy oyni
+      // berardi (31-mart → "31-fevral" → 3-mart). Oyning 1-kuni ishlagani
+      // uchun hozir zarar yo'q edi, lekin xavfsiz usul bilan hisoblaymiz.
+      const now = new Date();
+      const prevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
       const month = prevMonth.getMonth() + 1;
       const year = prevMonth.getFullYear();
 
