@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
@@ -103,6 +104,14 @@ export interface AutoClosedAttendance {
 }
 
 // ─── SERVICE ──────────────────────────────────────────────────────────────────
+
+/**
+ * Tungi smena: kechagi ochiq yozuv (kelgan, ketmagan) shu vaqt ichida
+ * "hozirgi smena" hisoblanadi — kelishdan 20 soat va kutilgan ketishdan
+ * 8 soat o'tmagan bo'lsa.
+ */
+const OVERNIGHT_OPEN_MAX_MS = 20 * 3600_000;
+const OVERNIGHT_AFTER_END_MS = 8 * 3600_000;
 
 /** Check-in'ni to'xtatmaydigan (xodimga bog'liq bo'lmagan) yuz tekshiruvi sabablari */
 export const DEFERRABLE_FACE_REASONS = new Set([
@@ -1405,19 +1414,41 @@ export class AttendanceService {
         `result=${faceResult.mismatch ? 'MISMATCH' : faceResult.skipped ? 'SKIPPED' : 'OK'}${faceResult.reason ? `/${faceResult.reason}` : ''}`,
     );
 
+    const reason = faceResult.reason ?? null;
+    // Xodimga bog'liq bo'lmagan sabablar (xizmat ishlamadi, profil rasmi yo'q
+    // yoki unda yuz topilmadi):
+    //  - check-in: butun muassasa davomati to'xtab qolmasligi uchun qabul
+    //    qilinadi, yuz keyinroq fon vazifasida tekshiriladi (FaceRecheckService).
+    //    GPS baribir majburiy, selfie saqlanadi. FACE_MATCH_FALLBACK=block —
+    //    eski qat'iy xulq (rad etish).
+    //  - check-out: har doim o'tkaziladi — rasmsiz qabul qilingan xodim
+    //    ishdan keta olmay qolmasin.
+    const external =
+      faceResult.mismatch && DEFERRABLE_FACE_REASONS.has(reason ?? '');
+    const defer =
+      external &&
+      stage === 'CHECK_IN' &&
+      process.env.FACE_MATCH_FALLBACK !== 'block';
+    const tolerateCheckout = external && stage === 'CHECK_OUT';
+
+    // Audit — bitta yozuv (ilgari kechiktirilgan holat avval REJECTED, keyin
+    // DEFERRED bo'lib ikki marta yozilardi)
     this.auditLog.log({
       userId,
       hospitalId: employee.hospitalId,
-      action: faceResult.mismatch
-        ? 'FACE_MATCH_REJECTED'
-        : faceResult.skipped
+      action: defer
+        ? 'FACE_MATCH_DEFERRED'
+        : tolerateCheckout || faceResult.skipped
           ? 'FACE_MATCH_SKIPPED'
-          : 'FACE_MATCH_OK',
+          : faceResult.mismatch
+            ? 'FACE_MATCH_REJECTED'
+            : 'FACE_MATCH_OK',
       entity: 'AttendanceRecord',
       entityId: employee.id,
       details: {
         stage,
-        reason: faceResult.reason,
+        employeeId: employee.id,
+        reason,
         similarity: faceResult.similarity,
         prepMs: t1 - t0,
         verifyMs: t2 - t1,
@@ -1425,46 +1456,19 @@ export class AttendanceService {
     });
 
     if (!faceResult.mismatch) {
-      return {
-        verified: !faceResult.skipped,
-        deferred: false,
-        reason: faceResult.reason ?? null,
-      };
+      return { verified: !faceResult.skipped, deferred: false, reason };
     }
-
-    if (stage === 'CHECK_OUT' && faceResult.reason === 'SERVICE_ERROR') {
+    if (tolerateCheckout) {
       this.logger.warn(
-        `Face-match xizmati ishlamadi — check-out bloklanmadi: employee=${employee.id}`,
+        `Yuz tekshirib bo'lmadi (${reason}) — check-out bloklanmadi: employee=${employee.id}`,
       );
-      return { verified: false, deferred: false, reason: 'SERVICE_ERROR' };
+      return { verified: false, deferred: false, reason };
     }
-
-    // Xodimga bog'liq bo'lmagan sabablar (xizmat ishlamadi, profil rasmi yo'q
-    // yoki unda yuz topilmadi) — butun muassasa davomati to'xtab qolmasligi
-    // uchun check-in qabul qilinadi, yuz keyinroq fon vazifasida tekshiriladi
-    // (FaceRecheckService). GPS baribir majburiy, selfie saqlanadi.
-    // FACE_MATCH_FALLBACK=block — eski qat'iy xulq (rad etish).
-    if (
-      stage === 'CHECK_IN' &&
-      DEFERRABLE_FACE_REASONS.has(faceResult.reason ?? '') &&
-      process.env.FACE_MATCH_FALLBACK !== 'block'
-    ) {
+    if (defer) {
       this.logger.warn(
-        `Face-match kechiktirildi (${faceResult.reason}) — check-in qabul qilindi, keyinroq tekshiriladi: employee=${employee.id}`,
+        `Face-match kechiktirildi (${reason}) — check-in qabul qilindi, keyinroq tekshiriladi: employee=${employee.id}`,
       );
-      this.auditLog.log({
-        userId,
-        hospitalId: employee.hospitalId,
-        action: 'FACE_MATCH_DEFERRED',
-        entity: 'AttendanceRecord',
-        entityId: employee.id,
-        details: { stage, reason: faceResult.reason },
-      });
-      return {
-        verified: false,
-        deferred: true,
-        reason: faceResult.reason ?? null,
-      };
+      return { verified: false, deferred: true, reason };
     }
 
     const action = stage === 'CHECK_IN' ? 'check-in' : 'check-out';
@@ -1647,11 +1651,31 @@ export class AttendanceService {
       ? await this.findFallbackShift(employee.hospitalId, tzDate)
       : null;
 
-    // 4. Mavjud davomat yozuvi (CHECK-IN/CHECK-OUT'ni aniqlash uchun oldindan kerak)
-    const existing = await this.prisma.attendanceRecord.findFirst({
-      where: { employeeId: employee.id, workDate },
-    });
+    // 4. Mavjud davomat yozuvi (CHECK-IN/CHECK-OUT'ni aniqlash uchun oldindan kerak).
+    //    Tungi smena yarim tundan o'tgan bo'lsa — kechagi ochiq yozuv.
+    const target = await this.findSelfTarget(employee.id, eventDate);
+    const existing = target.existing;
+    const recordWorkDate = target.workDate;
     const isCheckIn = !existing || !existing.checkIn;
+
+    // Ilova boshqa amalni kutgan (eski holat: terminal orqali allaqachon
+    // kelgan, boshqa qurilmada belgilagan...) — ko'r-ko'rona bajarilmaydi.
+    const serverAction = isCheckIn
+      ? 'CHECK_IN'
+      : !existing?.checkOut
+        ? 'CHECK_OUT'
+        : 'DONE';
+    if (
+      dto.expectedAction &&
+      serverAction !== 'DONE' &&
+      dto.expectedAction !== serverAction
+    ) {
+      throw new ConflictException(
+        serverAction === 'CHECK_OUT'
+          ? `Kelishingiz allaqachon qayd etilgan (${dayjs(existing!.checkIn!).tz(TZ).format('HH:mm')}). Holat yangilandi — endi ketishni belgilashingiz mumkin.`
+          : 'Bugun hali kelish qayd etilmagan. Holat yangilandi — avval kelishni belgilang.',
+      );
+    }
 
     // XAVFSIZLIK (2026-09-23 audit): check-in uchun selfie MAJBURIY. Ilgari
     // fayl yuborilmasa yuz tekshiruvi butunlay o'tkazib yuborilardi (hatto
@@ -1825,7 +1849,7 @@ export class AttendanceService {
 
       const expectedEnd =
         existing.expectedCheckOut ??
-        this.buildExpectedCheckOut(workDate, schedule, fallbackShift);
+        this.buildExpectedCheckOut(recordWorkDate, schedule, fallbackShift);
       const earlyLeaveMin = this.calcEarlyLeaveMinutes(eventDate, expectedEnd);
       const overtimeMinutes = this.calcOvertimeMinutes(eventDate, expectedEnd);
       const shift = schedule?.shift ?? fallbackShift;
@@ -1850,7 +1874,7 @@ export class AttendanceService {
           process.env.UPLOAD_DIR || './uploads',
           'selfies',
         );
-        const base = `checkout-${dayjs(workDate).format('YYYY-MM-DD')}-${employee.id.slice(-8)}`;
+        const base = `checkout-${dayjs(recordWorkDate).tz(TZ).format('YYYY-MM-DD')}-${employee.id.slice(-8)}`;
         const { filename } = await processAndSavePhoto(
           selfieBuffer,
           uploadDir,
@@ -1906,6 +1930,157 @@ export class AttendanceService {
 
     // ── Allaqachon yakunlangan ─────────────────────────────────────────────────
     throw new BadRequestException('Bugun uchun davomat allaqachon yakunlangan');
+  }
+
+  /**
+   * Xodimning hozirgi smenasi uchun davomat yozuvi.
+   *
+   * Odatda — bugungi yozuv. Lekin tungi smenada (masalan 20:00–08:00) soat
+   * 02:00 da bugungi yozuv yo'q: kechagi yozuv ochiq (kelgan, ketmagan) va
+   * kutilgan ketish bugunga to'g'ri keladi. Ilgari bu holatda yangi CHECK-IN
+   * yaratilardi va tungi smena hech qachon yopilmasdi.
+   */
+  private async findSelfTarget(
+    employeeId: string,
+    eventDate: Date,
+  ): Promise<{ existing: any | null; workDate: Date; overnight: boolean }> {
+    const workDate = DateUtil.startOfDay(eventDate);
+    const today = await this.prisma.attendanceRecord.findFirst({
+      where: { employeeId, workDate },
+    });
+    if (today?.checkIn) return { existing: today, workDate, overnight: false };
+
+    const yesterday = DateUtil.startOfDay(
+      dayjs(workDate).subtract(1, 'day').toDate(),
+    );
+    const open = await this.prisma.attendanceRecord.findFirst({
+      where: {
+        employeeId,
+        workDate: yesterday,
+        checkIn: { not: null },
+        checkOut: null,
+      },
+    });
+    const now = eventDate.getTime();
+    if (
+      open?.checkIn &&
+      open.expectedCheckOut &&
+      open.expectedCheckOut.getTime() > workDate.getTime() &&
+      now - open.checkIn.getTime() < OVERNIGHT_OPEN_MAX_MS &&
+      now - open.expectedCheckOut.getTime() < OVERNIGHT_AFTER_END_MS
+    ) {
+      return { existing: open, workDate: yesterday, overnight: true };
+    }
+    return { existing: today, workDate, overnight: false };
+  }
+
+  /**
+   * Mobil check-in ekrani uchun hozirgi holat: qaysi amal kutilmoqda,
+   * joriy yozuv va smena vaqtlari. Qarorni server qiladi (selfCheckIn bilan
+   * bir xil qoida) — telefon vaqt zonasi yoki eskirgan kesh xato qildirmaydi.
+   */
+  async getSelfToday(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { employee: { select: { id: true, hospitalId: true } } },
+    });
+    if (!user?.employee) throw new NotFoundException('Xodim profili topilmadi');
+    const employeeId = user.employee.id;
+
+    const now = new Date();
+    const tzNow = dayjs(now).tz(TZ);
+    const todayDate = DateUtil.startOfDay(now);
+    const { existing, workDate, overnight } = await this.findSelfTarget(
+      employeeId,
+      now,
+    );
+    const [todaySchedule, activeSchedule] = await Promise.all([
+      this.prisma.schedule.findUnique({
+        where: { employeeId_date: { employeeId, date: todayDate } },
+        include: { shift: true },
+      }),
+      this.findTodaySchedule(employeeId, todayDate, tzNow),
+    ]);
+    const fallbackShift =
+      !activeSchedule && !existing?.expectedCheckIn
+        ? await this.findFallbackShift(user.employee.hospitalId, tzNow)
+        : null;
+
+    const action: 'CHECK_IN' | 'CHECK_OUT' | 'DONE' = !existing?.checkIn
+      ? 'CHECK_IN'
+      : !existing.checkOut
+        ? 'CHECK_OUT'
+        : 'DONE';
+    const OFF = new Set([
+      'DAY_OFF',
+      'SICK',
+      'VACATION',
+      'HOLIDAY',
+      'MATERNITY_LEAVE',
+      'OTHER_ABSENCE',
+    ]);
+    const shift = activeSchedule?.shift ?? todaySchedule?.shift ?? null;
+
+    return {
+      action,
+      /** Bugun grafik bo'yicha dam olish/ta'til va hali kelmagan */
+      dayOff:
+        action === 'CHECK_IN' &&
+        !!todaySchedule &&
+        OFF.has(String(todaySchedule.status)),
+      overnight,
+      workDate,
+      serverTime: now,
+      record: existing
+        ? {
+            id: existing.id,
+            workDate: existing.workDate,
+            checkIn: existing.checkIn,
+            checkOut: existing.checkOut,
+            status: existing.status,
+            lateMinutes: existing.lateMinutes,
+            earlyLeaveMin: existing.earlyLeaveMin,
+            overtimeMinutes: existing.overtimeMinutes,
+            netWorkMin: existing.netWorkMin,
+            expectedCheckIn: existing.expectedCheckIn,
+            expectedCheckOut: existing.expectedCheckOut,
+            faceVerified: existing.faceVerified,
+            faceCheckPending: existing.faceCheckPending,
+            gpsVerified: existing.gpsVerified,
+            checkInSource: existing.checkInSource,
+            checkInWorkSiteId: existing.checkInWorkSiteId,
+          }
+        : null,
+      schedule: todaySchedule
+        ? {
+            status: todaySchedule.status,
+            shift: todaySchedule.shift
+              ? {
+                  name: todaySchedule.shift.name,
+                  startTime: todaySchedule.shift.startTime,
+                  endTime: todaySchedule.shift.endTime,
+                  isOvernight: todaySchedule.shift.isOvernight,
+                  graceMinutes: todaySchedule.shift.graceMinutes,
+                }
+              : null,
+          }
+        : null,
+      expectedCheckIn:
+        existing?.expectedCheckIn ??
+        (activeSchedule || fallbackShift
+          ? this.buildExpectedCheckIn(workDate, activeSchedule, fallbackShift)
+          : null),
+      expectedCheckOut:
+        existing?.expectedCheckOut ??
+        (activeSchedule || fallbackShift
+          ? this.buildExpectedCheckOut(workDate, activeSchedule, fallbackShift)
+          : null),
+      shiftName: shift?.name ?? fallbackShift?.name ?? null,
+      graceMinutes:
+        shift?.graceMinutes ??
+        fallbackShift?.graceMinutes ??
+        LATE_GRACE_MINUTES,
+    };
   }
 
   // ──────────────────────────────────────────────────────────────────────────────

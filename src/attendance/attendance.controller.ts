@@ -91,6 +91,7 @@ export class AttendanceController {
     @Body('gpsLat') gpsLat?: string,
     @Body('gpsLng') gpsLng?: string,
     @Body('gpsAccuracy') gpsAccuracy?: string,
+    @Body('expectedAction') expectedAction?: string,
     @UploadedFile() file?: Express.Multer.File,
   ) {
     const dto = new SelfCheckInDto();
@@ -106,7 +107,21 @@ export class AttendanceController {
     dto.gpsLat = num(gpsLat);
     dto.gpsLng = num(gpsLng);
     dto.gpsAccuracy = num(gpsAccuracy);
+    if (expectedAction === 'CHECK_IN' || expectedAction === 'CHECK_OUT') {
+      dto.expectedAction = expectedAction;
+    }
     return this.service.selfCheckIn(userId, dto, file?.buffer);
+  }
+
+  /**
+   * Xodimning hozirgi holati — server qaror qiladi: kelish, ketish yoki
+   * yakunlangan (tungi smena yarim tundan o'tgan bo'lsa ham to'g'ri).
+   * Mobil check-in ekrani va pastki menyu shundan foydalanadi.
+   */
+  @Get('self/today')
+  @Roles(UserRole.EMPLOYEE)
+  getSelfToday(@CurrentUser('sub') userId: string) {
+    return this.service.getSelfToday(userId);
   }
 
   // XAVFSIZLIK (2026-09-23 audit): `set-hospital-gps` va `set-employee-gps`

@@ -295,6 +295,97 @@ describe('AttendanceService.selfCheckIn — Qaror 4 yuz tekshiruvi gate', () => 
     expect(faceMatch.verify).not.toHaveBeenCalled();
   });
 
+  it('ilova CHECK_OUT kutgan, lekin kelish yo‘q — 409 (ko‘r-ko‘rona check-in bo‘lmaydi)', async () => {
+    await expect(
+      service.selfCheckIn(
+        'user-1',
+        { ...dto, expectedAction: 'CHECK_OUT' } as any,
+        selfieBuffer,
+      ),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(prisma.attendanceRecord.create).not.toHaveBeenCalled();
+  });
+
+  it('kechiktirilgan yuz tekshiruvi auditda bitta DEFERRED yozuv (REJECTED emas)', async () => {
+    faceMatch.verify.mockResolvedValue({
+      mismatch: true,
+      skipped: false,
+      reason: 'SERVICE_ERROR',
+    });
+    const res = await service.selfCheckIn('user-1', dto as any, selfieBuffer);
+    expect(res.action).toBe('CHECK_IN');
+    const actions = auditLog.log.mock.calls.map((c: any[]) => c[0].action);
+    expect(actions).toEqual(['FACE_MATCH_DEFERRED']);
+  });
+
+  describe('tungi smena (yarim tundan keyin)', () => {
+    const now = Date.now();
+    const overnight = {
+      id: 'att-night',
+      workDate: new Date(now - 24 * 3600_000),
+      checkIn: new Date(now - 6 * 3600_000),
+      checkOut: null,
+      status: 'PRESENT',
+      lateMinutes: 0,
+      // kutilgan ketish — 4 soatdan keyin (bugun)
+      expectedCheckOut: new Date(now + 4 * 3600_000),
+      lunchOut: null,
+      lunchIn: null,
+    };
+
+    it('bugungi yozuv yo‘q, kechagi ochiq — kechagi yozuv yopiladi (yangi check-in emas)', async () => {
+      prisma.attendanceRecord.findFirst
+        .mockResolvedValueOnce(null) // bugun
+        .mockResolvedValueOnce(overnight); // kechagi ochiq
+      const res = await service.selfCheckIn('user-1', dto as any, undefined);
+      expect(res.action).toBe('CHECK_OUT');
+      expect(prisma.attendanceRecord.create).not.toHaveBeenCalled();
+      expect(prisma.attendanceRecord.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'att-night' } }),
+      );
+    });
+
+    it('kechagi ochiq yozuv kunduzgi smena (ketish kecha edi) — yangi check-in', async () => {
+      prisma.attendanceRecord.findFirst
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({
+          ...overnight,
+          checkIn: new Date(now - 18 * 3600_000),
+          expectedCheckOut: new Date(now - 30 * 3600_000),
+        });
+      faceMatch.verify.mockResolvedValue({ mismatch: false, skipped: false });
+      const res = await service.selfCheckIn('user-1', dto as any, selfieBuffer);
+      expect(res.action).toBe('CHECK_IN');
+      expect(prisma.attendanceRecord.create).toHaveBeenCalled();
+    });
+
+    it('getSelfToday — tungi smenada CHECK_OUT va overnight=true', async () => {
+      prisma.attendanceRecord.findFirst
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(overnight);
+      const st = await service.getSelfToday('user-1');
+      expect(st).toMatchObject({
+        action: 'CHECK_OUT',
+        overnight: true,
+        dayOff: false,
+      });
+      expect(st.record?.id).toBe('att-night');
+    });
+  });
+
+  it('getSelfToday — dam olish kuni va kelmagan: dayOff=true, CHECK_IN', async () => {
+    prisma.schedule.findUnique.mockResolvedValue({
+      status: 'DAY_OFF',
+      shift: null,
+    });
+    const st = await service.getSelfToday('user-1');
+    expect(st).toMatchObject({
+      action: 'CHECK_IN',
+      dayOff: true,
+      record: null,
+    });
+  });
+
   describe('CHECK_OUT (4c)', () => {
     const openRecord = {
       id: 'att-1',
@@ -348,6 +439,32 @@ describe('AttendanceService.selfCheckIn — Qaror 4 yuz tekshiruvi gate', () => 
       });
       const res = await service.selfCheckIn('user-1', dto as any, selfieBuffer);
       expect(res.action).toBe('CHECK_OUT');
+    });
+
+    it("profil rasmi yo'q (kelishda kechiktirilgan) xodim ketishda bloklanmaydi", async () => {
+      prisma.liveLocation.count.mockResolvedValue(1);
+      faceMatch.verify.mockResolvedValue({
+        mismatch: true,
+        skipped: false,
+        reason: 'NO_REFERENCE_PHOTO',
+      });
+      const res = await service.selfCheckIn('user-1', dto as any, selfieBuffer);
+      expect(res.action).toBe('CHECK_OUT');
+      expect(auditLog.log).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'FACE_MATCH_SKIPPED' }),
+      );
+    });
+
+    it('ilova CHECK_IN kutgan, lekin kelish allaqachon qayd etilgan — 409, hech narsa yozilmaydi', async () => {
+      await expect(
+        service.selfCheckIn(
+          'user-1',
+          { ...dto, expectedAction: 'CHECK_IN' } as any,
+          selfieBuffer,
+        ),
+      ).rejects.toMatchObject({ status: 409 });
+      expect(prisma.attendanceRecord.update).not.toHaveBeenCalled();
+      expect(faceMatch.verify).not.toHaveBeenCalled();
     });
 
     it('check-out kelish selfisini ustidan yozmaydi', async () => {

@@ -85,6 +85,18 @@ export class FaceMatchService {
       );
       data = res.data;
     } catch (e: any) {
+      // 400 — xizmat ishlayapti, lekin rasmni o'qiy olmadi (rasmlar oldindan
+      // qayta kodlanadi, demak muammo jonli suratda). Buni "xizmat ishlamadi"
+      // deb hisoblash xavfli: SERVICE_ERROR check-in'da kechiktiriladi va
+      // yuz tekshiruvini chetlab o'tish yo'li bo'lib qolardi.
+      if (e?.response?.status === 400) {
+        this.logger.warn(
+          `Face-match: rasm o'qilmadi (HTTP 400) — ${JSON.stringify(e.response.data ?? '').slice(0, 200)}`,
+        );
+        return MODE === 'strict'
+          ? { skipped: false, mismatch: true, reason: 'LIVE_FACE_NOT_FOUND' }
+          : { skipped: true, mismatch: false, reason: 'LIVE_FACE_NOT_FOUND' };
+      }
       this.logger.warn(
         `Face-match xizmati ishlamadi (${SERVICE_URL}): ${e?.message ?? e}`,
       );

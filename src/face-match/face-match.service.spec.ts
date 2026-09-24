@@ -178,4 +178,25 @@ describe('FaceMatchService.verify — Qaror 4 (yuz tekshiruvi)', () => {
     expect(res.mismatch).toBe(true);
     expect(res.reason).toBe('SERVICE_ERROR');
   });
+
+  it("xizmat 400 qaytarsa (rasm o'qilmadi) — SERVICE_ERROR emas, LIVE_FACE_NOT_FOUND (kechiktirilmaydi)", async () => {
+    process.env.FACE_MATCH_MODE = 'strict';
+    mockedAxios.post.mockRejectedValue(
+      Object.assign(new Error('Bad Request'), {
+        response: { status: 400, data: { detail: 'bad image' } },
+      }),
+    );
+    const res = await svc.verify(ref, live);
+    expect(res.mismatch).toBe(true);
+    expect(res.reason).toBe('LIVE_FACE_NOT_FOUND');
+  });
+
+  it('xizmat 500 qaytarsa — SERVICE_ERROR', async () => {
+    process.env.FACE_MATCH_MODE = 'strict';
+    mockedAxios.post.mockRejectedValue(
+      Object.assign(new Error('boom'), { response: { status: 500 } }),
+    );
+    const res = await svc.verify(ref, live);
+    expect(res.reason).toBe('SERVICE_ERROR');
+  });
 });
