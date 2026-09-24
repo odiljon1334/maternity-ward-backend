@@ -216,6 +216,57 @@ describe("TelegramService — obuna to'lovi qaysi muassasaga", () => {
     );
   });
 
+  it("invoys Telegram'ga to'g'ri shaklda yuboriladi (title, summa tiyinda)", async () => {
+    const h = payHarness(['h1']);
+    h.billing.createInvoice = jest.fn(async () => ({
+      invoiceId: 'inv-1',
+      payload: 'inv:inv-1',
+      amountSom: 599000,
+      amountMinor: 59900000,
+      coverage: 'Sentabr 2026',
+      employeeCount: 2,
+      pricing: {
+        isFlat: true,
+        planLabel: 'Start',
+        perEmployeeMonthly: null,
+        perEmployeeAnnual: null,
+      },
+    }));
+    h.billing.cancelInvoice = jest.fn(async () => undefined);
+    const calls: Array<[string, any]> = [];
+    const spy = jest
+      .spyOn(Telegram.prototype as any, 'callApi')
+      .mockImplementation(async (method: any, payload: any) => {
+        calls.push([method, payload]);
+        return true;
+      });
+    const config: any = {
+      get: jest.fn((k: string) =>
+        k === 'TELEGRAM_PAYMENT_TOKEN' ? 'tok' : undefined,
+      ),
+    };
+    const service = new TelegramService(config, h.prisma, h.access, h.billing);
+    const bot = new Telegraf('123:TEST');
+    (bot as any).botInfo = { id: 1, is_bot: true, username: 'test_bot' };
+    (service as any).bot = bot;
+    (service as any).setupCommands();
+    await bot.handleUpdate(
+      callbackUpdate(LINKED_CHAT, 'pay_monthly:h1') as any,
+    );
+    spy.mockRestore();
+
+    const sent = calls.find(([m]) => m === 'sendInvoice');
+    expect(sent).toBeDefined();
+    const p = sent![1];
+    expect(p.title).toBe('📅 Oylik obuna');
+    expect(p.description).toContain('Klinika');
+    expect(p.payload).toBe('inv:inv-1');
+    expect(p.provider_token).toBe('tok');
+    expect(p.currency).toBe('UZS');
+    expect(p.prices).toEqual([{ label: 'Sentabr 2026', amount: 59900000 }]);
+    expect(h.billing.cancelInvoice).not.toHaveBeenCalled();
+  });
+
   it('ulanmagan chat — invoys yaratilmaydi', async () => {
     const h = await run(['h1'], STRANGER_CHAT, 'pay_monthly:h1');
     expect(h.billing.createInvoice).not.toHaveBeenCalled();

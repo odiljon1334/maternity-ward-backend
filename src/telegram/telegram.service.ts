@@ -1,7 +1,8 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
-import { Telegraf, Markup } from 'telegraf';
+import { Telegraf, Markup, type Context } from 'telegraf';
+import type { NewInvoiceParameters } from 'telegraf/typings/telegram-types';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as https from 'https';
@@ -520,25 +521,27 @@ export class TelegramService implements OnModuleInit {
           : `👥 ${inv.employeeCount} nafar xodim × ${perUnitLabel!.toLocaleString()} so'm`);
 
       try {
-        await ctx.replyWithInvoice(
+        // Telegraf v4: sendInvoice BITTA obyekt qabul qiladi. Ilgari eski
+        // (v3) pozitsion argumentlar bilan chaqirilardi — Telegram'ga `title`
+        // umuman bormasdi: "400: parameter "title" is required".
+        const invoice: NewInvoiceParameters = {
           title,
-          descriptionLine,
-          inv.payload, // "inv:<id>" — summa/muddat serverdagi yozuvdan olinadi
-          paymentToken,
-          'UZS',
-          [
+          description: descriptionLine,
+          payload: inv.payload, // "inv:<id>" — summa/muddat serverdagi yozuvdan olinadi
+          provider_token: paymentToken,
+          currency: 'UZS',
+          prices: [
             {
               label: inv.coverage,
               // Telegram eng kichik birlikda kutadi: UZS exp=2 → so'm × 100
               amount: inv.amountMinor,
             },
           ],
-          {
-            photo_url: 'https://clinicuk24.com/icons/icon-192x192.png',
-            need_name: false,
-            send_phone_number: false,
-          },
-        );
+          photo_url: 'https://clinicuk24.com/icons/icon-192x192.png',
+          need_name: false,
+          need_phone_number: false,
+        };
+        await (ctx as Context).replyWithInvoice(invoice);
       } catch (e) {
         // Masalan summa to'lov tizimi chegarasidan katta — invoys ochiq qolmasin
         this.logger.error(
