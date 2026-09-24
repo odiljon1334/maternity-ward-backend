@@ -19,6 +19,7 @@ import { TenantScopeGuard } from '../common/guards/tenant-scope.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { WorkSitesService } from './work-sites.service';
+import { PlaceSearchService } from './place-search.service';
 import {
   ApproveLegacyCenterDto,
   CreateWorkSiteDto,
@@ -51,7 +52,30 @@ export function resolveWorkSiteHospital(
 @Controller('work-sites')
 @UseGuards(JwtAuthGuard, RolesGuard, TenantScopeGuard)
 export class WorkSitesController {
-  constructor(private readonly svc: WorkSitesService) {}
+  constructor(
+    private readonly svc: WorkSitesService,
+    private readonly places: PlaceSearchService,
+  ) {}
+
+  /**
+   * Ish joyi manzilini nomi bo'yicha qidirish ("1-maktab Andijon"), yoki
+   * koordinata / Yandex·Google xarita havolasini qo'yish. Natijalar muassasa
+   * markaziga yaqinlari bo'yicha tartiblanadi.
+   */
+  @Get('place-search')
+  @Roles(...MANAGERS)
+  placeSearch(
+    @Query('q') q: string,
+    @CurrentUser('hospitalId') jwt: string | null,
+    @CurrentUser('sub') userId: string,
+    @Query('targetHospitalId') target?: string,
+  ) {
+    return this.places.search(
+      (q ?? '').slice(0, 200),
+      resolveWorkSiteHospital(jwt, target),
+      userId,
+    );
+  }
 
   /** Xodim uchun: check-in qila oladigan joylari */
   @Get('my')
