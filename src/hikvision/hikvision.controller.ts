@@ -174,7 +174,9 @@ export class HikvisionController {
     return this.hikvision.toggleTerminal(id, hospitalId, body.isActive);
   }
 
-  // Bulk sync
+  // Bulk sync — fon vazifasi: POST darhol javob beradi (ishlayotgan bo'lsa —
+  // o'sha ish), GET — holat va progress. Ilgari bitta uzun so'rov edi va
+  // proxy/brauzer uzilsa natija yo'qolardi.
   @Post('sync/:hospitalId')
   @UseGuards(RolesGuard, TenantScopeGuard)
   @Roles(...TERMINAL_ROLES)
@@ -186,7 +188,21 @@ export class HikvisionController {
     if (!isSuperLike(role) && hospitalId !== jwtHospitalId) {
       throw new ForbiddenException("Bu shifoxonaga ruxsatingiz yo'q");
     }
-    return this.hikvision.syncHospital(hospitalId);
+    return this.hikvision.startSync(hospitalId);
+  }
+
+  @Get('sync/:hospitalId')
+  @UseGuards(RolesGuard, TenantScopeGuard)
+  @Roles(...TERMINAL_ROLES)
+  syncStatus(
+    @Param('hospitalId') hospitalId: string,
+    @CurrentUser('role') role: UserRole,
+    @CurrentUser('hospitalId') jwtHospitalId: string | null,
+  ) {
+    if (!isSuperLike(role) && hospitalId !== jwtHospitalId) {
+      throw new ForbiddenException("Bu shifoxonaga ruxsatingiz yo'q");
+    }
+    return this.hikvision.getSyncStatus(hospitalId);
   }
 
   // Reboot — faqat admin, chunki terminal ~30-90s offline bo'lib qoladi

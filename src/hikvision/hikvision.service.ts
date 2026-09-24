@@ -115,6 +115,7 @@ export class HikvisionService {
     method: string,
     requestUrl: string,
     wwwAuthenticate: string,
+    nonceCount = 1,
   ): string {
     const { realm, nonce, qop, algorithm } =
       this.parseDigestChallenge(wwwAuthenticate);
@@ -138,7 +139,7 @@ export class HikvisionService {
     let response: string;
 
     if (qop) {
-      const nc = '00000001';
+      const nc = nonceCount.toString(16).padStart(8, '0');
       const cnonce = crypto.randomBytes(16).toString('hex');
 
       response = crypto
@@ -175,10 +176,91 @@ export class HikvisionService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // Generic Digest request
+  // Digest request (JSON va multipart uchun yagona)
   // ═══════════════════════════════════════════════════════════════════════════
 
-  private async digestRequest<T = any>(
+  /**
+   * Digest challenge keshlanadi va keyingi so'rovlar DARHOL Authorization
+   * bilan yuboriladi (nc oshib boradi). Ilgari HAR BIR so'rov ikki marta
+   * ketardi (avval 401 olish uchun, keyin haqiqiy) — yuz rasmi esa ikki
+   * marta yuklanardi. Gateway nonce'ni eskirgan deb topsa (401) — yangi
+   * challenge bilan bir marta qayta yuboriladi.
+   */
+  private digestState: { challenge: string; nc: number } | null = null;
+
+  private digestAuthFor(method: string, requestUrl: string): string {
+    const st = this.digestState!;
+    st.nc += 1;
+    return this.createDigestAuthorization(
+      method,
+      requestUrl,
+      st.challenge,
+      st.nc,
+    );
+  }
+
+  private async sendDigest<T = any>(
+    method: string,
+    requestUrl: string,
+    build: () => { data?: any; headers?: Record<string, string> },
+    timeout: number,
+  ): Promise<AxiosResponse<T>> {
+    const methodUpper = method.toUpperCase();
+
+    const send = async (authorization?: string) => {
+      // FormData — oqim: har yuborishda yangisi yaratiladi (build())
+      const { data, headers } = build();
+      try {
+        return await axios.request<T>({
+          method: methodUpper,
+          url: requestUrl,
+          data,
+          headers: {
+            Accept: 'application/json',
+            ...(headers ?? {}),
+            ...(authorization ? { Authorization: authorization } : {}),
+          },
+          timeout,
+          maxContentLength: Infinity,
+          maxBodyLength: Infinity,
+          validateStatus: () => true,
+        });
+      } catch (error: any) {
+        throw this.normalizeAxiosError(error);
+      }
+    };
+
+    let response = await send(
+      this.digestState
+        ? this.digestAuthFor(methodUpper, requestUrl)
+        : undefined,
+    );
+    if (response.status !== 401) return this.ensureOk(response);
+
+    const wwwAuthenticate = response.headers['www-authenticate'];
+    if (!wwwAuthenticate) {
+      throw new Error(
+        `Gateway returned 401 but WWW-Authenticate header is missing`,
+      );
+    }
+    this.digestState = {
+      challenge: Array.isArray(wwwAuthenticate)
+        ? wwwAuthenticate.join(', ')
+        : String(wwwAuthenticate),
+      nc: 0,
+    };
+
+    response = await send(this.digestAuthFor(methodUpper, requestUrl));
+    if (response.status === 401) this.digestState = null; // login/parol noto'g'ri
+    return this.ensureOk(response);
+  }
+
+  private ensureOk<T>(response: AxiosResponse<T>): AxiosResponse<T> {
+    if (response.status >= 400) throw this.createHttpError(response);
+    return response;
+  }
+
+  private digestRequest<T = any>(
     method: string,
     requestUrl: string,
     options: {
@@ -186,192 +268,28 @@ export class HikvisionService {
       headers?: Record<string, string>;
     } = {},
   ): Promise<AxiosResponse<T>> {
-    const methodUpper = method.toUpperCase();
-
-    const baseHeaders: Record<string, string> = {
-      Accept: 'application/json',
-      ...(options.headers ?? {}),
-    };
-
-    /*
-     * IMPORTANT:
-     *
-     * First request is intentionally sent without Authorization.
-     * Gateway returns:
-     *
-     * HTTP 401
-     * WWW-Authenticate: Digest ...
-     *
-     * Then we calculate Digest and repeat the request.
-     */
-
-    let firstResponse: AxiosResponse<T>;
-
-    try {
-      firstResponse = await axios.request<T>({
-        method: methodUpper,
-        url: requestUrl,
-        data: options.data,
-        headers: baseHeaders,
-        timeout: 15_000,
-        validateStatus: () => true,
-      });
-    } catch (error: any) {
-      throw this.normalizeAxiosError(error);
-    }
-
-    if (firstResponse.status !== 401) {
-      if (firstResponse.status >= 400) {
-        throw this.createHttpError(firstResponse);
-      }
-
-      return firstResponse;
-    }
-
-    const wwwAuthenticate = firstResponse.headers['www-authenticate'];
-
-    if (!wwwAuthenticate) {
-      throw new Error(
-        `Gateway returned 401 but WWW-Authenticate header is missing`,
-      );
-    }
-
-    const authorization = this.createDigestAuthorization(
-      methodUpper,
+    return this.sendDigest<T>(
+      method,
       requestUrl,
-      wwwAuthenticate,
+      () => ({ data: options.data, headers: options.headers }),
+      15_000,
     );
-
-    const retryHeaders: Record<string, string> = {
-      ...baseHeaders,
-      Authorization: authorization,
-    };
-
-    let retryResponse: AxiosResponse<T>;
-
-    try {
-      retryResponse = await axios.request<T>({
-        method: methodUpper,
-        url: requestUrl,
-        data: options.data,
-        headers: retryHeaders,
-        timeout: 15_000,
-        validateStatus: () => true,
-      });
-    } catch (error: any) {
-      throw this.normalizeAxiosError(error);
-    }
-
-    if (retryResponse.status >= 400) {
-      throw this.createHttpError(retryResponse);
-    }
-
-    return retryResponse;
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // Multipart Digest request
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  private async digestMultipartRequest<T = any>(
+  private digestMultipartRequest<T = any>(
     method: string,
     requestUrl: string,
     createForm: () => FormData,
   ): Promise<AxiosResponse<T>> {
-    const methodUpper = method.toUpperCase();
-
-    /*
-     * IMPORTANT:
-     *
-     * FormData is a stream.
-     *
-     * We CANNOT create one FormData and reuse it after 401.
-     *
-     * Therefore createForm() is called twice:
-     *
-     * 1. First unauthenticated request
-     * 2. Digest authenticated request
-     */
-
-    const firstForm = createForm();
-
-    const firstHeaders: Record<string, string> = {
-      Accept: 'application/json',
-      ...firstForm.getHeaders(),
-    };
-
-    let firstResponse: AxiosResponse<T>;
-
-    try {
-      firstResponse = await axios.request<T>({
-        method: methodUpper,
-        url: requestUrl,
-        data: firstForm,
-        headers: firstHeaders,
-        timeout: 30_000,
-        maxContentLength: Infinity,
-        maxBodyLength: Infinity,
-        validateStatus: () => true,
-      });
-    } catch (error: any) {
-      throw this.normalizeAxiosError(error);
-    }
-
-    if (firstResponse.status !== 401) {
-      if (firstResponse.status >= 400) {
-        throw this.createHttpError(firstResponse);
-      }
-
-      return firstResponse;
-    }
-
-    const wwwAuthenticate = firstResponse.headers['www-authenticate'];
-
-    if (!wwwAuthenticate) {
-      throw new Error(
-        `Gateway returned 401 but WWW-Authenticate header is missing`,
-      );
-    }
-
-    const authorization = this.createDigestAuthorization(
-      methodUpper,
+    return this.sendDigest<T>(
+      method,
       requestUrl,
-      wwwAuthenticate,
+      () => {
+        const form = createForm();
+        return { data: form, headers: form.getHeaders() };
+      },
+      30_000,
     );
-
-    /*
-     * NEW FormData object.
-     */
-    const retryForm = createForm();
-
-    const retryHeaders: Record<string, string> = {
-      Accept: 'application/json',
-      ...retryForm.getHeaders(),
-      Authorization: authorization,
-    };
-
-    let retryResponse: AxiosResponse<T>;
-
-    try {
-      retryResponse = await axios.request<T>({
-        method: methodUpper,
-        url: requestUrl,
-        data: retryForm,
-        headers: retryHeaders,
-        timeout: 30_000,
-        maxContentLength: Infinity,
-        maxBodyLength: Infinity,
-        validateStatus: () => true,
-      });
-    } catch (error: any) {
-      throw this.normalizeAxiosError(error);
-    }
-
-    if (retryResponse.status >= 400) {
-      throw this.createHttpError(retryResponse);
-    }
-
-    return retryResponse;
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -516,21 +434,29 @@ export class HikvisionService {
   // Add Face Picture
   // ═══════════════════════════════════════════════════════════════════════════
 
+  /** Terminal uchun yuz rasmi: ≤600px JPEG (bir marta tayyorlab, bir necha terminalga) */
+  compressFace(imageBuffer: Buffer): Promise<Buffer> {
+    return sharp(imageBuffer)
+      .rotate()
+      .resize(600, 600, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 80, mozjpeg: false })
+      .toBuffer();
+  }
+
   async addFacePicture(
     devIndex: string,
     employeeNo: string,
     imageBuffer: Buffer,
+    opts: { compressed?: boolean } = {},
   ) {
     if (!devIndex) throw new Error('Hikvision devIndex is required');
     if (!employeeNo) throw new Error('Hikvision employeeNo is required');
     if (!imageBuffer || imageBuffer.length === 0)
       throw new Error('Hikvision face image is empty');
 
-    const compressed = await sharp(imageBuffer)
-      .rotate()
-      .resize(600, 600, { fit: 'inside', withoutEnlargement: true })
-      .jpeg({ quality: 80, mozjpeg: false })
-      .toBuffer();
+    const compressed = opts.compressed
+      ? imageBuffer
+      : await this.compressFace(imageBuffer);
 
     this.logger.log(
       `Hikvision Face upload: employee=${employeeNo}, devIndex=${devIndex}, ` +
@@ -800,7 +726,7 @@ export class HikvisionService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // Bulk Sync
+  // Yordamchilar: "allaqachon mavjud", reboot, mavjud userlar ro'yxati
   // ═══════════════════════════════════════════════════════════════════════════
 
   /**
@@ -885,186 +811,402 @@ export class HikvisionService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // Bulk Sync — mavjud (person + face) bo'lganlarni skip qiladi
+  // Bulk Sync — fon vazifasi (progress bilan), mavjudlarini skip qiladi
   // ═══════════════════════════════════════════════════════════════════════════
+  //
+  // Ilgari sync bitta HTTP so'rov ichida ketma-ket bajarilardi: 100+ xodim ×
+  // bir nechta terminalda so'rov daqiqalab osilib turar, proxy/brauzer
+  // uzilsa "xatolik" chiqib natija yo'qolardi, terminal o'chiq bo'lsa har
+  // xodim uchun 15 soniya timeout kutilardi. Endi:
+  //  - POST darhol javob qaytaradi, ish fonda davom etadi; GET — holat/progress.
+  //  - Bir muassasada bir vaqtda faqat bitta sync (qayta bosish — o'sha ish).
+  //  - Terminallar parallel (HIK_SYNC_TERMINAL_CONCURRENCY, standart 3),
+  //    bitta terminalga bir vaqtda HIK_SYNC_DEVICE_CONCURRENCY (standart 1).
+  //  - Vaqtinchalik xatolar (timeout, uzilish, 5xx, band) 2 marta qayta sinaladi.
+  //  - Terminal ketma-ket 3 marta javob bermasa — qolgan xodimlar kutilmaydi,
+  //    bitta aniq xato bilan to'xtatiladi.
+  //  - Yuz rasmi har xodim uchun bir marta siqiladi (har terminal uchun emas).
 
-  async syncHospital(hospitalId: string) {
-    const terminals = await this.prisma.hikTerminal.findMany({
-      where: { hospitalId, isActive: true },
+  private readonly syncJobs = new Map<string, HikSyncJob>();
+
+  /** Sync'ni boshlaydi (yoki ishlayotganini qaytaradi) — darhol javob beradi */
+  startSync(hospitalId: string): HikSyncJob {
+    this.pruneSyncJobs();
+    const running = this.syncJobs.get(hospitalId);
+    if (running?.state === 'RUNNING') return this.snapshot(running);
+
+    const job: HikSyncJob = {
+      id: crypto.randomUUID(),
+      hospitalId,
+      state: 'RUNNING',
+      total: 0,
+      withoutPhoto: 0,
+      units: 0,
+      done: 0,
+      created: 0,
+      skipped: 0,
+      failed: 0,
+      errors: [],
+      errorsTruncated: 0,
+      perTerminal: [],
+      startedAt: new Date().toISOString(),
+      finishedAt: null,
+      message: null,
+    };
+    this.syncJobs.set(hospitalId, job);
+    void this.runSync(job).catch((err: any) => {
+      this.logger.error(
+        `Sync ishdan chiqdi (hospital=${hospitalId}): ${err?.message ?? err}`,
+      );
+      job.state = 'FAILED';
+      job.message =
+        "Sinxronlash kutilmagan xato bilan to'xtadi. Qayta urinib ko'ring.";
+      job.finishedAt = new Date().toISOString();
     });
+    return this.snapshot(job);
+  }
 
+  /** Oxirgi (yoki ishlayotgan) sync holati; hech qachon ishga tushmagan bo'lsa — null */
+  getSyncStatus(hospitalId: string): HikSyncJob | null {
+    this.pruneSyncJobs();
+    const job = this.syncJobs.get(hospitalId);
+    return job ? this.snapshot(job) : null;
+  }
+
+  /** Sync'ni boshlab, tugashini kutadi (skriptlar va testlar uchun) */
+  async syncHospital(hospitalId: string): Promise<HikSyncJob> {
+    this.startSync(hospitalId);
+    const job = this.syncJobs.get(hospitalId)!;
+    while (job.state === 'RUNNING') {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return this.snapshot(job);
+  }
+
+  private snapshot(job: HikSyncJob): HikSyncJob {
+    return {
+      ...job,
+      errors: [...job.errors],
+      perTerminal: job.perTerminal.map((t) => ({ ...t })),
+    };
+  }
+
+  private pruneSyncJobs() {
+    const cutoff = Date.now() - SYNC_JOB_TTL_MS;
+    for (const [id, j] of this.syncJobs) {
+      if (
+        j.state !== 'RUNNING' &&
+        j.finishedAt &&
+        Date.parse(j.finishedAt) < cutoff
+      )
+        this.syncJobs.delete(id);
+    }
+  }
+
+  private pushSyncError(job: HikSyncJob, e: HikSyncError) {
+    if (job.errors.length < SYNC_MAX_ERRORS) job.errors.push(e);
+    else job.errorsTruncated++;
+  }
+
+  private async runSync(job: HikSyncJob): Promise<void> {
+    const terminals = await this.prisma.hikTerminal.findMany({
+      where: { hospitalId: job.hospitalId, isActive: true },
+    });
     if (terminals.length === 0) {
-      return {
-        total: 0,
-        created: 0,
-        skipped: 0,
-        failed: 0,
-        errors: [{ employeeNo: '-', name: '-', reason: 'Terminal topilmadi' }],
-        perTerminal: [],
-      };
+      this.pushSyncError(job, {
+        employeeNo: '-',
+        name: '-',
+        reason: 'Faol terminal topilmadi',
+      });
+      job.state = 'DONE';
+      job.finishedAt = new Date().toISOString();
+      return;
     }
 
-    const employees = await this.prisma.employee.findMany({
+    const all = await this.prisma.employee.findMany({
       where: {
-        hospitalId,
+        hospitalId: job.hospitalId,
         firedAt: null,
         employeeNo: { not: null },
-        photoUrl: { not: null },
       },
       select: { employeeNo: true, fullName: true, photoUrl: true },
     });
+    const employees = all.filter((e) => !!e.employeeNo && !!e.photoUrl);
+    job.withoutPhoto = all.length - employees.length;
+    job.total = employees.length;
+    job.units = employees.length * terminals.length;
 
     const uploadDir = this.config.get<string>('UPLOAD_DIR', './uploads');
 
-    let created = 0;
-    let skipped = 0;
-    let failed = 0;
-    const errors: { employeeNo: string; name: string; reason: string }[] = [];
-    const perTerminal: {
-      terminalId: string;
-      terminalName: string;
-      created: number;
-      skipped: number;
-      failed: number;
-    }[] = [];
-
-    for (const terminal of terminals) {
-      let tCreated = 0;
-      let tSkipped = 0;
-      let tFailed = 0;
-
-      // Terminaldagi mavjud userlar: employeeNo → hasFace (bitta so'rov, aniq)
-      let existing: Map<string, boolean>;
-      try {
-        existing = await this.getExistingPersons(terminal.devIndex);
-      } catch (err: any) {
-        this.logger.warn(
-          `Terminal ${terminal.name}: mavjud ro'yxatni olishda xato (${err?.message}) — hammasi qayta yuboriladi`,
+    // Yuz rasmi har xodim uchun BIR marta o'qiladi va siqiladi
+    const faces = new Map<string, Promise<Buffer | null>>();
+    const faceOf = (e: {
+      employeeNo: string | null;
+      photoUrl: string | null;
+    }) => {
+      const key = e.employeeNo!;
+      let p = faces.get(key);
+      if (!p) {
+        const file = path.join(
+          uploadDir,
+          e.photoUrl!.replace(/^\/uploads\//, ''),
         );
-        existing = new Map();
+        p = fs.promises
+          .readFile(file)
+          .then((buf) => this.compressFace(buf))
+          .catch(() => null);
+        faces.set(key, p);
       }
+      return p;
+    };
+    const missingReported = new Set<string>();
 
-      for (const employee of employees) {
-        if (!employee.employeeNo || !employee.photoUrl) continue;
+    const terminalLimit = envInt(
+      this.config.get('HIK_SYNC_TERMINAL_CONCURRENCY'),
+      3,
+    );
+    const deviceLimit = envInt(
+      this.config.get('HIK_SYNC_DEVICE_CONCURRENCY'),
+      1,
+    );
 
-        const filename = employee.photoUrl.replace(/^\/uploads\//, '');
-        const filePath = path.join(uploadDir, filename);
-
-        if (!fs.existsSync(filePath)) {
-          tFailed++;
-          errors.push({
-            employeeNo: employee.employeeNo,
-            name: employee.fullName,
-            reason: `Rasm fayli topilmadi (${terminal.name})`,
-          });
-          continue;
-        }
-
-        const personExists = existing.has(employee.employeeNo);
-        const faceExists = existing.get(employee.employeeNo) === true;
-
-        let personIsNew = false;
-        let faceIsNew = false;
-        let hadFatalError = false;
-
-        // ── 1. Person ──────────────────────────────────────────────────────
-        if (!personExists) {
-          try {
-            await this.addPerson(terminal.devIndex, {
-              employeeNo: employee.employeeNo,
-              name: employee.fullName,
-            });
-            personIsNew = true;
-          } catch (err: any) {
-            // isAlreadyExistsError texnik xabar (err.message) bilan tekshiriladi
-            const technicalMessage = err?.message ?? "Noma'lum xato";
-            if (!this.isAlreadyExistsError(technicalMessage)) {
-              hadFatalError = true;
-              tFailed++;
-              // Foydalanuvchi ko'radigan xato ro'yxatiga — tarjima qilingan matn
-              const displayMessage = err?.friendlyMessage ?? technicalMessage;
-              errors.push({
-                employeeNo: employee.employeeNo,
-                name: employee.fullName,
-                reason: `${terminal.name}: ${displayMessage}`,
-              });
-              // Texnik tafsilotlar faqat serverning ichki logida qoladi
-              this.logger.error(
-                `[Person xatoligi | ${employee.employeeNo} @ ${terminal.name}] ${technicalMessage}`,
-              );
-            }
-          }
-        }
-
-        // ── 2. Face — faqat hali yo'q bo'lsa yuklaymiz ──────────────────────
-        if (!hadFatalError && !faceExists) {
-          try {
-            const imageBuffer = fs.readFileSync(filePath);
-            await this.addFacePicture(
-              terminal.devIndex,
-              employee.employeeNo,
-              imageBuffer,
-            );
-            faceIsNew = true;
-          } catch (err: any) {
-            // isAlreadyExistsError texnik xabar (err.message) bilan tekshiriladi
-            const technicalMessage = err?.message ?? "Noma'lum xato";
-            if (!this.isAlreadyExistsError(technicalMessage)) {
-              hadFatalError = true;
-              tFailed++;
-              // Foydalanuvchi ko'radigan xato ro'yxatiga — tarjima qilingan matn
-              // (masalan: "Yuz rasmi terminal tomonidan tan olinmadi...")
-              const displayMessage = err?.friendlyMessage ?? technicalMessage;
-              errors.push({
-                employeeNo: employee.employeeNo,
-                name: employee.fullName,
-                reason: `${terminal.name}: ${displayMessage}`,
-              });
-              // Texnik tafsilotlar (errorCode, subStatusCode va h.k.)
-              // faqat serverning ichki logida qoladi — debug uchun
-              this.logger.error(
-                `[Yuz yuklash xatoligi | ${employee.employeeNo} @ ${terminal.name}] ${technicalMessage}`,
-              );
-            }
-          }
-        }
-
-        if (hadFatalError) {
-          this.logger.error(
-            `Sync failed: ${employee.employeeNo} → ${terminal.name}`,
-          );
-          continue;
-        }
-
-        if (personIsNew || faceIsNew) {
-          tCreated++;
-          this.logger.log(
-            `Sync created: ${employee.employeeNo} → ${terminal.name}`,
-          );
-        } else {
-          tSkipped++;
-        }
-      }
-
-      created += tCreated;
-      skipped += tSkipped;
-      failed += tFailed;
-      perTerminal.push({
+    await runPool(terminals, terminalLimit, async (terminal) => {
+      const stat = {
         terminalId: terminal.id,
         terminalName: terminal.name,
-        created: tCreated,
-        skipped: tSkipped,
-        failed: tFailed,
-      });
-    }
+        created: 0,
+        skipped: 0,
+        failed: 0,
+        aborted: false,
+      };
+      job.perTerminal.push(stat);
 
-    return {
-      total: employees.length,
-      created,
-      skipped,
-      failed,
-      errors,
-      perTerminal,
-    };
+      const fail = (n = 1) => {
+        stat.failed += n;
+        job.failed += n;
+        job.done += n;
+      };
+
+      // Terminaldagi mavjud userlar: employeeNo → hasFace
+      let existing: Map<string, boolean>;
+      try {
+        existing = await this.withRetry(() =>
+          this.getExistingPersons(terminal.devIndex),
+        );
+      } catch (err: any) {
+        stat.aborted = true;
+        fail(employees.length);
+        this.pushSyncError(job, {
+          employeeNo: '-',
+          name: terminal.name,
+          reason: `${terminal.name}: terminal javob bermadi (${err?.friendlyMessage ?? err?.message ?? 'xato'}) — ${employees.length} xodim yuborilmadi. Terminal internetga ulanganini tekshirib, qayta urinib ko'ring.`,
+        });
+        this.logger.error(
+          `Sync: ${terminal.name} ro'yxatini olib bo'lmadi: ${err?.message}`,
+        );
+        return;
+      }
+
+      let consecutiveNetFails = 0;
+      let remaining = employees.length;
+
+      await runPool(employees, deviceLimit, async (employee) => {
+        if (stat.aborted) return; // qolganlari pastda bir yo'la hisoblanadi
+        remaining--;
+        const employeeNo = employee.employeeNo!;
+        const personExists = existing.has(employeeNo);
+        const faceExists = existing.get(employeeNo) === true;
+        if (personExists && faceExists) {
+          stat.skipped++;
+          job.skipped++;
+          job.done++;
+          return;
+        }
+
+        const face = faceExists ? null : await faceOf(employee);
+        if (!faceExists && !face) {
+          fail();
+          if (!missingReported.has(employeeNo)) {
+            missingReported.add(employeeNo);
+            this.pushSyncError(job, {
+              employeeNo,
+              name: employee.fullName,
+              reason:
+                "Profil rasmi fayli topilmadi yoki o'qib bo'lmadi — rasmni qayta yuklang",
+            });
+          }
+          return;
+        }
+
+        try {
+          let changed = false;
+          if (!personExists) {
+            await this.withRetry(() =>
+              this.addPerson(terminal.devIndex, {
+                employeeNo,
+                name: employee.fullName,
+              }),
+            ).catch((err) => {
+              if (!this.isAlreadyExistsError(err?.message ?? '')) throw err;
+            });
+            changed = true;
+          }
+          if (!faceExists) {
+            await this.withRetry(() =>
+              this.addFacePicture(terminal.devIndex, employeeNo, face!, {
+                compressed: true,
+              }),
+            ).catch((err) => {
+              if (!this.isAlreadyExistsError(err?.message ?? '')) throw err;
+            });
+            changed = true;
+          }
+          consecutiveNetFails = 0;
+          if (changed) {
+            stat.created++;
+            job.created++;
+          } else {
+            stat.skipped++;
+            job.skipped++;
+          }
+          job.done++;
+        } catch (err: any) {
+          fail();
+          const technical = err?.message ?? "Noma'lum xato";
+          this.logger.error(
+            `[Sync xatoligi | ${employeeNo} @ ${terminal.name}] ${technical}`,
+          );
+          if (this.isTransientError(err)) consecutiveNetFails++;
+          else consecutiveNetFails = 0;
+
+          if (consecutiveNetFails >= SYNC_ABORT_AFTER_NET_FAILS) {
+            stat.aborted = true;
+            fail(remaining);
+            this.pushSyncError(job, {
+              employeeNo: '-',
+              name: terminal.name,
+              reason: `${terminal.name}: terminal ketma-ket javob bermadi — qolgan ${remaining} xodim yuborilmadi. Aloqani tekshirib, qayta urinib ko'ring.`,
+            });
+            remaining = 0;
+            return;
+          }
+          this.pushSyncError(job, {
+            employeeNo,
+            name: employee.fullName,
+            reason: `${terminal.name}: ${err?.friendlyMessage ?? technical}`,
+          });
+        }
+      });
+    });
+
+    job.state = 'DONE';
+    job.finishedAt = new Date().toISOString();
+    this.logger.log(
+      `Sync tugadi (hospital=${job.hospitalId}): ${job.created} yangi, ${job.skipped} skip, ${job.failed} xato, ${job.units} birlik`,
+    );
   }
+
+  /** Vaqtinchalik xato: tarmoq uzilishi, timeout, 5xx, qurilma band */
+  private isTransientError(err: any): boolean {
+    if (!err) return false;
+    if (
+      [
+        'ECONNRESET',
+        'ETIMEDOUT',
+        'ECONNABORTED',
+        'EPIPE',
+        'ECONNREFUSED',
+        'EAI_AGAIN',
+        'ENOTFOUND',
+      ].includes(err.code)
+    )
+      return true;
+    if (typeof err.httpStatus === 'number' && err.httpStatus >= 500)
+      return true;
+    return /timeout|socket hang up|busy/i.test(String(err.message ?? ''));
+  }
+
+  private async withRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
+    let lastErr: any;
+    for (let i = 1; i <= attempts; i++) {
+      try {
+        return await fn();
+      } catch (err) {
+        lastErr = err;
+        if (i === attempts || !this.isTransientError(err)) throw err;
+        await new Promise((r) => setTimeout(r, SYNC_RETRY_BASE_MS * i));
+      }
+    }
+    throw lastErr;
+  }
+}
+
+// ─── Sync yordamchilari ─────────────────────────────────────────────────────
+
+export interface HikSyncError {
+  employeeNo: string;
+  name: string;
+  reason: string;
+}
+
+export interface HikSyncJob {
+  id: string;
+  hospitalId: string;
+  state: 'RUNNING' | 'DONE' | 'FAILED';
+  /** Rasmli faol xodimlar soni */
+  total: number;
+  /** Rasmi yo'q (yuborilmaydigan) xodimlar */
+  withoutPhoto: number;
+  /** Jami ish birligi: xodim × terminal; done — bajarilgani (progress) */
+  units: number;
+  done: number;
+  created: number;
+  skipped: number;
+  failed: number;
+  errors: HikSyncError[];
+  errorsTruncated: number;
+  perTerminal: {
+    terminalId: string;
+    terminalName: string;
+    created: number;
+    skipped: number;
+    failed: number;
+    aborted: boolean;
+  }[];
+  startedAt: string;
+  finishedAt: string | null;
+  message: string | null;
+}
+
+const SYNC_JOB_TTL_MS = 6 * 3600_000;
+const SYNC_MAX_ERRORS = 300;
+const SYNC_ABORT_AFTER_NET_FAILS = 3;
+export let SYNC_RETRY_BASE_MS = 1500;
+/** Testlar uchun: qayta urinish kutishini qisqartirish */
+export function setSyncRetryBaseMs(ms: number) {
+  SYNC_RETRY_BASE_MS = ms;
+}
+
+function envInt(v: unknown, fallback: number): number {
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 1 ? Math.min(Math.floor(n), 10) : fallback;
+}
+
+/** items'ni ko'pi bilan `limit` ta parallel ishlov bilan bajaradi */
+async function runPool<T>(
+  items: T[],
+  limit: number,
+  worker: (item: T) => Promise<void>,
+): Promise<void> {
+  let next = 0;
+  const runners = Array.from(
+    { length: Math.min(limit, items.length) },
+    async () => {
+      while (next < items.length) {
+        const item = items[next++];
+        await worker(item);
+      }
+    },
+  );
+  await Promise.all(runners);
 }
