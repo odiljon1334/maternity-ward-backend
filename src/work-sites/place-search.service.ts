@@ -38,9 +38,11 @@ const DEDUPE_M = 40;
  *
  * Manbalar (natijalar birlashtiriladi, muassasa markaziga yaqinlari oldinda):
  *  1. Koordinata yoki xarita havolasi — tarmoqsiz, darhol.
- *  2. Yandex tashkilotlar qidiruvi (`YANDEX_SEARCH_API_KEY` bo'lsa) —
- *     O'zbekistonda maktab/bog'cha kabi joylar bo'yicha eng to'liq baza.
- *  3. Yandex geokoder (`YANDEX_GEOCODER_API_KEY` bo'lsa) — ko'cha/uy manzili.
+ *  2. Yandex qidiruv API (`YANDEX_SEARCH_API_KEY` bo'lsa) — tashkilotlar
+ *     (maktab, bog'cha...) VA manzillar bitta so'rovda; O'zbekiston uchun
+ *     eng to'liq baza.
+ *  3. Yandex geokoder (`YANDEX_GEOCODER_API_KEY` bo'lsa, ixtiyoriy) —
+ *     qo'shimcha ko'cha/uy manzili.
  *  4. OpenStreetMap (Nominatim) — kalitsiz, bepul; foydalanish qoidasiga
  *     ko'ra sekundiga 1 so'rov, natijalar 24 soat keshlanadi.
  */
@@ -94,7 +96,7 @@ export class PlaceSearchService {
       this.yandexGeocoder(query, near),
     ]);
     let osm: PlaceResult[] = [];
-    // OSM faqat Yandex tashkilotlar hech narsa bermagan bo'lsa (tezlik va qoida uchun)
+    // OSM faqat Yandex qidiruv hech narsa bermagan bo'lsa (tezlik va qoida uchun)
     if (!yandexOrg.length && process.env.GEO_OSM_DISABLED !== 'true') {
       for (const variant of buildQueryVariants(query)) {
         osm = await this.nominatim(variant, near);
@@ -118,42 +120,50 @@ export class PlaceSearchService {
   ): Promise<PlaceResult[]> {
     const apikey = process.env.YANDEX_SEARCH_API_KEY;
     if (!apikey) return [];
-    try {
-      const { data } = await axios.get('https://search-maps.yandex.ru/v1/', {
-        params: {
-          apikey,
-          text: q,
-          lang: 'uz_UZ',
-          type: 'biz',
-          ll: `${near.lng},${near.lat}`,
-          spn: '1.0,1.0',
-          results: MAX_RESULTS,
-        },
-        timeout: HTTP_TIMEOUT_MS,
-      });
-      return (data?.features ?? [])
-        .map((f: any): PlaceResult | null => {
-          const [lng, lat] = f?.geometry?.coordinates ?? [];
-          if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-          return {
-            name: String(f?.properties?.name ?? q),
-            address:
-              f?.properties?.CompanyMetaData?.address ??
-              f?.properties?.description ??
-              null,
-            lat,
-            lng,
-            source: 'YANDEX_ORG',
-            distance: null,
-          };
-        })
-        .filter(Boolean) as PlaceResult[];
-    } catch (e) {
-      this.logger.warn(
-        `Yandex tashkilot qidiruvi ishlamadi: ${this.errText(e)}`,
-      );
-      return [];
+    // `type` berilmaydi — tashkilotlar (biz) ham, manzillar (geo) ham qaytadi,
+    // shuning uchun alohida geokoder kaliti shart emas. Til: uz_UZ qo'llanmasa
+    // (400) — ru_RU bilan qayta so'raladi.
+    for (const lang of ['uz_UZ', 'ru_RU']) {
+      try {
+        const { data } = await axios.get('https://search-maps.yandex.ru/v1/', {
+          params: {
+            apikey,
+            text: q,
+            lang,
+            ll: `${near.lng},${near.lat}`,
+            spn: '1.0,1.0',
+            results: MAX_RESULTS,
+          },
+          timeout: HTTP_TIMEOUT_MS,
+        });
+        return (data?.features ?? [])
+          .map((f: any): PlaceResult | null => {
+            const [lng, lat] = f?.geometry?.coordinates ?? [];
+            if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+            const props = f?.properties ?? {};
+            const isOrg = !!props.CompanyMetaData;
+            return {
+              name: String(props.name ?? q),
+              address: isOrg
+                ? (props.CompanyMetaData?.address ?? props.description ?? null)
+                : (props.GeocoderMetaData?.text ?? props.description ?? null),
+              lat,
+              lng,
+              source: isOrg ? 'YANDEX_ORG' : 'YANDEX_GEO',
+              distance: null,
+            };
+          })
+          .filter(Boolean) as PlaceResult[];
+      } catch (e: any) {
+        const status = e?.response?.status;
+        if (status === 400 && lang !== 'ru_RU') continue;
+        this.logger.warn(
+          `Yandex qidiruv API ishlamadi${status ? ` (HTTP ${status}${status === 403 ? ' — kalit, uning ruxsatlari yoki kunlik limitini tekshiring' : ''})` : ''}: ${this.errText(e)}`,
+        );
+        return [];
+      }
     }
+    return [];
   }
 
   private async yandexGeocoder(

@@ -193,6 +193,64 @@ describe('PlaceSearchService', () => {
     ).toBe(false);
   });
 
+  it("faqat YANDEX_SEARCH_API_KEY: bitta so'rovda tashkilot va manzil, type berilmaydi", async () => {
+    process.env.YANDEX_SEARCH_API_KEY = 'k';
+    mockedGet.mockResolvedValue({
+      data: {
+        features: [
+          {
+            geometry: { coordinates: [72.345, 40.781] },
+            properties: {
+              name: '1-sonli maktab',
+              CompanyMetaData: { address: 'Andijon, Navoiy 1' },
+            },
+          },
+          {
+            geometry: { coordinates: [72.36, 40.79] },
+            properties: {
+              name: "Navoiy ko'chasi",
+              GeocoderMetaData: {
+                text: "O'zbekiston, Andijon, Navoiy ko'chasi",
+              },
+            },
+          },
+        ],
+      },
+    });
+    const svc = new PlaceSearchService(prisma);
+    const res = await svc.search('Navoiy maktab', 'h1', 'u1');
+    expect(res.map((r) => r.source)).toEqual(['YANDEX_ORG', 'YANDEX_GEO']);
+    expect(res[1].address).toMatch(/Navoiy ko'chasi/);
+    expect(mockedGet).toHaveBeenCalledTimes(1);
+    expect(mockedGet.mock.calls[0][1].params.type).toBeUndefined();
+  });
+
+  it("uz_UZ tili qabul qilinmasa (400) — ru_RU bilan qayta so'raladi", async () => {
+    process.env.YANDEX_SEARCH_API_KEY = 'k';
+    process.env.GEO_OSM_DISABLED = 'true';
+    mockedGet
+      .mockRejectedValueOnce(
+        Object.assign(new Error('bad lang'), { response: { status: 400 } }),
+      )
+      .mockResolvedValueOnce({
+        data: {
+          features: [
+            {
+              geometry: { coordinates: [72.345, 40.781] },
+              properties: { name: 'Школа №1', CompanyMetaData: {} },
+            },
+          ],
+        },
+      });
+    const svc = new PlaceSearchService(prisma);
+    const res = await svc.search('школа 1', 'h1', 'u1');
+    expect(res).toHaveLength(1);
+    expect(mockedGet.mock.calls.map((c) => c[1].params.lang)).toEqual([
+      'uz_UZ',
+      'ru_RU',
+    ]);
+  });
+
   it("tashqi xizmat xato bersa — bo'sh ro'yxat, xato tashlanmaydi", async () => {
     mockedGet.mockRejectedValue(new Error('timeout'));
     process.env.GEO_OSM_DISABLED = 'false';
