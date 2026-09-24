@@ -9,6 +9,11 @@
  *     to'langan hisoblanadi (yillik tarif chegirmali — summasini oylarga
  *     bo'lib, oylik tarif bilan solishtirish noto'g'ri "qarz" chiqarardi).
  *   - Daromad (MRR): to'lov summasi qoplagan oylarga teng taqsimlanadi.
+ *   - Bot invoysi orqali to'langan oy (invoiceId bor — summa serverda
+ *     hisoblangan va tekshirilgan) TO'LIQ qoplangan hisoblanadi.
+ *   - Qo'lda kiritilgan oylik to'lov o'sha paytdagi xodimlar soni
+ *     (employeeCount) bo'yicha kutilgan summa bilan solishtiriladi: keyin
+ *     xodim qo'shilsa, to'langan o'tgan oylar "qarz"ga aylanib qolmaydi.
  *
  * Barcha oylar Asia/Tashkent vaqti bo'yicha hisoblanadi — server UTC'da
  * bo'lsa ham oy chegarasi (1-sana 00:00) to'g'ri keladi.
@@ -16,6 +21,10 @@
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
+import {
+  getMonthlyExpectedAmount,
+  getStaffPricing,
+} from '../common/utils/pricing.util';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -30,6 +39,10 @@ export interface CoveragePayment {
   months?: number | null;
   amount: number | string | { toString(): string };
   paidAt?: Date | string | null;
+  /** To'lov paytidagi faol xodimlar soni (snapshot) */
+  employeeCount?: number | null;
+  /** Bot invoysi orqali — summa serverda hisoblangan, to'liq qoplaydi */
+  invoiceId?: string | null;
 }
 
 export interface PeriodCoverage {
@@ -37,6 +50,13 @@ export interface PeriodCoverage {
   paidAmount: number;
   /** Ko'p oylik (yillik) to'lov bilan to'liq qoplangan */
   prepaid: boolean;
+  /** Bot invoysi bo'yicha to'langan (to'liq qoplangan) */
+  settled: boolean;
+  /**
+   * To'lov paytidagi xodimlar soni bo'yicha kutilgan summa (bir nechta
+   * to'lov bo'lsa — eng kattasi). null — snapshot yo'q (eski yozuvlar).
+   */
+  snapshotExpected: number | null;
   /** Tan olingan daromad: har bir to'lovdan shu oyga tushgan ulush */
   recognized: number;
 }
@@ -111,7 +131,13 @@ export function buildCoverage(
   const get = (period: string) => {
     let c = map.get(period);
     if (!c) {
-      c = { paidAmount: 0, prepaid: false, recognized: 0 };
+      c = {
+        paidAmount: 0,
+        prepaid: false,
+        settled: false,
+        snapshotExpected: null,
+        recognized: 0,
+      };
       map.set(period, c);
     }
     return c;
@@ -125,6 +151,18 @@ export function buildCoverage(
       const c = get(start);
       c.paidAmount += amount;
       c.recognized += amount;
+      if (p.invoiceId) c.settled = true;
+      if (p.employeeCount != null && p.employeeCount > 0) {
+        // Kelishilgan narx (501+) — tizimda aniq narx yo'q: operator
+        // kiritgan to'lov oyni qoplaydi
+        const snap = getStaffPricing(p.employeeCount).negotiated
+          ? 0
+          : getMonthlyExpectedAmount(p.employeeCount);
+        c.snapshotExpected =
+          c.snapshotExpected == null
+            ? snap
+            : Math.max(c.snapshotExpected, snap);
+      }
       continue;
     }
     const share = amount / months;
@@ -137,6 +175,24 @@ export function buildCoverage(
   return map;
 }
 
+/**
+ * Oy to'liq qoplanganmi. Oylik to'lov joriy kutilgan summa bilan, snapshot
+ * bo'lsa — to'lov paytidagi summa bilan (qaysi biri kichik) solishtiriladi.
+ */
+export function isPeriodCovered(
+  expectedAmount: number,
+  c: PeriodCoverage | undefined,
+): boolean {
+  if (expectedAmount <= 0) return true;
+  if (!c) return false;
+  if (c.prepaid || c.settled) return true;
+  const required =
+    c.snapshotExpected != null
+      ? Math.min(expectedAmount, c.snapshotExpected)
+      : expectedAmount;
+  return c.paidAmount > 0 && c.paidAmount >= required;
+}
+
 /** Bitta oyning holati */
 export function periodStatus(
   period: string,
@@ -144,9 +200,7 @@ export function periodStatus(
   coverage: PeriodCoverage | undefined,
   now: Date = new Date(),
 ): PeriodStatus {
-  if (expectedAmount <= 0) return 'PAID';
-  if (coverage?.prepaid) return 'PAID';
-  if ((coverage?.paidAmount ?? 0) >= expectedAmount) return 'PAID';
+  if (isPeriodCovered(expectedAmount, coverage)) return 'PAID';
   return now.getTime() <= periodEnd(period).getTime() ? 'PENDING' : 'OVERDUE';
 }
 
@@ -157,6 +211,9 @@ export function periodPaidAmount(
 ): number {
   if (!coverage) return 0;
   if (coverage.prepaid) return Math.max(expectedAmount, coverage.paidAmount);
+  // Bot invoysi yoki snapshot bo'yicha to'liq qoplangan oy — to'liq ko'rinadi
+  if (isPeriodCovered(expectedAmount, coverage))
+    return Math.max(expectedAmount, coverage.paidAmount);
   return coverage.paidAmount;
 }
 
@@ -170,31 +227,70 @@ export function lastPaidPeriod(
 ): string | null {
   let last: string | null = null;
   for (const [period, c] of coverage) {
-    const paid =
-      c.prepaid || expectedAmount <= 0 || c.paidAmount >= expectedAmount;
-    if (paid && (!last || comparePeriods(period, last) > 0)) last = period;
+    if (
+      isPeriodCovered(expectedAmount, c) &&
+      (!last || comparePeriods(period, last) > 0)
+    )
+      last = period;
   }
   return last;
 }
 
+/** Avto-blok va bot shu oynaga qaraydi: oxirgi 3 ta tugagan oy */
+export const BILLING_LOOKBACK_MONTHS = 3;
+
+function envDays(name: string, fallback: number): number {
+  const n = Number(process.env[name]);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
+/** Sinov davri tugaydigan lahza (BILLING_TRIAL_DAYS, standart 14 kun) */
+export function trialEndOf(createdAt: Date): Date {
+  return new Date(
+    createdAt.getTime() + envDays('BILLING_TRIAL_DAYS', 14) * 86_400_000,
+  );
+}
+
+/** Birinchi to'lanadigan oy — sinov davri tugagan oy */
+export function firstBillablePeriod(createdAt: Date): string {
+  return periodOf(trialEndOf(createdAt));
+}
+
 /**
- * Yangi to'lov qaysi oydan boshlanishi kerak:
- *  - Oxirgi to'langan oydan keyingi oy (uzluksiz qoplama; avval to'langan
- *    bo'lsa oldindan to'lash ham shu yo'l bilan kelgusi oylarga o'tadi).
- *  - Lekin 2 oydan ortiq orqaga qaytmaydi (eski qarzlar operator orqali
- *    alohida hal qilinadi — bot orqali 8 oy oldingi oy uchun to'lov
- *    so'ralmasin).
- *  - Hech qachon to'lamagan bo'lsa — joriy oy.
+ * Yangi to'lov qaysi oydan boshlanadi (bot va operator uchun yagona qoida).
+ *
+ *  - Oylik: oynadagi (oxirgi 3 oy, sinov davridan keyin) ENG ESKI
+ *    to'lanmagan oy — avto-blok qaysi oylarga qarasa, bot aynan o'shalarni
+ *    to'lashni taklif qiladi (ilgari blok 3 oyga, bot 2 oyga qarardi va
+ *    muassasa botda to'lab blokdan chiqa olmasdi). Hammasi to'langan bo'lsa —
+ *    birinchi qoplanmagan kelgusi oy (oldindan to'lash).
+ *  - Yillik: shu oydan boshlab 12 oyning HECH BIRI qoplanmagan birinchi
+ *    boshlanish — yillik to'lov to'langan oylar ustiga tushib, pul bekor
+ *    ketmasin (orada bo'shliq bo'lsa, u oylik to'lanadi).
  */
-export function nextBillablePeriod(
-  lastPaid: string | null,
-  now: Date = new Date(),
-): string {
-  const current = periodOf(now);
-  const floor = addPeriods(current, -2);
-  if (!lastPaid) return current;
-  const next = addPeriods(lastPaid, 1);
-  return comparePeriods(next, floor) < 0 ? floor : next;
+export function billingStartPeriods(
+  isCovered: (period: string) => boolean,
+  opts: { now?: Date; firstBillable?: string | null } = {},
+): { monthly: string; annual: string } {
+  const current = periodOf(opts.now ?? new Date());
+  let floor = addPeriods(current, -BILLING_LOOKBACK_MONTHS);
+  if (opts.firstBillable && comparePeriods(opts.firstBillable, floor) > 0) {
+    floor = opts.firstBillable;
+  }
+  const LIMIT = 48;
+  let monthly = floor;
+  for (let i = 0; i < LIMIT && isCovered(monthly); i++)
+    monthly = addPeriods(monthly, 1);
+
+  let annual = monthly;
+  for (let i = 0; i < LIMIT; i++, annual = addPeriods(annual, 1)) {
+    let free = true;
+    for (let k = 0; k < 12 && free; k++) {
+      if (isCovered(addPeriods(annual, k))) free = false;
+    }
+    if (free) break;
+  }
+  return { monthly, annual };
 }
 
 const UZ_MONTHS = [

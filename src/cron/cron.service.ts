@@ -499,19 +499,22 @@ export class CronService {
    * lastPaymentReminderPeriod` joriy oyga teng bo'lsa, o'sha shifoxona
    * o'tkazib yuboriladi (qayta ishga tushirilsa ham spam bo'lmaydi).
    */
+  /** Har kuni 03:30 — muddati o'tgan (24 soat) ochiq Telegram invoyslari yopiladi */
+  @Cron('30 3 * * *', { timeZone: TZ })
+  async expireInvoicesCron() {
+    try {
+      const expired = await this.paymentsService.expireStaleInvoices();
+      if (expired) this.logger.log(`Eskirgan invoyslar yopildi: ${expired}`);
+    } catch (e) {
+      this.logger.warn(
+        `Invoyslarni yopib bo'lmadi: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  }
+
   @Cron('0 9 25 * *', { timeZone: TZ })
   async paymentReminderCron() {
     try {
-      // To'lanmagan eski Telegram invoyslari yopiladi (tugmasi eskirgan)
-      try {
-        const expired = await this.paymentsService.expireStaleInvoices();
-        if (expired) this.logger.log(`Eskirgan invoyslar yopildi: ${expired}`);
-      } catch (e) {
-        this.logger.warn(
-          `Invoyslarni yopib bo'lmadi: ${e instanceof Error ? e.message : String(e)}`,
-        );
-      }
-
       const period = currentPeriod();
       const debtors = await this.paymentsService.getDebtorsReport(6);
       const overdue = debtors.filter((d) => d.consecutiveUnpaidMonths > 0);

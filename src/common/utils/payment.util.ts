@@ -7,6 +7,7 @@ import {
   periodOf,
   periodStart,
   periodStatus,
+  trialEndOf,
 } from '../../payments/billing.util';
 
 /**
@@ -85,8 +86,7 @@ async function computeAutoBlock(
   now: Date,
 ): Promise<boolean> {
   const graceMs = envInt('BILLING_GRACE_DAYS', 10) * 86_400_000;
-  const trialEnd =
-    createdAt.getTime() + envInt('BILLING_TRIAL_DAYS', 14) * 86_400_000;
+  const trialEnd = trialEndOf(createdAt).getTime();
 
   const employeeCount = await prisma.employee.count({
     where: { hospitalId, firedAt: null },
@@ -105,7 +105,14 @@ async function computeAutoBlock(
         { period: null, paidAt: { gte: periodStart(since) } },
       ],
     },
-    select: { period: true, months: true, amount: true, paidAt: true },
+    select: {
+      period: true,
+      months: true,
+      amount: true,
+      paidAt: true,
+      employeeCount: true,
+      invoiceId: true,
+    },
   });
   const coverage = buildCoverage(payments);
 

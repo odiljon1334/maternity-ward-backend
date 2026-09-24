@@ -148,3 +148,76 @@ describe('TelegramService — shifoxona izolyatsiyasi', () => {
     expectAllQueriesScopedTo(h.prisma, 'h1');
   });
 });
+
+describe("TelegramService — obuna to'lovi qaysi muassasaga", () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  function payHarness(activeHospitals: string[]) {
+    const h = makeHarness();
+    h.prisma.telegramSubscription.findFirst = jest.fn(
+      async ({ where }: any) => {
+        if (where.chatId !== String(LINKED_CHAT)) return null;
+        const id =
+          where.hospitalId === undefined || typeof where.hospitalId === 'object'
+            ? activeHospitals[0]
+            : activeHospitals.includes(where.hospitalId)
+              ? where.hospitalId
+              : null;
+        return id
+          ? {
+              id: `s-${id}`,
+              chatId: where.chatId,
+              hospitalId: id,
+              isActive: true,
+            }
+          : null;
+      },
+    );
+    h.prisma.hospital = {
+      findUnique: jest.fn(async () => ({ name: 'Klinika' })),
+    };
+    const billing: any = {
+      createInvoice: jest.fn(async () => ({ ok: false, reason: 'NEGOTIATED' })),
+    };
+    return { ...h, billing };
+  }
+
+  async function run(activeHospitals: string[], chat: number, data: string) {
+    const h = payHarness(activeHospitals);
+    const config: any = {
+      get: jest.fn((k: string) =>
+        k === 'TELEGRAM_PAYMENT_TOKEN' ? 'tok' : undefined,
+      ),
+    };
+    const service = new TelegramService(config, h.prisma, h.access, h.billing);
+    const bot = new Telegraf('123:TEST');
+    (bot as any).botInfo = { id: 1, is_bot: true, username: 'test_bot' };
+    (service as any).bot = bot;
+    (service as any).setupCommands();
+    await bot.handleUpdate(callbackUpdate(chat, data) as any);
+    return h;
+  }
+
+  it('tugmadagi muassasa chatning faol ulanishi bo‘lsa — o‘sha muassasaga', async () => {
+    const h = await run(['h1', 'h3'], LINKED_CHAT, 'pay_monthly:h3');
+    expect(h.billing.createInvoice).toHaveBeenCalledWith(
+      'h3',
+      String(LINKED_CHAT),
+      'MONTHLY',
+    );
+  });
+
+  it('tugmadagi muassasa chatga ulanmagan — asosiy muassasaga (boshqa muassasa uchun invoys yo‘q)', async () => {
+    const h = await run(['h1'], LINKED_CHAT, 'pay_annual:h2');
+    expect(h.billing.createInvoice).toHaveBeenCalledWith(
+      'h1',
+      String(LINKED_CHAT),
+      'ANNUAL',
+    );
+  });
+
+  it('ulanmagan chat — invoys yaratilmaydi', async () => {
+    const h = await run(['h1'], STRANGER_CHAT, 'pay_monthly:h1');
+    expect(h.billing.createInvoice).not.toHaveBeenCalled();
+  });
+});

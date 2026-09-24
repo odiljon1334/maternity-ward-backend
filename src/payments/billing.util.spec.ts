@@ -2,8 +2,9 @@ import {
   addPeriods,
   buildCoverage,
   coverageLabel,
+  billingStartPeriods,
+  isPeriodCovered,
   lastPaidPeriod,
-  nextBillablePeriod,
   periodEnd,
   periodOf,
   periodPaidAmount,
@@ -65,13 +66,69 @@ describe('billing.util — obuna qoplamasi', () => {
     expect(cov.get('2026-07')?.paidAmount).toBe(10);
   });
 
-  it("keyingi to'lov oyi: uzluksiz davom, 2 oydan ortiq orqaga qaytmaydi", () => {
+  it("keyingi to'lov oyi: oynadagi eng eski to'lanmagan oy (avto-blok bilan bir xil 3 oy)", () => {
     const now = new Date('2026-09-24T10:00:00+05:00');
-    expect(nextBillablePeriod(null, now)).toBe('2026-09');
-    expect(nextBillablePeriod('2026-08', now)).toBe('2026-09');
-    expect(nextBillablePeriod('2026-06', now)).toBe('2026-07'); // qarz oyi birinchi
-    expect(nextBillablePeriod('2025-12', now)).toBe('2026-07'); // juda eski — 2 oy chegarasi
-    expect(nextBillablePeriod('2026-12', now)).toBe('2027-01'); // oldindan to'lov
+    const set = (xs: string[]) => (p: string) => xs.includes(p);
+    // Hech narsa to'lanmagan — 3 oy oldingi oy (blok aynan shunga qaraydi)
+    expect(billingStartPeriods(set([]), { now }).monthly).toBe('2026-06');
+    // Hammasi to'langan — joriy oy
+    expect(
+      billingStartPeriods(set(['2026-06', '2026-07', '2026-08']), { now })
+        .monthly,
+    ).toBe('2026-09');
+    // Bo'shliq: iyul to'lanmagan — avval iyul
+    expect(
+      billingStartPeriods(set(['2026-06', '2026-08', '2026-09']), { now })
+        .monthly,
+    ).toBe('2026-07');
+    // Oldindan to'langan — birinchi qoplanmagan kelgusi oy
+    expect(
+      billingStartPeriods(
+        set(['2026-06', '2026-07', '2026-08', '2026-09', '2026-10']),
+        { now },
+      ).monthly,
+    ).toBe('2026-11');
+    // Sinov davri sentyabrda tugagan yangi muassasa — sentyabrdan
+    expect(
+      billingStartPeriods(set([]), { now, firstBillable: '2026-09' }).monthly,
+    ).toBe('2026-09');
+  });
+
+  it('yillik boshlanish 12 oyning birortasi qoplangan oyga tushmaydi', () => {
+    const now = new Date('2026-09-24T10:00:00+05:00');
+    const paid = ['2026-06', '2026-08', '2026-09'];
+    const r = billingStartPeriods((p) => paid.includes(p), { now });
+    expect(r.monthly).toBe('2026-07'); // bo'shliq oylik to'lanadi
+    expect(r.annual).toBe('2026-10'); // yillik to'langan oylar ustiga tushmaydi
+  });
+
+  it("xodim qo'shilsa to'lov paytida to'liq to'langan oy qarzga aylanmaydi", () => {
+    // 50 xodim × 15 000 = 750 000 to'langan; endi 51 xodim (765 000 kutiladi)
+    const cov = buildCoverage([
+      { period: '2026-08', months: 1, amount: 750_000, employeeCount: 50 },
+    ]);
+    expect(isPeriodCovered(765_000, cov.get('2026-08'))).toBe(true);
+    // Snapshotsiz eski yozuv — joriy summa bilan solishtiriladi
+    const old = buildCoverage([
+      { period: '2026-08', months: 1, amount: 750_000 },
+    ]);
+    expect(isPeriodCovered(765_000, old.get('2026-08'))).toBe(false);
+    // Snapshot bo'yicha ham kam to'langan — to'lanmagan
+    const short = buildCoverage([
+      { period: '2026-08', months: 1, amount: 700_000, employeeCount: 50 },
+    ]);
+    expect(isPeriodCovered(765_000, short.get('2026-08'))).toBe(false);
+  });
+
+  it("bot invoysi bilan to'langan oy to'liq qoplangan; kelishilgan narx (501+) — har qanday to'lov", () => {
+    const inv = buildCoverage([
+      { period: '2026-08', months: 1, amount: 100, invoiceId: 'inv-1' },
+    ]);
+    expect(isPeriodCovered(999_999, inv.get('2026-08'))).toBe(true);
+    const nego = buildCoverage([
+      { period: '2026-08', months: 1, amount: 5_000_000, employeeCount: 700 },
+    ]);
+    expect(isPeriodCovered(8_400_000, nego.get('2026-08'))).toBe(true);
   });
 
   it("oxirgi to'langan oy: yillik va to'liq oylik hisobga olinadi, qisman emas", () => {

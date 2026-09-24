@@ -19,6 +19,8 @@ describe('SubscriptionBillingService', () => {
       employees?: number;
       lastPaid?: string | null;
       nextPeriod?: string;
+      annualStart?: string;
+      covered?: string[];
     } = {},
   ) {
     const invoices: any[] = [];
@@ -37,7 +39,7 @@ describe('SubscriptionBillingService', () => {
           for (const i of invoices) {
             if (
               i.hospitalId === where.hospitalId &&
-              i.chatId === where.chatId &&
+              (where.chatId === undefined || i.chatId === where.chatId) &&
               i.status === where.status
             ) {
               Object.assign(i, data);
@@ -67,6 +69,12 @@ describe('SubscriptionBillingService', () => {
         }),
       },
       payment: {
+        findFirst: jest.fn(
+          async ({ where }: any) =>
+            payments.find(
+              (x) => x.invoiceId && x.invoiceId === where.invoiceId,
+            ) ?? null,
+        ),
         findUnique: jest.fn(async ({ where }: any) => {
           const p = payments.find(
             (x) => x.telegramPaymentId === where.telegramPaymentId,
@@ -88,6 +96,7 @@ describe('SubscriptionBillingService', () => {
         }),
       },
       $transaction: jest.fn(async (fn: any) => fn(prisma)),
+      $queryRaw: jest.fn(async () => [{ ok: 1 }]),
     };
     const employeeCount = opts.employees ?? 20;
     const paymentsService: any = {
@@ -97,7 +106,9 @@ describe('SubscriptionBillingService', () => {
         lastPaidPeriod: opts.lastPaid ?? null,
         paidThrough: null,
         nextPeriod: opts.nextPeriod ?? '2026-09',
+        annualStart: opts.annualStart ?? opts.nextPeriod ?? '2026-09',
         overduePeriods: [],
+        coveredPeriods: opts.covered ?? [],
       })),
     };
     const svc = new SubscriptionBillingService(prisma, paymentsService);
@@ -120,17 +131,21 @@ describe('SubscriptionBillingService', () => {
   });
 
   it("yillik invoys 12 oyni keyingi to'lanmagan oydan boshlab qoplaydi", async () => {
-    const { svc } = setup({ employees: 20, nextPeriod: '2026-11' });
+    const { svc } = setup({
+      employees: 20,
+      nextPeriod: '2026-07',
+      annualStart: '2026-11',
+    });
     const res: any = await svc.createInvoice('h1', 'chat-1', 'ANNUAL', NOW);
     expect(res.months).toBe(12);
     expect(res.coverage).toBe('Noyabr 2026 – Oktabr 2027');
     expect(res.amountSom).toBe(getStaffPricing(20).annualTotal);
   });
 
-  it('yangi invoys shu chatdagi eski ochiq invoysni yopadi', async () => {
+  it('yangi invoys shu shifoxonaning barcha eski ochiq invoyslarini yopadi (boshqa chatnikini ham)', async () => {
     const { svc, invoices } = setup();
     await svc.createInvoice('h1', 'chat-1', 'MONTHLY', NOW);
-    await svc.createInvoice('h1', 'chat-1', 'MONTHLY', NOW);
+    await svc.createInvoice('h1', 'chat-2', 'MONTHLY', NOW);
     expect(invoices.map((i) => i.status)).toEqual(['EXPIRED', 'OPEN']);
   });
 
@@ -201,6 +216,7 @@ describe('SubscriptionBillingService', () => {
       paymentsService.getBillingState.mockResolvedValue({
         lastPaidPeriod: '2026-09',
         nextPeriod: '2026-10',
+        coveredPeriods: ['2026-09'],
       });
       const res: any = await svc.validatePreCheckout(
         { payload: inv.payload, currency: 'UZS', totalAmount: inv.amountMinor },
@@ -266,6 +282,85 @@ describe('SubscriptionBillingService', () => {
       const second: any = await ctx.svc.recordSuccessfulPayment(input, NOW);
       expect(second.status).toBe('DUPLICATE');
       expect(ctx.payments).toHaveLength(1);
+    });
+
+    it("bir vaqtda boshqa to'lov shu oyni yopgan bo'lsa — pul keyingi bo'sh oyga o'tadi", async () => {
+      const ctx = setup();
+      const inv: any = await ctx.svc.createInvoice(
+        'h1',
+        'chat-1',
+        'MONTHLY',
+        NOW,
+      );
+      // Invoys yaratilgach operator sentyabrni qo'lda yopdi
+      ctx.paymentsService.getBillingState.mockResolvedValue({
+        employeeCount: 20,
+        nextPeriod: '2026-10',
+        annualStart: '2026-10',
+        coveredPeriods: ['2026-09'],
+      });
+      const res: any = await ctx.svc.recordSuccessfulPayment(
+        {
+          payload: inv.payload,
+          currency: 'UZS',
+          totalAmount: inv.amountMinor,
+          telegramChargeId: 'tg-9',
+          chatId: 'chat-1',
+          payerName: 'D',
+        },
+        NOW,
+      );
+      expect(res.status).toBe('RECORDED');
+      expect(ctx.payments[0].period).toBe('2026-10');
+      expect(ctx.payments[0].note).toMatch(/o'tkazildi/);
+      expect(ctx.prisma.$queryRaw).toHaveBeenCalled(); // shifoxona qulfi
+    });
+
+    it("bir invoys ikki xil charge bilan to'lansa — ikkinchisi ham yoziladi, invoysga bog'lanmaydi, belgi qo'yiladi", async () => {
+      const ctx = setup();
+      const inv: any = await ctx.svc.createInvoice(
+        'h1',
+        'chat-1',
+        'MONTHLY',
+        NOW,
+      );
+      const base = {
+        payload: inv.payload,
+        currency: 'UZS',
+        totalAmount: inv.amountMinor,
+        chatId: 'chat-1',
+        payerName: 'D',
+      };
+      await ctx.svc.recordSuccessfulPayment(
+        { ...base, telegramChargeId: 'a' },
+        NOW,
+      );
+      const second: any = await ctx.svc.recordSuccessfulPayment(
+        { ...base, telegramChargeId: 'b' },
+        NOW,
+      );
+      expect(second.status).toBe('RECORDED');
+      expect(ctx.payments).toHaveLength(2);
+      expect(ctx.payments[1].invoiceId).toBeNull();
+      expect(ctx.payments[1].note).toMatch(/TAKRORIY/);
+    });
+
+    it('eski ANNUAL payload — 12 oy emas, 1 oy sifatida yoziladi (summa 100 barobar kam olingan)', async () => {
+      const ctx = setup({ nextPeriod: '2026-09' });
+      const res: any = await ctx.svc.recordSuccessfulPayment(
+        {
+          payload: 'ANNUAL:h1',
+          currency: 'UZS',
+          totalAmount: 3_000_000,
+          telegramChargeId: 'tg-ann',
+          chatId: 'c',
+          payerName: 'D',
+        },
+        NOW,
+      );
+      expect(res.months).toBe(1);
+      expect(ctx.payments[0]).toMatchObject({ months: 1, invoiceId: null });
+      expect(ctx.payments[0].note).toMatch(/ESKI/);
     });
 
     it("deploy'dan oldingi eski invoys bo'yicha tushgan pul ham yo'qolmaydi (÷100 bilan)", async () => {

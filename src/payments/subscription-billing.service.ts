@@ -6,7 +6,6 @@ import { clearHospitalBlockCache } from '../common/utils/payment.util';
 import { PaymentsService } from './payments.service';
 import {
   addPeriods,
-  comparePeriods,
   coverageLabel,
   monthsForType,
   periodEnd,
@@ -23,7 +22,9 @@ import {
  *     mavjud, OPEN, muddati o'tmagan, valyuta UZS, summa aynan mos, shu oylar
  *     boshqa to'lov bilan yopilmagan bo'lsagina tasdiqlanadi.
  *  3. recordSuccessfulPayment — idempotent: bir charge id ikki marta kelsa
- *     ikkinchi yozuv yaratilmaydi (UNIQUE + tranzaksiya).
+ *     ikkinchi yozuv yaratilmaydi (UNIQUE + tranzaksiya). Shifoxona bo'yicha
+ *     qulf ostida qoplama qayta hisoblanadi: ikki kishi bir vaqtda to'lasa,
+ *     ikkinchi to'lov keyingi bo'sh oylarga o'tadi (pul bekor ketmaydi).
  *
  * ⚠️ Telegram summani valyutaning ENG KICHIK birligida kutadi. UZS uchun
  * `exp = 2` (Telegram currencies.json) — ya'ni 1 so'm = 100 birlik. Ilgari
@@ -79,6 +80,15 @@ export type SuccessfulPaymentResult =
     }
   | { status: 'UNKNOWN_INVOICE' };
 
+/** [start, start+months) oylaridan birortasi allaqachon qoplanganmi */
+function overlaps(covered: string[], start: string, months: number): boolean {
+  const set = new Set(covered ?? []);
+  for (let i = 0; i < months; i++) {
+    if (set.has(addPeriods(start, i))) return true;
+  }
+  return false;
+}
+
 @Injectable()
 export class SubscriptionBillingService {
   private readonly logger = new Logger(SubscriptionBillingService.name);
@@ -114,12 +124,13 @@ export class SubscriptionBillingService {
     const months = monthsForType(type);
     const amountSom =
       type === 'MONTHLY' ? pricing.monthlyTotal! : pricing.annualTotal!;
-    const startPeriod = state.nextPeriod;
+    const startPeriod = months > 1 ? state.annualStart : state.nextPeriod;
 
-    // Shu chatdagi eski ochiq invoyslar yopiladi — foydalanuvchi eski
-    // tugmani bosib, ikki marta to'lab qo'ymasin.
+    // Shu shifoxonaning barcha eski ochiq invoyslari yopiladi (boshqa chat
+    // yoki boshqa direktornikini ham) — eski tugma bilan bir oy ikki marta
+    // to'lanmasin; eskisi to'lov oynasida "eskirgan" deb rad etiladi.
     await this.prisma.subscriptionInvoice.updateMany({
-      where: { hospitalId, chatId, status: 'OPEN' },
+      where: { hospitalId, status: 'OPEN' },
       data: { status: 'EXPIRED' },
     });
 
@@ -150,6 +161,14 @@ export class SubscriptionBillingService {
       employeeCount: state.employeeCount,
       pricing,
     };
+  }
+
+  /** Telegram'ga yuborib bo'lmagan invoys yopiladi */
+  async cancelInvoice(invoiceId: string): Promise<void> {
+    await this.prisma.subscriptionInvoice.updateMany({
+      where: { id: invoiceId, status: 'OPEN' },
+      data: { status: 'EXPIRED' },
+    });
   }
 
   async validatePreCheckout(
@@ -187,10 +206,7 @@ export class SubscriptionBillingService {
     // Boshqa to'lov (masalan boshqa direktor yoki operator) shu oylarni allaqachon
     // yopgan bo'lsa — ikkinchi marta pul olinmasin.
     const state = await this.payments.getBillingState(invoice.hospitalId, now);
-    if (
-      state.lastPaidPeriod &&
-      comparePeriods(state.lastPaidPeriod, invoice.startPeriod) >= 0
-    ) {
+    if (overlaps(state.coveredPeriods, invoice.startPeriod, invoice.months)) {
       await this.prisma.subscriptionInvoice.update({
         where: { id: invoice.id },
         data: { status: 'EXPIRED' },
@@ -278,24 +294,63 @@ export class SubscriptionBillingService {
         select: { id: true },
       });
       if (!hospital) return { status: 'UNKNOWN_INVOICE' };
-      const state = await this.payments.getBillingState(legacyHospitalId, now);
       hospitalId = legacyHospitalId;
       type = legacyType as PaymentType;
-      months = monthsForType(legacyType);
-      startPeriod = state.nextPeriod;
-      employeeCount = state.employeeCount;
+      // Eski invoysda summa 100 barobar kam olingan (so'm birlik sifatida
+      // yuborilgan) — yillik bo'lsa ham 12 oy berilmaydi: bitta oy sifatida
+      // yoziladi (summa kutilgandan kam — qarz ko'rinadi), operator hal qiladi.
+      months = 1;
+      startPeriod = '';
+      employeeCount = null;
     }
 
-    const validUntil = periodEnd(addPeriods(startPeriod, months - 1));
     try {
       const payment = await this.prisma.$transaction(async (tx) => {
-        if (invoiceId) {
-          await tx.subscriptionInvoice.update({
-            where: { id: invoiceId },
-            data: { status: 'PAID', paidAt: now },
-          });
+        // Shu shifoxona to'lovlari ketma-ket yoziladi (ikki chatdan bir vaqtda
+        // kelgan to'lovlar bir oyni ikki marta "qoplamasin")
+        await tx.$queryRaw`SELECT 1 AS ok FROM (SELECT pg_advisory_xact_lock(hashtext(${hospitalId}))) AS l`;
+        const state = await this.payments.getBillingState(hospitalId, now, tx);
+        const notes: string[] = [invoiceId ? "Telegram orqali to'lov" : ''];
+        if (!invoiceId) {
+          startPeriod = state.nextPeriod;
+          employeeCount = state.employeeCount;
+          notes[0] =
+            "Telegram orqali to'lov (ESKI invoys — summa tekshirilsin)";
+        } else if (overlaps(state.coveredPeriods, startPeriod, months)) {
+          // Invoys yaratilgandan keyin shu oylar boshqa to'lov bilan yopilgan
+          const moved = months > 1 ? state.annualStart : state.nextPeriod;
+          this.logger.warn(
+            `To'lov ${startPeriod} → ${moved} ga surildi (oylar allaqachon qoplangan): hospital=${hospitalId} charge=${input.telegramChargeId}`,
+          );
+          notes.push(
+            `${coverageLabel(startPeriod, months)} allaqachon qoplangan edi — ${coverageLabel(moved, months)} ga o'tkazildi`,
+          );
+          startPeriod = moved;
         }
-        return tx.payment.create({
+
+        let linkInvoice = invoiceId;
+        if (invoiceId) {
+          const already = await tx.payment.findFirst({
+            where: { invoiceId },
+            select: { id: true },
+          });
+          if (already) {
+            // Bir invoys ikki marta to'langan (boshqa charge id) — pul
+            // yo'qolmasin: alohida yoziladi va operatorga belgi qo'yiladi
+            linkInvoice = null;
+            notes.push(
+              "TAKRORIY: shu invoys allaqachon to'langan — operator tekshirsin",
+            );
+          } else {
+            await tx.subscriptionInvoice.update({
+              where: { id: invoiceId },
+              data: { status: 'PAID', paidAt: now },
+            });
+          }
+        }
+
+        const validUntil = periodEnd(addPeriods(startPeriod, months - 1));
+        const created = await tx.payment.create({
           data: {
             hospitalId,
             payerName: input.payerName,
@@ -310,22 +365,21 @@ export class SubscriptionBillingService {
             telegramPaymentId: input.telegramChargeId,
             providerPaymentId: input.providerChargeId ?? null,
             paidByChatId: input.chatId,
-            invoiceId,
-            note: invoiceId
-              ? "Telegram orqali to'lov"
-              : "Telegram orqali to'lov (eski invoys)",
+            invoiceId: linkInvoice,
+            note: notes.filter(Boolean).join('. '),
           },
           include: { hospital: { select: { name: true } } },
         });
+        return { created, validUntil };
       });
       clearHospitalBlockCache(hospitalId);
       return {
         status: 'RECORDED',
-        hospitalName: payment.hospital.name,
+        hospitalName: payment.created.hospital.name,
         amountSom,
         months,
         coverage: coverageLabel(startPeriod, months),
-        validUntil,
+        validUntil: payment.validUntil,
         employeeCount,
       };
     } catch (e) {

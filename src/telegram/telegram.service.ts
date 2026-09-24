@@ -519,33 +519,59 @@ export class TelegramService implements OnModuleInit {
           ? `📦 ${pricing.planLabel} — FIKS narx`
           : `👥 ${inv.employeeCount} nafar xodim × ${perUnitLabel!.toLocaleString()} so'm`);
 
-      await ctx.replyWithInvoice(
-        title,
-        descriptionLine,
-        inv.payload, // "inv:<id>" — summa/muddat serverdagi yozuvdan olinadi
-        paymentToken,
-        'UZS',
-        [
+      try {
+        await ctx.replyWithInvoice(
+          title,
+          descriptionLine,
+          inv.payload, // "inv:<id>" — summa/muddat serverdagi yozuvdan olinadi
+          paymentToken,
+          'UZS',
+          [
+            {
+              label: inv.coverage,
+              // Telegram eng kichik birlikda kutadi: UZS exp=2 → so'm × 100
+              amount: inv.amountMinor,
+            },
+          ],
           {
-            label: inv.coverage,
-            // Telegram eng kichik birlikda kutadi: UZS exp=2 → so'm × 100
-            amount: inv.amountMinor,
+            photo_url: 'https://clinicuk24.com/icons/icon-192x192.png',
+            need_name: false,
+            send_phone_number: false,
           },
-        ],
-        {
-          photo_url: 'https://clinicuk24.com/icons/icon-192x192.png',
-          need_name: false,
-          send_phone_number: false,
-        },
-      );
+        );
+      } catch (e) {
+        // Masalan summa to'lov tizimi chegarasidan katta — invoys ochiq qolmasin
+        this.logger.error(
+          `Invoys yuborilmadi (invoice=${inv.invoiceId}, ${inv.amountSom} so'm): ${e instanceof Error ? e.message : String(e)}`,
+        );
+        await this.billing.cancelInvoice(inv.invoiceId).catch(() => undefined);
+        await ctx.reply(
+          "⚠️ To'lov oynasini ochib bo'lmadi. Iltimos, operator bilan bog'laning: +998 95 577 54 54",
+        );
+      }
     };
 
-    bot.action(/^pay_(monthly|annual)(?::.*)?$/, async (ctx) => {
+    bot.action(/^pay_(monthly|annual)(?::(.+))?$/, async (ctx) => {
       await ctx.answerCbQuery();
       const type = ctx.match[1].toUpperCase() as 'MONTHLY' | 'ANNUAL';
-      // XAVFSIZLIK: callback data'dagi hospitalId'ga ishonilmaydi — invoys
-      // faqat shu chat ulangan shifoxona uchun yaratiladi.
-      const hospitalId = await this.requireLinkedHospitalId(ctx);
+      // Tugmadagi hospitalId — foydalanuvchi ko'rgan "Obuna" xabaridagi
+      // muassasa (chat bir nechta muassasaga ulangan bo'lishi mumkin).
+      // XAVFSIZLIK: unga faqat shu chatning FAOL ulanishi bo'lsa ishoniladi;
+      // aks holda (eski tugma) — chatning asosiy muassasasi.
+      const requested = ctx.match[2];
+      let hospitalId: string | null = null;
+      if (requested) {
+        const sub = await this.prisma.telegramSubscription.findFirst({
+          where: {
+            chatId: this.chatIdFromCtx(ctx),
+            hospitalId: requested,
+            isActive: true,
+          },
+          select: { hospitalId: true },
+        });
+        hospitalId = sub?.hospitalId ?? null;
+      }
+      hospitalId ??= await this.requireLinkedHospitalId(ctx);
       if (!hospitalId) return;
       await sendSubscriptionInvoice(ctx, hospitalId, type);
     });
@@ -579,15 +605,32 @@ export class TelegramService implements OnModuleInit {
       const payment = ctx.message?.successful_payment;
       if (!payment) return next(); // text va boshqa xabarlarni on('text') ga o'tkazish
 
-      const result = await this.billing.recordSuccessfulPayment({
-        payload: payment.invoice_payload,
-        currency: payment.currency,
-        totalAmount: payment.total_amount,
-        telegramChargeId: payment.telegram_payment_charge_id,
-        providerChargeId: payment.provider_payment_charge_id,
-        chatId: String(ctx.chat.id),
-        payerName: ctx.from?.first_name || 'Foydalanuvchi',
-      });
+      let result: Awaited<
+        ReturnType<SubscriptionBillingService['recordSuccessfulPayment']>
+      >;
+      try {
+        result = await this.billing.recordSuccessfulPayment({
+          payload: payment.invoice_payload,
+          currency: payment.currency,
+          totalAmount: payment.total_amount,
+          telegramChargeId: payment.telegram_payment_charge_id,
+          providerChargeId: payment.provider_payment_charge_id,
+          chatId: String(ctx.chat.id),
+          payerName: ctx.from?.first_name || 'Foydalanuvchi',
+        });
+      } catch (e) {
+        // Pul yechilgan, lekin yozib bo'lmadi. Xom ma'lumot log'da qoladi
+        // (qayta urinishlar ham muvaffaqiyatsiz bo'lsa, operator shundan
+        // qo'lda kiritadi). Xato qayta tashlanadi — webhook 500 qaytaradi va
+        // Telegram yangilanishni qayta yuboradi; yozish idempotent
+        // (telegramPaymentId UNIQUE), shuning uchun ikki marta yozilmaydi.
+        this.logger.error(
+          `TO'LOV YOZILMADI: chat=${ctx.chat?.id} charge=${payment.telegram_payment_charge_id} ` +
+            `provider=${payment.provider_payment_charge_id} payload=${payment.invoice_payload} ` +
+            `amount=${payment.total_amount} ${payment.currency}: ${e instanceof Error ? e.message : String(e)}`,
+        );
+        throw e;
+      }
 
       if (result.status === 'UNKNOWN_INVOICE') {
         await ctx.reply(

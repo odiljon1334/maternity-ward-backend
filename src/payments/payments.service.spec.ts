@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { NotFoundException } from '@nestjs/common';
 import { PaymentsService, currentPeriod } from './payments.service';
+import { addPeriods } from './billing.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { getMonthlyExpectedAmount } from '../common/utils/pricing.util';
 
@@ -46,6 +47,13 @@ function makeFakePrisma() {
       findUnique: jest.fn(async ({ where }: any) => {
         const h = hospitals.find((x) => x.id === where.id);
         return h ? { id: h.id } : null;
+      }),
+    },
+
+    employee: {
+      count: jest.fn(async ({ where }: any) => {
+        const h = hospitals.find((x) => x.id === where?.hospitalId);
+        return h ? h.employees.filter((e: any) => !e.firedAt).length : 0;
       }),
     },
 
@@ -756,7 +764,7 @@ describe('PaymentsService', () => {
       ).rejects.toThrow(NotFoundException);
     });
 
-    it("to'g'ri ma'lumot bilan joriy davr (period) belgilab to'lov yaratadi", async () => {
+    it("davr berilmasa — eng eski to'lanmagan oy (bot bilan bir xil qoida), xodimlar soni saqlanadi", async () => {
       prisma.__state.hospitals.push({
         id: 'h1',
         name: 'Klinika 1',
@@ -774,7 +782,9 @@ describe('PaymentsService', () => {
 
       expect(payment.hospitalId).toBe('h1');
       expect(payment.amount).toBe(40_000);
-      expect(payment.period).toBe(currentPeriod());
+      // Hech narsa to'lanmagan: avto-blok qaraydigan eng eski oy (joriy − 3)
+      expect(payment.period).toBe(addPeriods(currentPeriod(), -3));
+      expect(payment.employeeCount).toBe(0);
     });
   });
 
