@@ -917,6 +917,17 @@ export class EmployeesService {
     if (actorRole && emp.user) {
       assertCanManageRole(actorRole, emp.user.role, "bu xodimni o'chirish");
     }
+    // Tasdiqlangan/to'langan oylik — buxgalteriya hujjati. Ilgari xodimni
+    // o'chirish bu tarixni ham butunlay yo'q qilardi. Bunday xodim o'chirilmaydi,
+    // ishdan bo'shatiladi (arxivda qoladi).
+    const finalizedPayrolls = await this.prisma.payrollRecord.count({
+      where: { employeeId: id, status: { in: ['APPROVED', 'PAID'] } },
+    });
+    if (finalizedPayrolls > 0) {
+      throw new ConflictException(
+        `Xodimning ${finalizedPayrolls} ta tasdiqlangan oylik hisobi bor — uni o'chirib bo'lmaydi. "Ishdan bo'shatish" orqali arxivga o'tkazing.`,
+      );
+    }
     const isDirector = emp.user?.role === 'DIRECTOR';
 
     // ─── Terminal dan o'chirish ───────────────────────────────────────────────

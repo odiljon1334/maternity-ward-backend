@@ -14,10 +14,59 @@ import PDFDocument from 'pdfkit';
 import { PushService } from '../push/push.service';
 import { calcShiftNetMinutes } from '../common/utils/shift.util';
 import {
+  LeaveStatus,
+  LeaveType,
   PayrollAdjustmentStatus,
   PayrollAdjustmentType,
   SalaryAdvanceStatus,
+  ScheduleStatus,
 } from '@prisma/client';
+import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc';
+import timezone from 'dayjs/plugin/timezone';
+dayjs.extend(utc);
+dayjs.extend(timezone);
+const TZ = process.env.TIMEZONE || 'Asia/Tashkent';
+
+/** Ta'til tasdiqlanganda grafikka yoziladigan holatlar */
+export const LEAVE_SCHEDULE_STATUSES: ScheduleStatus[] = [
+  ScheduleStatus.VACATION,
+  ScheduleStatus.SICK,
+  ScheduleStatus.MATERNITY_LEAVE,
+  ScheduleStatus.OTHER_ABSENCE,
+];
+
+/** Oylikdan ushlanadigan ta'til turlari */
+const UNPAID_LEAVE_TYPES: LeaveType[] = [LeaveType.UNPAID];
+
+/**
+ * Ta'til kuni ish kunining o'rniga tushganmi (me'yorga kiradimi).
+ * Yangi yozuvlarda `preLeaveStatus` saqlanadi; eskilarida grafik
+ * generatori faqat ish kunlariga smena qo'yadi — smenasi bor ta'til kuni
+ * ilgari ish kuni bo'lgan.
+ */
+export function replacedWorkingDay(row: {
+  status: ScheduleStatus;
+  preLeaveStatus?: ScheduleStatus | null;
+  shiftId?: string | null;
+  note?: string | null;
+}): boolean {
+  if (!LEAVE_SCHEDULE_STATUSES.includes(row.status)) return false;
+  if (row.preLeaveStatus) return row.preLeaveStatus === ScheduleStatus.WORKING;
+  return !!row.shiftId && (row.note ?? '').startsWith("Ta'til");
+}
+
+/** Oyning Dushanba–Juma kunlari (Toshkent vaqti bo'yicha kun boshi, ms) */
+export function weekdaysOfMonth(year: number, month: number): number[] {
+  const first = dayjs.tz(`${year}-${String(month).padStart(2, '0')}-01`, TZ);
+  const days: number[] = [];
+  for (let i = 0; i < first.daysInMonth(); i++) {
+    const d = first.add(i, 'day');
+    const wd = d.day();
+    if (wd >= 1 && wd <= 5) days.push(d.startOf('day').valueOf());
+  }
+  return days;
+}
 
 @Injectable()
 export class PayrollService {
@@ -45,6 +94,7 @@ export class PayrollService {
 
     const start = DateUtil.startOfMonth(year, month);
     const end = DateUtil.endOfMonth(year, month);
+    const warnings: string[] = [];
 
     // Get attendance records
     const records = await this.prisma.attendanceRecord.findMany({
@@ -65,21 +115,96 @@ export class PayrollService {
       0,
     );
 
-    // Scheduled work days in this month
-    const schedules = await this.prisma.schedule.findMany({
-      where: {
-        employeeId,
-        date: { gte: start, lte: end },
-        status: 'WORKING',
-      },
-      include: { shift: true },
-    });
-    const scheduledDays = schedules.length;
-    const scheduledMinutes = schedules.reduce(
-      (sum, schedule) =>
-        sum + (schedule.shift ? calcShiftNetMinutes(schedule.shift) : 12 * 60), // eski, shiftsiz grafiklar uchun moslik
-      0,
-    );
+    // ── Oylik me'yor (norma) ────────────────────────────────────────────────
+    // Ish kunlari + ish kuniga to'g'ri kelgan ta'til kunlari. Ilgari ta'til
+    // kunlari me'yordan butunlay chiqib ketardi: haqsiz ta'tilda ham to'liq
+    // oylik chiqardi, grafigi yo'q xodim esa kelmasa ham to'liq oylik olardi.
+    const [scheduleRows, leaves] = await Promise.all([
+      this.prisma.schedule.findMany({
+        where: {
+          employeeId,
+          date: { gte: start, lte: end },
+          status: { in: [ScheduleStatus.WORKING, ...LEAVE_SCHEDULE_STATUSES] },
+        },
+        include: { shift: true },
+      }),
+      this.prisma.leaveRequest.findMany({
+        where: {
+          employeeId,
+          status: { in: [LeaveStatus.APPROVED, LeaveStatus.COMPLETED] },
+          startDate: { lte: end },
+          endDate: { gte: start },
+        },
+        select: { type: true, startDate: true, endDate: true },
+      }),
+    ]);
+
+    const dayKey = (d: Date) => DateUtil.startOfDay(d).getTime();
+    const leaveTypeOn = (day: number): LeaveType | null => {
+      const hit = leaves.find(
+        (l) => dayKey(l.startDate) <= day && day <= dayKey(l.endDate),
+      );
+      return hit ? hit.type : null;
+    };
+    const isUnpaidLeave = (day: number | null, status: ScheduleStatus) => {
+      const type = day !== null ? leaveTypeOn(day) : null;
+      if (type) return UNPAID_LEAVE_TYPES.includes(type);
+      return status === ScheduleStatus.OTHER_ABSENCE;
+    };
+
+    type PlanDay = {
+      day: number | null; // eski/test ma'lumotlarida sana bo'lmasligi mumkin
+      kind: 'WORK' | 'LEAVE';
+      unpaid: boolean;
+      minutes: number;
+      scheduleId?: string;
+    };
+    let plan: PlanDay[] = [];
+    for (const row of scheduleRows) {
+      const minutes = row.shift ? calcShiftNetMinutes(row.shift) : 12 * 60; // eski, shiftsiz grafiklar uchun moslik
+      const day = row.date ? dayKey(row.date) : null;
+      if (row.status === ScheduleStatus.WORKING) {
+        plan.push({ day, kind: 'WORK', unpaid: false, minutes, scheduleId: row.id });
+      } else if (replacedWorkingDay(row)) {
+        plan.push({
+          day,
+          kind: 'LEAVE',
+          unpaid: isUnpaidLeave(day, row.status),
+          minutes,
+        });
+      }
+    }
+
+    // Grafik umuman yo'q — 5 kunlik hafta (Du–Ju, 8 soat) me'yori bo'yicha
+    let basis: 'SCHEDULE' | 'WEEKDAY_NORM' = 'SCHEDULE';
+    if (!plan.length) {
+      basis = 'WEEKDAY_NORM';
+      warnings.push('NO_SCHEDULE');
+      plan = weekdaysOfMonth(year, month).map((day) => {
+        const type = leaveTypeOn(day);
+        return type
+          ? {
+              day,
+              kind: 'LEAVE' as const,
+              unpaid: UNPAID_LEAVE_TYPES.includes(type),
+              minutes: 8 * 60,
+            }
+          : { day, kind: 'WORK' as const, unpaid: false, minutes: 8 * 60 };
+      });
+    }
+
+    const scheduledDays = plan.length;
+    const scheduledMinutes = plan.reduce((s, p) => s + p.minutes, 0);
+
+    // Ishga kirishdan oldingi / ishdan ketgandan keyingi kunlar to'lanmaydi
+    // (oy o'rtasida ketgan xodimning yakuniy hisobi)
+    const hiredDay = emp.hiredAt ? dayKey(emp.hiredAt) : null;
+    const firedDay = emp.firedAt ? dayKey(emp.firedAt) : null;
+    const outsideEmployment = (day: number | null) =>
+      day !== null &&
+      ((hiredDay !== null && day < hiredDay) ||
+        (firedDay !== null && day > firedDay));
+
     const attendedScheduleIds = new Set(
       records.map((record) => record.scheduleId).filter(Boolean),
     );
@@ -87,22 +212,38 @@ export class PayrollService {
       records
         .map((record) => record.workDate)
         .filter(Boolean)
-        .map((date) => DateUtil.startOfDay(date).getTime()),
+        .map((date) => dayKey(date)),
     );
-    const todayStart = DateUtil.startOfDay(new Date()).getTime();
-    const inferredAbsences = schedules.filter((schedule) => {
-      if (!schedule.date) return false; // eski/test ma'lumotlarida sana bo'lmasligi mumkin
-      const day = DateUtil.startOfDay(schedule.date).getTime();
-      if (day >= todayStart) return false;
-      return !attendedScheduleIds.has(schedule.id) && !attendedDays.has(day);
-    }).length;
-    const absences = explicitAbsences + inferredAbsences;
+    const todayStart = dayKey(new Date());
+
+    let inferredAbsences = 0;
+    let notEmployedDays = 0;
+    let paidLeaveDays = 0;
+    let unpaidLeaveDays = 0;
+    for (const p of plan) {
+      if (outsideEmployment(p.day)) {
+        notEmployedDays++;
+        continue;
+      }
+      if (p.kind === 'LEAVE') {
+        if (p.unpaid) unpaidLeaveDays++;
+        else paidLeaveDays++;
+        continue;
+      }
+      if (p.day === null || p.day >= todayStart) continue;
+      if (p.scheduleId && attendedScheduleIds.has(p.scheduleId)) continue;
+      if (attendedDays.has(p.day)) continue;
+      inferredAbsences++;
+    }
+    const absences = explicitAbsences + inferredAbsences + notEmployedDays;
+    if (notEmployedDays) warnings.push('PARTIAL_EMPLOYMENT');
 
     const dailyRate = scheduledDays > 0 ? baseSalary / scheduledDays : 0;
     const minuteRate = scheduledMinutes > 0 ? baseSalary / scheduledMinutes : 0;
 
     // Deductions
     const absenceDeduction = absences * dailyRate;
+    const unpaidLeaveDeduction = unpaidLeaveDays * dailyRate;
 
     // Kechikish — davomat fakti. U Mehnat kodeksidagi tushuntirish, buyruq
     // va tanishtirish jarayonisiz avtomatik pul jarimasiga aylantirilmaydi.
@@ -113,7 +254,9 @@ export class PayrollService {
     // Early leave deduction (every minute)
     const earlyLeaveDeduction = totalEarlyMin * minuteRate;
 
-    const [adjustments, advances] = await Promise.all([
+    const prevMonth = month === 1 ? 12 : month - 1;
+    const prevYear = month === 1 ? year - 1 : year;
+    const [adjustments, advances, prevRecord] = await Promise.all([
       this.prisma.payrollAdjustment.findMany({
         where: {
           employeeId,
@@ -126,7 +269,13 @@ export class PayrollService {
             ],
           },
         },
-        select: { type: true, approvedAmount: true, proposedAmount: true },
+        select: {
+          id: true,
+          status: true,
+          type: true,
+          approvedAmount: true,
+          proposedAmount: true,
+        },
       }),
       this.prisma.salaryAdvance.findMany({
         where: {
@@ -137,9 +286,35 @@ export class PayrollService {
             in: [SalaryAdvanceStatus.PAID, SalaryAdvanceStatus.APPLIED],
           },
         },
-        select: { paidAmount: true, approvedAmount: true },
+        select: {
+          id: true,
+          status: true,
+          paidAmount: true,
+          approvedAmount: true,
+        },
+      }),
+      // O'tgan oyning tasdiqlangan hisobida 50% chegarasi yoki oylik
+      // yetmagani sabab keyinga qolgan ushlanma/avans shu oyga o'tadi
+      this.prisma.payrollRecord.findUnique({
+        where: {
+          employeeId_month_year: {
+            employeeId,
+            month: prevMonth,
+            year: prevYear,
+          },
+        },
+        select: { status: true, deferredDeduction: true, deferredAdvance: true },
       }),
     ]);
+
+    const prevFinal =
+      prevRecord?.status === 'APPROVED' || prevRecord?.status === 'PAID';
+    const carriedDeduction = prevFinal
+      ? Number(prevRecord!.deferredDeduction ?? 0)
+      : 0;
+    const carriedAdvance = prevFinal
+      ? Number(prevRecord!.deferredAdvance ?? 0)
+      : 0;
 
     const adjustmentAmount = (type: PayrollAdjustmentType) =>
       adjustments
@@ -159,18 +334,21 @@ export class PayrollService {
     const requestedDisciplinaryFine = adjustmentAmount(
       PayrollAdjustmentType.DISCIPLINARY_FINE,
     );
-    const requestedOtherDeduction = adjustmentAmount(
-      PayrollAdjustmentType.OTHER_LAWFUL_DEDUCTION,
-    );
-    const advancePaid = advances.reduce(
-      (sum, item) => sum + Number(item.paidAmount ?? item.approvedAmount ?? 0),
-      0,
-    );
+    const requestedOtherDeduction =
+      adjustmentAmount(PayrollAdjustmentType.OTHER_LAWFUL_DEDUCTION) +
+      carriedDeduction;
+    const advancePaid =
+      advances.reduce(
+        (sum, item) =>
+          sum + Number(item.paidAmount ?? item.approvedAmount ?? 0),
+        0,
+      ) + carriedAdvance;
 
     const grossSalary = Math.max(
       0,
       baseSalary -
         absenceDeduction -
+        unpaidLeaveDeduction -
         lateDeduction -
         earlyLeaveDeduction +
         overtimeBonus +
@@ -222,6 +400,8 @@ export class PayrollService {
         totalOvertimeMin,
         totalNetWorkMin,
         absenceDeduction: Math.round(absenceDeduction),
+        unpaidLeaveDays,
+        unpaidLeaveDeduction: Math.round(unpaidLeaveDeduction),
         lateDeduction: Math.round(lateDeduction),
         earlyLeaveDeduction: Math.round(earlyLeaveDeduction),
         overtimeBonus: Math.round(overtimeBonus),
@@ -230,12 +410,28 @@ export class PayrollService {
         disciplinaryFine: Math.round(disciplinaryFine),
         otherLawfulDeduction: Math.round(otherLawfulDeduction),
         deferredDeduction: Math.round(deferredDeduction),
+        carriedDeduction: Math.round(carriedDeduction),
         advancePaid: Math.round(advancePaid),
         advanceApplied: Math.round(advanceApplied),
         deferredAdvance: Math.round(deferredAdvance),
+        carriedAdvance: Math.round(carriedAdvance),
         grossSalary: Math.round(grossSalary),
         netSalary: Math.round(netSalary),
       },
+      // Saqlanmaydigan izohlar (UI uchun)
+      details: {
+        basis,
+        warnings,
+        paidLeaveDays,
+        notEmployedDays,
+      },
+      // Shu hisobga kirgan yozuvlar — saqlashda FAQAT shular APPLIED bo'ladi
+      appliedAdjustmentIds: adjustments
+        .filter((a) => a.status === PayrollAdjustmentStatus.APPROVED)
+        .map((a) => a.id),
+      appliedAdvanceIds: advances
+        .filter((a) => a.status === SalaryAdvanceStatus.PAID)
+        .map((a) => a.id),
     };
   }
 
@@ -271,14 +467,8 @@ export class PayrollService {
     }
     // hospitalId — chaqiruvchi muassasasi (SUPER_ADMIN uchun null): boshqa
     // muassasa xodimi "topilmadi" bo'ladi
-    const { preview } = await this.calculate(
-      employeeId,
-      month,
-      year,
-      hospitalId,
-    );
-
-    const netWithManual = preview.netSalary;
+    const { preview, appliedAdjustmentIds, appliedAdvanceIds } =
+      await this.calculate(employeeId, month, year, hospitalId);
 
     // scheduledDays, employeeId, month, year — DB modelida yo'q yoki where clause da
     const {
@@ -286,84 +476,73 @@ export class PayrollService {
       employeeId: _e,
       month: _m,
       year: _y,
-      netSalary: _n,
       ...dbFields
     } = preview;
+    const data = {
+      ...dbFields,
+      manualBonus: 0,
+      manualDeduction: 0,
+      note,
+    };
 
-    // Mavjud yozuv statusini tekshiramiz — APPROVED/PAID bo'lsa status ni o'zgartirmaymiz
-    const existing = await this.prisma.payrollRecord.findUnique({
-      where: { employeeId_month_year: { employeeId, month, year } },
-      select: { status: true, manualBonus: true, manualDeduction: true },
-    });
-
-    const keepStatus =
-      existing?.status === 'APPROVED' || existing?.status === 'PAID';
-    if (keepStatus) {
+    // Bitta tranzaksiya: yozuv va unga kirgan KPI/ushlanma/avanslar birga
+    // yoziladi. Faqat HISOBGA KIRGAN yozuvlar APPLIED bo'ladi — ilgari
+    // hisob va saqlash orasida tasdiqlangan ushlanma ham APPLIED bo'lib,
+    // hech qaysi oylikka tushmay yo'qolardi.
+    return this.prisma.$transaction(async (tx) => {
+      const existing = await tx.payrollRecord.findUnique({
+        where: { employeeId_month_year: { employeeId, month, year } },
+        select: { id: true, status: true },
+      });
       // Tasdiqlangan/to'langan payroll immutable. Keyingi o'zgarishlar yangi
       // davr yoki alohida korrektirovka/reversiya orqali yuritiladi.
-      return this.prisma.payrollRecord.findUnique({
-        where: { employeeId_month_year: { employeeId, month, year } },
-      });
-    }
-    const finalStatus = 'DRAFT';
+      if (existing && existing.status !== 'DRAFT') {
+        return tx.payrollRecord.findUnique({ where: { id: existing.id } });
+      }
 
-    // APPROVED/PAID bo'lsa manual bonuslarni ham saqlaymiz
-    const finalBonus = keepStatus ? Number(existing!.manualBonus) : 0;
-    const finalDeduction = keepStatus ? Number(existing!.manualDeduction) : 0;
-    const finalNet = Math.max(
-      0,
-      preview.netSalary + finalBonus - finalDeduction,
-    );
+      let record;
+      if (existing) {
+        // Parallel tasdiqlangan bo'lsa DRAFT'ga qaytarib yubormaymiz
+        const updated = await tx.payrollRecord.updateMany({
+          where: { id: existing.id, status: 'DRAFT' },
+          data,
+        });
+        record = await tx.payrollRecord.findUnique({
+          where: { id: existing.id },
+        });
+        if (updated.count === 0) return record;
+      } else {
+        record = await tx.payrollRecord.create({
+          data: { employeeId, month, year, ...data, status: 'DRAFT' },
+        });
+      }
 
-    const record = await this.prisma.payrollRecord.upsert({
-      where: { employeeId_month_year: { employeeId, month, year } },
-      update: {
-        ...dbFields,
-        manualBonus: finalBonus,
-        manualDeduction: finalDeduction,
-        netSalary: finalNet,
-        note,
-        status: finalStatus,
-      },
-      create: {
-        employeeId,
-        month,
-        year,
-        ...dbFields,
-        manualBonus: 0,
-        manualDeduction: 0,
-        netSalary: netWithManual,
-        note,
-        status: 'DRAFT',
-      },
+      if (appliedAdjustmentIds.length) {
+        await tx.payrollAdjustment.updateMany({
+          where: {
+            id: { in: appliedAdjustmentIds },
+            status: PayrollAdjustmentStatus.APPROVED,
+          },
+          data: {
+            status: PayrollAdjustmentStatus.APPLIED,
+            payrollRecordId: record!.id,
+          },
+        });
+      }
+      if (appliedAdvanceIds.length) {
+        await tx.salaryAdvance.updateMany({
+          where: {
+            id: { in: appliedAdvanceIds },
+            status: SalaryAdvanceStatus.PAID,
+          },
+          data: {
+            status: SalaryAdvanceStatus.APPLIED,
+            payrollRecordId: record!.id,
+          },
+        });
+      }
+      return record;
     });
-    await this.prisma.$transaction([
-      this.prisma.payrollAdjustment.updateMany({
-        where: {
-          employeeId,
-          month,
-          year,
-          status: PayrollAdjustmentStatus.APPROVED,
-        },
-        data: {
-          status: PayrollAdjustmentStatus.APPLIED,
-          payrollRecordId: record.id,
-        },
-      }),
-      this.prisma.salaryAdvance.updateMany({
-        where: {
-          employeeId,
-          month,
-          year,
-          status: SalaryAdvanceStatus.PAID,
-        },
-        data: {
-          status: SalaryAdvanceStatus.APPLIED,
-          payrollRecordId: record.id,
-        },
-      }),
-    ]);
-    return record;
   }
 
   // ──────────────────────────────────────────
@@ -383,22 +562,25 @@ export class PayrollService {
       return { month, year, total: 0, blocked: true, results: [] };
     }
 
-    const where: any = { firedAt: null };
+    // Shu oyda kamida bir kun ishlagan xodimlar: oy o'rtasida ketganlar ham
+    // (yakuniy hisob), oydan keyin ishga kirganlar esa yo'q
+    const monthStart = DateUtil.startOfMonth(year, month);
+    const monthEnd = DateUtil.endOfMonth(year, month);
+    const where: any = {
+      hiredAt: { lte: monthEnd },
+      OR: [{ firedAt: null }, { firedAt: { gte: monthStart } }],
+    };
     if (hospitalId) where.hospitalId = hospitalId;
     if (departmentId) where.departmentId = departmentId;
 
     const employees = await this.prisma.employee.findMany({
       where,
-      select: { id: true },
+      select: { id: true, userId: true },
     });
 
     const results = [];
-    const empFull = await this.prisma.employee.findMany({
-      where,
-      select: { id: true, userId: true },
-    });
     const userIdMap: Record<string, string | null> = {};
-    for (const e of empFull) userIdMap[e.id] = e.userId;
+    for (const e of employees) userIdMap[e.id] = e.userId;
 
     for (const emp of employees) {
       try {
@@ -406,13 +588,13 @@ export class PayrollService {
         results.push({
           employeeId: emp.id,
           status: 'ok',
-          netSalary: Number(record.netSalary),
+          netSalary: Number(record?.netSalary ?? 0),
         });
         // Push xabarnoma — xodimga maosh hisoblandi
         const uid = userIdMap[emp.id];
         if (uid) {
           this.push
-            .notifyPayrollGenerated(uid, month, year, Number(record.netSalary))
+            .notifyPayrollGenerated(uid, month, year, Number(record?.netSalary ?? 0))
             .catch(() => null);
         }
       } catch (e) {
@@ -547,6 +729,10 @@ export class PayrollService {
       'Avans',
       'Payrollga qo‘llangan avans',
       'Keyingi davrga qolgan avans',
+      "Haqsiz ta'til (kun)",
+      "Haqsiz ta'til kesimi",
+      "O'tgan oydan ushlanma",
+      "O'tgan oydan avans",
       'Gross maosh',
       "Qo'l bonus",
       "Qo'l kesim",
@@ -589,6 +775,10 @@ export class PayrollService {
         Number(r.advancePaid),
         Number(r.advanceApplied),
         Number(r.deferredAdvance),
+        r.unpaidLeaveDays ?? 0,
+        Number(r.unpaidLeaveDeduction ?? 0),
+        Number(r.carriedDeduction ?? 0),
+        Number(r.carriedAdvance ?? 0),
         Number(r.grossSalary),
         Number(r.manualBonus),
         Number(r.manualDeduction),
@@ -621,6 +811,10 @@ export class PayrollService {
       { width: 14 },
       { width: 15 },
       { width: 12 },
+      { width: 14 },
+      { width: 16 },
+      { width: 18 },
+      { width: 16 },
       { width: 12 },
       { width: 15 },
       { width: 12 },
@@ -768,6 +962,18 @@ export class PayrollService {
     const lateDeduction = record
       ? Number(record.lateDeduction)
       : previewData.lateDeduction;
+    const unpaidLeaveDays = record
+      ? (record.unpaidLeaveDays ?? 0)
+      : previewData.unpaidLeaveDays;
+    const unpaidLeaveDeduction = record
+      ? Number(record.unpaidLeaveDeduction ?? 0)
+      : previewData.unpaidLeaveDeduction;
+    const carriedDeduction = record
+      ? Number(record.carriedDeduction ?? 0)
+      : previewData.carriedDeduction;
+    const carriedAdvance = record
+      ? Number(record.carriedAdvance ?? 0)
+      : previewData.carriedAdvance;
     const earlyLeaveDeduction = record
       ? Number(record.earlyLeaveDeduction)
       : previewData.earlyLeaveDeduction;
@@ -809,6 +1015,7 @@ export class PayrollService {
 
     const totalDeductions =
       absenceDeduction +
+      unpaidLeaveDeduction +
       earlyLeaveDeduction +
       disciplinaryFine +
       otherLawfulDeduction +
@@ -963,8 +1170,16 @@ export class PayrollService {
       drawSection('HISOB-KITOB TUZATMALARI VA USHLANMALAR', [
         {
           label: "Yo'qlik uchun kesim",
-          value: totalDeductions > 0 ? `− ${fmtMoney(absenceDeduction)}` : '—',
+          value: absenceDeduction > 0 ? `− ${fmtMoney(absenceDeduction)}` : '—',
           color: absenceDeduction > 0 ? COLORS.danger : undefined,
+        },
+        {
+          label: `Haqsiz ta'til (${unpaidLeaveDays} kun)`,
+          value:
+            unpaidLeaveDeduction > 0
+              ? `− ${fmtMoney(unpaidLeaveDeduction)}`
+              : '—',
+          color: unpaidLeaveDeduction > 0 ? COLORS.danger : undefined,
         },
         {
           label: 'Kechikish (faqat davomat fakti)',
@@ -995,6 +1210,13 @@ export class PayrollService {
           label: 'Oldindan to‘langan avans',
           value: advanceApplied > 0 ? `− ${fmtMoney(advanceApplied)}` : '—',
           color: advanceApplied > 0 ? COLORS.danger : undefined,
+        },
+        {
+          label: "O'tgan oydan o'tgan ushlanma / avans",
+          value:
+            carriedDeduction + carriedAdvance > 0
+              ? `${fmtMoney(carriedDeduction)} / ${fmtMoney(carriedAdvance)}`
+              : '—',
         },
         {
           label: 'Keyingi davrga qolgan avans',

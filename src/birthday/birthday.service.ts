@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { CronLock } from '../common/utils/cron-lock';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { TelegramService } from '../telegram/telegram.service';
@@ -13,6 +14,7 @@ export class BirthdayService {
   ) {}
 
   @Cron('0 9 * * *', { timeZone: 'Asia/Tashkent' })
+  @CronLock('birthday.sendBirthdayNotifications', 30 * 60_000)
   async sendBirthdayNotifications() {
     this.logger.log('Birthday check started...');
 

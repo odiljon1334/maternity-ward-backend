@@ -12,7 +12,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { memoryStorage } from 'multer';
+import { spreadsheetUpload } from '../common/utils/upload.util';
 import { SchedulesService } from './schedules.service';
 import {
   GenerateScheduleDto,
@@ -211,7 +211,7 @@ export class SchedulesController {
     UserRole.ADMIN,
     UserRole.DIRECTOR,
   )
-  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
+  @UseInterceptors(FileInterceptor('file', spreadsheetUpload(5)))
   async importXlsx(
     @UploadedFile() file: Express.Multer.File,
     @Body() body: { month: string; year: string },

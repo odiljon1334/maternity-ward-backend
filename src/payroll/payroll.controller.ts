@@ -189,19 +189,20 @@ export class PayrollController {
     UserRole.ASSISTANT_ADMIN,
   )
   @RequirePermission('payroll.view')
-  preview(
+  async preview(
     @Param('employeeId') employeeId: string,
     @Query('month') month: string,
     @Query('year') year: string,
     @CurrentUser('hospitalId') hospitalId: string | null,
   ) {
     const now = new Date();
-    return this.service.calculate(
+    const { preview, details } = await this.service.calculate(
       employeeId,
       +month || now.getMonth() + 1,
       +year || now.getFullYear(),
       hospitalId,
     );
+    return { preview, details };
   }
 
   @Get('payslip/:employeeId')

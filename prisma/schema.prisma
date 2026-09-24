@@ -585,6 +585,9 @@ model Schedule {
   date   DateTime
   status ScheduleStatus @default(WORKING)
   note   String?
+  // Ta'til yozilishidan oldingi holat — ta'til qaytarilganda tiklanadi
+  // (ilgari barcha kunlar, dam olish kunlari ham, WORKING bo'lib qolardi)
+  preLeaveStatus ScheduleStatus?
 
   // POST_COVERAGE rejasidan nashr qilingan grafiklar uchun audit manbasi.
   // Eski STANDARD grafiklarda bu maydonlar null bo'lib qoladi.
@@ -819,6 +822,7 @@ model AttendanceRecord {
   @@unique([employeeId, workDate])
   @@index([employeeId, workDate])
   @@index([faceCheckPending, workDate])
+  @@index([workDate])
 }
 
 // ─────────────────────────────────────────────
@@ -924,6 +928,12 @@ model PayrollRecord {
   advancePaid          Decimal @default(0) @db.Decimal(12, 2)
   advanceApplied       Decimal @default(0) @db.Decimal(12, 2)
   deferredAdvance      Decimal @default(0) @db.Decimal(12, 2)
+  // O'tgan oy tasdiqlangan hisobidan o'tgan (deferred) ushlanma va avans
+  carriedDeduction     Decimal @default(0) @db.Decimal(12, 2)
+  carriedAdvance       Decimal @default(0) @db.Decimal(12, 2)
+  // Haqsiz ta'tilning ish kunlariga to'g'ri kelgan qismi
+  unpaidLeaveDays      Int     @default(0)
+  unpaidLeaveDeduction Decimal @default(0) @db.Decimal(12, 2)
   grossSalary          Decimal @default(0) @db.Decimal(12, 2)
 
   netSalary Decimal       @db.Decimal(12, 2)
@@ -1387,4 +1397,13 @@ model HospitalDidoxCredential {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+/// Cron vazifalari uchun taqsimlangan qulf: rolling deploy paytida ikki
+/// backend nusxasi bir vaqtda ishlaganda ham bitta cron bir marta bajariladi.
+model CronLock {
+  name        String   @id
+  owner       String
+  lockedUntil DateTime
+  updatedAt   DateTime @updatedAt
 }

@@ -17,6 +17,7 @@ import timezone from 'dayjs/plugin/timezone';
 import isoWeek from 'dayjs/plugin/isoWeek';
 import * as path from 'path';
 import * as fs from 'fs';
+import { randomBytes } from 'crypto';
 
 import { PrismaService } from '../prisma/prisma.service';
 import { TelegramService } from '../telegram/telegram.service';
@@ -1755,7 +1756,8 @@ export class AttendanceService {
         process.env.UPLOAD_DIR || './uploads',
         'selfies',
       );
-      const base = `${dayjs(workDate).format('YYYY-MM-DD')}-${employee.id.slice(-8)}`;
+      // Tasodifiy qism: sana + ID oxiri bo'yicha fayl nomini topib bo'lmasin
+      const base = `${dayjs(workDate).format('YYYY-MM-DD')}-${employee.id.slice(-8)}-${randomBytes(8).toString('hex')}`;
       const { filename } = await processAndSavePhoto(
         selfieBuffer,
         uploadDir,
@@ -1918,7 +1920,7 @@ export class AttendanceService {
           process.env.UPLOAD_DIR || './uploads',
           'selfies',
         );
-        const base = `checkout-${dayjs(recordWorkDate).tz(TZ).format('YYYY-MM-DD')}-${employee.id.slice(-8)}`;
+        const base = `checkout-${dayjs(recordWorkDate).tz(TZ).format('YYYY-MM-DD')}-${employee.id.slice(-8)}-${randomBytes(8).toString('hex')}`;
         const { filename } = await processAndSavePhoto(
           selfieBuffer,
           uploadDir,

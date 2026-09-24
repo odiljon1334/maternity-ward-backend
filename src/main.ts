@@ -18,6 +18,9 @@ import { join } from 'path';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import * as express from 'express';
 import { thumbnailMiddleware } from './common/utils/thumbnail.util';
+import { JwtService } from '@nestjs/jwt';
+import { PrismaService } from './prisma/prisma.service';
+import { privateSelfiesMiddleware } from './common/middleware/private-uploads.middleware';
 
 async function bootstrap() {
   // bodyParser: false — raw body o'qish uchun (Hikvision multipart)
@@ -78,6 +81,15 @@ async function bootstrap() {
   // Birinchi so'rovda generatsiya qilinadi, keyin diskdan beriladi.
   // ⚠️ useStaticAssets dan OLDIN turishi shart — aks holda static uni ushlab qoladi.
   app.use('/uploads/thumb', thumbnailMiddleware(uploadsPath));
+
+  // Check-in selfilari — faqat vakolatli foydalanuvchiga (shaxsiy ma'lumot)
+  app.use(
+    '/uploads/selfies',
+    privateSelfiesMiddleware(
+      new JwtService({ secret: process.env.JWT_SECRET }),
+      app.get(PrismaService),
+    ),
+  );
 
   // Fayl nomlari takrorlanmaydi (timestamp + random), rasm yangilanganda
   // eski fayl o'chirilib yangi nom beriladi → immutable kesh xavfsiz.

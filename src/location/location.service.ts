@@ -2,6 +2,7 @@ import { buildGeoCenters, matchGeoCenter } from '../work-sites/geofence.util';
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpdateLiveLocationDto } from './dto/update-live-location.dto';
+import { CronLock } from '../common/utils/cron-lock';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { UserRole, UserStatus } from '@prisma/client';
 
@@ -14,6 +15,7 @@ export class LocationService {
   constructor(private readonly prisma: PrismaService) {}
 
   @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
+  @CronLock('location.cleanOldLocations', 30 * 60_000)
   async cleanOldLocations() {
     const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const deleted = await this.prisma.liveLocation.deleteMany({

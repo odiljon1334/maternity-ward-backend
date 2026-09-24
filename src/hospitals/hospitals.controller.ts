@@ -14,7 +14,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { memoryStorage } from 'multer';
+import { imageUpload } from '../common/utils/upload.util';
 import { HospitalsService } from './hospitals.service';
 import { SetHospitalGpsDto } from './dto/set-hospital-gps.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -294,7 +294,7 @@ export class HospitalsController {
 
   @Post('me/logo')
   @Roles(DIR, ADMIN)
-  @UseInterceptors(FileInterceptor('logo', { storage: memoryStorage() }))
+  @UseInterceptors(FileInterceptor('logo', imageUpload(3)))
   updateOwnLogo(
     @UploadedFile() file: Express.Multer.File,
     @CurrentUser('hospitalId') hospitalId: string,

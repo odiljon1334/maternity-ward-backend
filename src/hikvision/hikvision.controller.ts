@@ -21,6 +21,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
 import { AddPersonDto } from './hikvision.dto';
 import { TenantScopeGuard } from '../common/guards/tenant-scope.guard';
+import { imageUpload } from '../common/utils/upload.util';
 
 const TERMINAL_ROLES = [
   UserRole.SUPER_ADMIN,
@@ -68,7 +69,7 @@ export class HikvisionController {
   @Post('devices/:devIndex/persons/:employeeNo/face')
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
-  @UseInterceptors(FileInterceptor('image'))
+  @UseInterceptors(FileInterceptor('image', imageUpload(10)))
   addFace(
     @Param('devIndex') devIndex: string,
     @Param('employeeNo') employeeNo: string,

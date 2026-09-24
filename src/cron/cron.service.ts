@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { CronLock } from '../common/utils/cron-lock';
 import { Cron } from '@nestjs/schedule';
 import { AttendanceService } from '../attendance/attendance.service';
 import { TelegramService } from '../telegram/telegram.service';
@@ -37,6 +38,7 @@ export class CronService {
 
   /** Face Match strict rejimda mobil check-in uchun kritik dependency. */
   @Cron('* * * * *', { timeZone: TZ })
+  @CronLock('cron.monitorFaceMatch', 55_000)
   async monitorFaceMatch() {
     try {
       await this.faceMatchMonitorService.check();
@@ -52,6 +54,7 @@ export class CronService {
    * rasmi yo'q) yozuvlarni har 5 daqiqada qayta tekshiradi.
    */
   @Cron('*/5 * * * *', { timeZone: TZ })
+  @CronLock('cron.recheckDeferredFaces', 270_000)
   async recheckDeferredFaces() {
     try {
       await this.faceRecheckService.run();
@@ -69,6 +72,7 @@ export class CronService {
    * Gatewayning o'zi javob bermasa hech bir terminal holati o'zgartirilmaydi.
    */
   @Cron('*/2 * * * *', { timeZone: TZ })
+  @CronLock('cron.monitorTerminalConnectivity', 110_000)
   async monitorTerminalConnectivity() {
     const configuredThreshold = Number(
       process.env.TERMINAL_OFFLINE_THRESHOLD_MINUTES ?? 5,
@@ -186,6 +190,7 @@ export class CronService {
    * Night shift hodimlar bundan mustasno (ular 20:00 da kelishi kerak)
    */
   @Cron('0 21 * * *', { timeZone: process.env.TIMEZONE || 'Asia/Tashkent' })
+  @CronLock('cron.markAbsentDaily', 30 * 60_000)
   async markAbsentDaily() {
     this.logger.log('Running daily absent marker...');
     try {
@@ -201,6 +206,7 @@ export class CronService {
    * Faqat kunduzgi smen uchun (night shift 20:00 da keladi)
    */
   @Cron('0 10 * * 1-6', { timeZone: process.env.TIMEZONE || 'Asia/Tashkent' })
+  @CronLock('cron.lateArrivalAlert', 30 * 60_000)
   async lateArrivalAlert() {
     this.logger.log('Sending late arrival alert...');
     try {
@@ -317,6 +323,7 @@ export class CronService {
    * Telegram orqali direktorga yuboriladi
    */
   @Cron('30 8 * * 1-6', { timeZone: process.env.TIMEZONE || 'Asia/Tashkent' })
+  @CronLock('cron.morningReport', 30 * 60_000)
   async morningReport() {
     this.logger.log('Sending morning report...');
     try {
@@ -411,6 +418,7 @@ export class CronService {
    * Har 5 daqiqada — ish soati tugagan lekin check-out qilmagan xodimlarni tekshiradi
    */
   @Cron('*/5 * * * *', { timeZone: TZ })
+  @CronLock('cron.checkoutReminderCron', 270_000)
   async checkoutReminderCron() {
     try {
       const now = dayjs.tz(new Date(), TZ);
@@ -461,6 +469,7 @@ export class CronService {
    * avtomatik yopadi va muassasa direktorini ogohlantiradi.
    */
   @Cron('50 23 * * *', { timeZone: TZ })
+  @CronLock('cron.autoCloseMissingCheckoutsCron', 30 * 60_000)
   async autoCloseMissingCheckoutsCron() {
     try {
       const closed = await this.attendanceService.autoCloseMissingCheckouts();
@@ -501,6 +510,7 @@ export class CronService {
    */
   /** Har kuni 03:30 — muddati o'tgan (24 soat) ochiq Telegram invoyslari yopiladi */
   @Cron('30 3 * * *', { timeZone: TZ })
+  @CronLock('cron.expireInvoicesCron', 30 * 60_000)
   async expireInvoicesCron() {
     try {
       const expired = await this.paymentsService.expireStaleInvoices();
@@ -513,6 +523,7 @@ export class CronService {
   }
 
   @Cron('0 9 25 * *', { timeZone: TZ })
+  @CronLock('cron.paymentReminderCron', 30 * 60_000)
   async paymentReminderCron() {
     try {
       const period = currentPeriod();
@@ -545,6 +556,7 @@ export class CronService {
    * Har dushanba 09:00 da — o'tgan hafta hisoboti
    */
   @Cron('0 9 * * 1', { timeZone: process.env.TIMEZONE || 'Asia/Tashkent' })
+  @CronLock('cron.weeklyReport', 30 * 60_000)
   async weeklyReport() {
     this.logger.log('Sending weekly report via Telegram...');
     try {
@@ -618,6 +630,7 @@ export class CronService {
    * Har oyning 1-kuni 09:00 da — oylik statistika
    */
   @Cron('0 9 1 * *', { timeZone: process.env.TIMEZONE || 'Asia/Tashkent' })
+  @CronLock('cron.monthlyReport', 30 * 60_000)
   async monthlyReport() {
     this.logger.log('Sending monthly report via Telegram...');
     try {
@@ -717,6 +730,7 @@ export class CronService {
    * Allaqachon grafigi bor xodimlar o'tkazib yuboriladi.
    */
   @Cron('5 0 1 * *', { timeZone: TZ })
+  @CronLock('cron.monthlyScheduleRollover', 30 * 60_000)
   async monthlyScheduleRollover() {
     const now = dayjs.tz(new Date(), TZ);
     const toMonth = now.month() + 1;
@@ -748,6 +762,7 @@ export class CronService {
    * va xodim statusini ACTIVE ga qaytaradi
    */
   @Cron('0 1 * * *', { timeZone: TZ })
+  @CronLock('cron.completeExpiredLeaves', 30 * 60_000)
   async completeExpiredLeaves() {
     this.logger.log('Running completeExpiredLeaves...');
     try {

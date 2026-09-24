@@ -25,13 +25,28 @@ dayjs.extend(timezone);
 
 const TZ = process.env.TIMEZONE || 'Asia/Tashkent';
 
+/**
+ * Ta'til turi → grafik holati. Haqsiz ta'til ilgari VACATION bo'lib yozilib,
+ * oylikda to'lanadigan ta'til kabi ko'rinardi; tug'ruq ta'tili ham.
+ * Oylik baribir LeaveRequest turiga qaraydi (eski yozuvlar uchun ham).
+ */
 const LEAVE_TO_SCHEDULE: Record<LeaveType, ScheduleStatus> = {
   VACATION: ScheduleStatus.VACATION,
   SICK: ScheduleStatus.SICK,
   PERSONAL: ScheduleStatus.VACATION,
-  MATERNITY: ScheduleStatus.VACATION,
-  UNPAID: ScheduleStatus.VACATION,
+  MATERNITY: ScheduleStatus.MATERNITY_LEAVE,
+  UNPAID: ScheduleStatus.OTHER_ABSENCE,
 };
+
+/** Ta'til yozadigan grafik holatlari (qaytarishda shular tiklanadi) */
+const LEAVE_WRITTEN_STATUSES: ScheduleStatus[] = [
+  ScheduleStatus.VACATION,
+  ScheduleStatus.SICK,
+  ScheduleStatus.MATERNITY_LEAVE,
+  ScheduleStatus.OTHER_ABSENCE,
+];
+
+const LEAVE_NOTE_PREFIX = "Ta'til: ";
 
 export const LEAVE_TYPE_LABELS: Record<LeaveType, string> = {
   VACATION: "Yillik ta'til",
@@ -393,27 +408,48 @@ export class LeaveService {
     const start = dayjs(leave.startDate).tz(TZ).startOf('day');
     const end = dayjs(leave.endDate).tz(TZ).startOf('day');
 
+    const note = `${LEAVE_NOTE_PREFIX}${LEAVE_TYPE_LABELS[leave.type as LeaveType]}`;
+
     let cursor = start;
     let count = 0;
 
     while (cursor.isSame(end) || cursor.isBefore(end)) {
       const dateUTC = cursor.toDate();
+      const where = {
+        employeeId_date: { employeeId: leave.employeeId, date: dateUTC },
+      };
 
-      await this.prisma.schedule.upsert({
-        where: {
-          employeeId_date: { employeeId: leave.employeeId, date: dateUTC },
-        },
-        update: {
-          status: scheduleStatus,
-          note: `Ta'til: ${LEAVE_TYPE_LABELS[leave.type as LeaveType]}`,
-        },
-        create: {
-          employeeId: leave.employeeId,
-          date: dateUTC,
-          status: scheduleStatus,
-          note: `Ta'til: ${LEAVE_TYPE_LABELS[leave.type as LeaveType]}`,
-        },
+      const existing = await this.prisma.schedule.findUnique({
+        where,
+        select: { id: true, status: true, note: true, preLeaveStatus: true },
       });
+      if (existing) {
+        // Oldingi holat saqlanadi (ta'til qaytarilganda tiklash uchun).
+        // Kun allaqachon ta'til bo'lsa — birinchi ta'tildan oldingisi qoladi.
+        const alreadyLeave =
+          LEAVE_WRITTEN_STATUSES.includes(existing.status) &&
+          (existing.note ?? '').startsWith(LEAVE_NOTE_PREFIX);
+        await this.prisma.schedule.update({
+          where: { id: existing.id },
+          data: {
+            status: scheduleStatus,
+            note,
+            preLeaveStatus: alreadyLeave
+              ? existing.preLeaveStatus
+              : existing.status,
+          },
+        });
+      } else {
+        await this.prisma.schedule.create({
+          data: {
+            employeeId: leave.employeeId,
+            date: dateUTC,
+            status: scheduleStatus,
+            note,
+            preLeaveStatus: null, // grafikda bu kun yo'q edi
+          },
+        });
+      }
 
       cursor = cursor.add(1, 'day');
       count++;
@@ -442,11 +478,40 @@ export class LeaveService {
         },
       });
 
-      if (sch && ['VACATION', 'SICK'].includes(sch.status)) {
-        await this.prisma.schedule.update({
-          where: { id: sch.id },
-          data: { status: ScheduleStatus.WORKING, note: null },
-        });
+      // Faqat ta'til yozgan kunlar (qo'lda qo'yilgan kasallik/yo'qlik emas)
+      if (
+        sch &&
+        LEAVE_WRITTEN_STATUSES.includes(sch.status) &&
+        (sch.note ?? '').startsWith(LEAVE_NOTE_PREFIX)
+      ) {
+        if (sch.preLeaveStatus) {
+          // Oldingi holat (ish kuni, dam olish kuni...) tiklanadi
+          await this.prisma.schedule.update({
+            where: { id: sch.id },
+            data: { status: sch.preLeaveStatus, note: null, preLeaveStatus: null },
+          });
+        } else if (sch.shiftId) {
+          // Eski yozuv (preLeaveStatus yo'q): grafik generatori faqat ish
+          // kunlariga smena qo'yadi — smenasi bor kun ish kuni bo'lgan
+          await this.prisma.schedule.update({
+            where: { id: sch.id },
+            data: { status: ScheduleStatus.WORKING, note: null },
+          });
+        } else {
+          // Ta'til uchun yaratilgan (grafikda yo'q edi) — olib tashlanadi.
+          // Ilgari bunday kunlar, dam olish kunlari ham, WORKING bo'lib
+          // qolardi va xodim "kelmadi" deb belgilanardi.
+          const removed = await this.prisma.schedule.deleteMany({
+            where: { id: sch.id, attendance: { is: null } },
+          });
+          if (removed.count === 0) {
+            // Davomat yozuvi bog'langan — o'chirmasdan dam olish kuni qilamiz
+            await this.prisma.schedule.update({
+              where: { id: sch.id },
+              data: { status: ScheduleStatus.DAY_OFF, note: null },
+            });
+          }
+        }
       }
 
       cursor = cursor.add(1, 'day');

@@ -172,6 +172,31 @@ success "Build tugadi"
 # ── 4. Database migratsiyasi (yangi image bilan, app almashtirishdan oldin) ──
 # Dockerfile startup ichida migrate qilmaydi: bu parallel replica race'ini
 # va noto'g'ri image sabab deploydagi outage'ni oldini oladi.
+# Migratsiyadan OLDIN lokal backup: migratsiya yarim yo'lda yiqilsa yoki
+# ma'lumotni noto'g'ri o'zgartirsa, tiklash nuqtasi bo'lsin. Backup olinmasa
+# migratsiya boshlanmaydi (SKIP_PRE_MIGRATE_BACKUP=1 — ongli ravishda o'tkazish).
+if [ "${SKIP_PRE_MIGRATE_BACKUP:-0}" != "1" ]; then
+    log "4a. Migratsiyadan oldin database backup olinmoqda..."
+    PG_USER=$(grep "^POSTGRES_USER=" "$BACKEND_DIR/.env.prod" | cut -d '=' -f2- | tr -d '"')
+    PG_DB=$(grep "^POSTGRES_DB=" "$BACKEND_DIR/.env.prod" | cut -d '=' -f2- | tr -d '"')
+    PG_USER=${PG_USER:-maternity_user}
+    PG_DB=${PG_DB:-maternity_ward_db}
+    PRE_DIR="$BACKEND_DIR/backups/pre-deploy"
+    mkdir -p "$PRE_DIR"
+    PRE_FILE="$PRE_DIR/pre_migrate_$(date +%Y-%m-%d_%H-%M-%S).sql.gz"
+    set +e
+    docker exec maternity_postgres pg_dump -U "$PG_USER" "$PG_DB" | gzip > "$PRE_FILE"
+    DUMP_STATUS=${PIPESTATUS[0]}
+    set -e
+    if [ "$DUMP_STATUS" -ne 0 ] || [ ! -s "$PRE_FILE" ] || ! gzip -t "$PRE_FILE"; then
+        rm -f "$PRE_FILE"
+        error "Backup olinmadi — migratsiya boshlanmadi (production eski versiyada ishlayapti)."
+    fi
+    success "Backup: $PRE_FILE ($(du -h "$PRE_FILE" | cut -f1))"
+    # Faqat oxirgi 5 ta deploy-oldi backup saqlanadi
+    ls -1t "$PRE_DIR"/pre_migrate_*.sql.gz 2>/dev/null | tail -n +6 | xargs -r rm -f
+fi
+
 log "4. Database migratsiyasi tekshirilmoqda..."
 compose run --rm --no-deps backend npx prisma migrate deploy
 success "Migratsiya bajarildi"

@@ -10,7 +10,7 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { memoryStorage } from 'multer';
+import { imageUpload } from '../common/utils/upload.util';
 import { AttendanceService } from './attendance.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -85,7 +85,7 @@ export class AttendanceController {
    */
   @Post('self-checkin')
   @Roles(UserRole.EMPLOYEE)
-  @UseInterceptors(FileInterceptor('selfie', { storage: memoryStorage() }))
+  @UseInterceptors(FileInterceptor('selfie', imageUpload(8)))
   selfCheckIn(
     @CurrentUser('sub') userId: string,
     @Body('gpsLat') gpsLat?: string,

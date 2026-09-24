@@ -2,6 +2,16 @@ import { TerminalEventType } from '@prisma/client';
 import { AttendanceService } from './attendance.service';
 
 describe('AttendanceService fallback shift selection', () => {
+  // Terminal vaqti "hozir"ga nisbatan tekshiriladi — test sanasi eskirib
+  // qolmasligi uchun soat event paytiga qo'yiladi
+  beforeEach(() => {
+    jest.useFakeTimers({
+      now: new Date('2026-09-22T08:31:00+05:00'),
+      advanceTimers: true,
+    });
+  });
+  afterEach(() => jest.useRealTimers());
+
   it('08:30 kelganda 08:00 va 09:00 smenadan 09:00 ni tanlab, kechikish yozmaydi', async () => {
     const employee = {
       id: 'employee-1',

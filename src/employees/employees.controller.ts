@@ -24,7 +24,10 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { memoryStorage } from 'multer';
+import {
+  imageUpload,
+  spreadsheetUpload,
+} from '../common/utils/upload.util';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Response } from 'express';
 import { AuditLogService } from '../audit-log/audit-log.service';
@@ -295,7 +298,7 @@ export class EmployeesController {
     UserRole.ADMIN,
     UserRole.DIRECTOR,
   )
-  @UseInterceptors(FileInterceptor('photo', { storage: memoryStorage() }))
+  @UseInterceptors(FileInterceptor('photo', imageUpload(10)))
   async uploadPhoto(
     @Param('id') id: string,
     @UploadedFile() file: Express.Multer.File,
@@ -324,7 +327,7 @@ export class EmployeesController {
     UserRole.ADMIN,
     UserRole.DIRECTOR,
   )
-  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
+  @UseInterceptors(FileInterceptor('file', spreadsheetUpload(5)))
   async importCsv(
     @UploadedFile() file: Express.Multer.File,
     @CurrentUser('sub') userId: string,
