@@ -17,6 +17,9 @@ import timezone from 'dayjs/plugin/timezone';
 import utc from 'dayjs/plugin/utc';
 dayjs.extend(utc);
 dayjs.extend(timezone);
+/** Ish boshlanishidan necha daqiqa oldin eslatiladi */
+export const CHECKIN_REMINDER_MIN = 30;
+
 const TZ = process.env.TIMEZONE || 'Asia/Tashkent';
 
 @Injectable()
@@ -415,6 +418,97 @@ export class CronService {
   }
 
   /**
+   * Har 5 daqiqada — smenasi 30 daqiqa ichida boshlanadigan va hali kelmagan
+   * xodimlarga shaxsiy Telegram eslatmasi. Tungi smena (masalan 20:00) ham
+   * shu kunning grafigi orqali ushlanadi. `EmployeeReminderLog` unique kaliti
+   * bir kunda bir martadan ko'p yuborilmasligini kafolatlaydi.
+   */
+  @Cron('*/5 * * * *', { timeZone: TZ })
+  @CronLock('cron.checkinReminderCron', 270_000)
+  async checkinReminderCron() {
+    try {
+      await this.sendCheckinReminders(new Date());
+    } catch (err) {
+      this.logger.error('checkinReminderCron failed:', err);
+    }
+  }
+
+  /** Test qilish uchun alohida: `now` beriladi */
+  async sendCheckinReminders(nowDate: Date, windowMin = CHECKIN_REMINDER_MIN) {
+    const now = dayjs.tz(nowDate, TZ);
+    const today = DateUtil.startOfDay(now.toDate());
+    // Ertangi grafik ham olinadi: 00:30 da boshlanadigan smena eslatmasi 00:00 dan oldin ketadi
+    const until = now.add(2, 'day').startOf('day').toDate();
+
+    const schedules = await this.prisma.schedule.findMany({
+      where: {
+        date: { gte: today, lt: until },
+        status: 'WORKING',
+        shiftId: { not: null },
+        employee: {
+          firedAt: null,
+          telegramChatId: { not: null },
+          telegramReminders: true,
+        },
+      },
+      include: {
+        shift: true,
+        employee: {
+          select: {
+            id: true,
+            fullName: true,
+            telegramChatId: true,
+            telegramReminders: true,
+            userId: true,
+          },
+        },
+      },
+    });
+
+    let sent = 0;
+    for (const sch of schedules) {
+      if (!sch.shift) continue;
+      const startAt = DateUtil.buildDateTime(sch.date, sch.shift.startTime);
+      const minutesLeft = Math.round(
+        (startAt.getTime() - now.valueOf()) / 60_000,
+      );
+      if (minutesLeft <= 0 || minutesLeft > windowMin) continue;
+
+      const already = await this.prisma.attendanceRecord.findFirst({
+        where: {
+          employeeId: sch.employeeId,
+          workDate: sch.date,
+          checkIn: { not: null },
+        },
+        select: { id: true },
+      });
+      if (already) continue;
+
+      // Avval "band qilamiz" — boshqa nusxa bilan poyga bo'lsa faqat bittasi o'tadi
+      const claim = await this.prisma.employeeReminderLog.createMany({
+        data: [
+          {
+            employeeId: sch.employeeId,
+            kind: 'CHECKIN_SOON',
+            workDate: sch.date,
+          },
+        ],
+        skipDuplicates: true,
+      });
+      if (!claim.count) continue;
+
+      const ok = await this.telegramService.sendCheckinReminder(sch.employee, {
+        start: sch.shift.startTime,
+        shiftName: sch.shift.name,
+        minutesLeft,
+      });
+      if (ok) sent++;
+    }
+    if (sent) this.logger.log(`Check-in eslatmalari yuborildi: ${sent}`);
+    return sent;
+  }
+
+  /**
    * Har 5 daqiqada — ish soati tugagan lekin check-out qilmagan xodimlarni tekshiradi
    */
   @Cron('*/5 * * * *', { timeZone: TZ })
@@ -454,6 +548,29 @@ export class CronService {
         if (minutesOverdue < 5 || minutesOverdue > 10) continue;
 
         await this.pushService.notifyCheckoutReminder(userId, record.id);
+
+        // Shaxsiy Telegram (bir marta)
+        if (
+          record.employee.telegramChatId &&
+          record.employee.telegramReminders
+        ) {
+          const claim = await this.prisma.employeeReminderLog.createMany({
+            data: [
+              {
+                employeeId: record.employeeId,
+                kind: 'CHECKOUT_DUE',
+                workDate: record.workDate,
+              },
+            ],
+            skipDuplicates: true,
+          });
+          if (claim.count && record.expectedCheckOut) {
+            await this.telegramService.sendCheckoutDue(
+              record.employee,
+              dayjs(record.expectedCheckOut).tz(TZ).format('HH:mm'),
+            );
+          }
+        }
 
         this.logger.log(
           `Checkout reminder sent to: ${record.employee.fullName}`,

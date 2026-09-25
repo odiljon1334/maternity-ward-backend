@@ -23,6 +23,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { TelegramService } from './telegram.service';
 import { TelegramAccessService } from './telegram-access.service';
 import { SetBotAccessDto } from './dto/set-bot-access.dto';
+import { PersonalRemindersDto } from './dto/personal-reminders.dto';
+import { LINK_PAYLOAD_PREFIX } from './telegram-access.service';
 import { TenantScopeGuard } from '../common/guards/tenant-scope.guard';
 import { UserRole } from '@prisma/client';
 
@@ -72,6 +74,81 @@ export class TelegramController {
       where: { hospitalId, isActive: true },
     });
     return { active: count > 0, count };
+  }
+
+  // ── Xodimning shaxsiy Telegram ulanishi (mobil ilova) ─────────────────────
+  // Istalgan rol — agar foydalanuvchining xodim profili bo'lsa.
+
+  private async myEmployee(userId: string) {
+    const employee = await this.prisma.employee.findUnique({
+      where: { userId },
+      select: {
+        id: true,
+        firedAt: true,
+        telegramChatId: true,
+        telegramLinkedAt: true,
+        telegramReminders: true,
+      },
+    });
+    if (!employee || employee.firedAt) {
+      throw new ForbiddenException('Xodim profili topilmadi');
+    }
+    return employee;
+  }
+
+  /** GET /telegram/me — ulanganmi, eslatmalar yoqilganmi */
+  @Get('me')
+  @UseGuards(JwtAuthGuard)
+  async me(@CurrentUser('sub') userId: string) {
+    const e = await this.myEmployee(userId);
+    return {
+      linked: !!e.telegramChatId,
+      linkedAt: e.telegramLinkedAt,
+      remindersEnabled: e.telegramReminders,
+      botUsername: this.telegramService.getBotUsername(),
+      botAvailable: !!this.telegramService.getBotUsername(),
+    };
+  }
+
+  /** POST /telegram/me/link — bir martalik t.me havola (15 daqiqa) */
+  @Post('me/link')
+  @UseGuards(JwtAuthGuard)
+  async createLink(@CurrentUser('sub') userId: string) {
+    const e = await this.myEmployee(userId);
+    const bot = this.telegramService.getBotUsername();
+    if (!bot) {
+      throw new BadRequestException(
+        "Telegram bot hozircha sozlanmagan. Keyinroq urinib ko'ring.",
+      );
+    }
+    const { token, expiresAt } = await this.access.createLinkToken(e.id);
+    const payload = `${LINK_PAYLOAD_PREFIX}${token}`;
+    return {
+      url: `https://t.me/${bot}?start=${payload}`,
+      appUrl: `tg://resolve?domain=${bot}&start=${payload}`,
+      expiresAt,
+    };
+  }
+
+  /** DELETE /telegram/me — ulanishni uzish */
+  @Delete('me')
+  @UseGuards(JwtAuthGuard)
+  async unlinkMe(@CurrentUser('sub') userId: string) {
+    const e = await this.myEmployee(userId);
+    await this.access.unlinkPersonal({ employeeId: e.id });
+    return { linked: false };
+  }
+
+  /** PUT /telegram/me/reminders — eslatmalarni yoqish/o'chirish */
+  @Put('me/reminders')
+  @UseGuards(JwtAuthGuard)
+  async setMyReminders(
+    @CurrentUser('sub') userId: string,
+    @Body() dto: PersonalRemindersDto,
+  ) {
+    const e = await this.myEmployee(userId);
+    await this.access.setReminders({ employeeId: e.id }, dto.enabled);
+    return { remindersEnabled: dto.enabled };
   }
 
   /** GET /telegram/subscriptions — SUPER_ADMIN */

@@ -9,7 +9,7 @@ import { BotLinkCandidate } from './telegram-access.service';
 
 const CHAT = 555;
 
-function makeHarness(candidates: BotLinkCandidate[] = []) {
+function makeHarness(candidates: BotLinkCandidate[] = [], personal: any[] = []) {
   const prisma: any = {
     telegramSubscription: { findFirst: jest.fn(async () => null) },
     $queryRaw: jest.fn(async () => []),
@@ -18,6 +18,11 @@ function makeHarness(candidates: BotLinkCandidate[] = []) {
   const access: any = {
     findLinkCandidates: jest.fn(async () => candidates),
     linkChat: jest.fn(async () => true),
+    linkPersonalByPhone: jest.fn(async () => personal),
+    personalLinksOf: jest.fn(async () => []),
+    consumeLinkToken: jest.fn(async () => 'invalid'),
+    setReminders: jest.fn(async () => 1),
+    unlinkPersonal: jest.fn(async () => 1),
   };
   const service = new TelegramService(
     { get: jest.fn(() => undefined) } as any,
@@ -111,7 +116,7 @@ describe('TelegramService — contact orqali ulanish', () => {
     const h = makeHarness([]);
     await h.bot.handleUpdate(contactUpdate(CHAT) as any);
     expect(h.access.linkChat).not.toHaveBeenCalled();
-    expect(h.sent()).toContain("ro'yxatida yo'q");
+    expect(h.sent()).toContain('tizimda topilmadi');
     expect(h.sent()).not.toMatch(/Xodim|Klinika|DIRECTOR|ADMIN/);
   });
 
@@ -133,5 +138,53 @@ describe('TelegramService — contact orqali ulanish', () => {
     const h = makeHarness([cand(1), cand(2)]);
     await h.bot.handleUpdate(callbackUpdate('link_pick:0') as any);
     expect(h.access.linkChat).not.toHaveBeenCalled();
+  });
+
+  it('rahbar ro‘yxatida yo‘q, lekin xodim sifatida raqami bor — shaxsiy ulanadi', async () => {
+    const h = makeHarness([], [{ employeeId: 'e9', fullName: 'Karimova Dilnoza', hospitalName: 'Klinika 9' }]);
+    await h.bot.handleUpdate(contactUpdate(CHAT) as any);
+    expect(h.access.linkPersonalByPhone).toHaveBeenCalledWith('+998901234567', String(CHAT));
+    expect(h.access.linkChat).not.toHaveBeenCalled();
+    expect(h.sent()).toContain('Ulandingiz, Dilnoza');
+  });
+
+  it('boshqa odam kontakti bilan shaxsiy ulanish ham bo‘lmaydi', async () => {
+    const h = makeHarness([], [{ employeeId: 'e9', fullName: 'A B', hospitalName: 'K' }]);
+    await h.bot.handleUpdate(contactUpdate(777) as any);
+    expect(h.access.linkPersonalByPhone).not.toHaveBeenCalled();
+  });
+});
+
+const startUpdate = (text: string, chatType = 'private') => ({
+  update_id: uid++,
+  message: {
+    ...base(chatType),
+    text,
+    entities: [{ type: 'bot_command', offset: 0, length: 6 }],
+  },
+});
+
+describe('TelegramService — ilova havolasi (/start L_<token>)', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it('yaroqli token — xodim ulanadi', async () => {
+    const h = makeHarness();
+    h.access.consumeLinkToken.mockResolvedValue({ employeeId: 'e1', fullName: 'Karimova Dilnoza', hospitalName: 'Klinika 1' });
+    await h.bot.handleUpdate(startUpdate('/start L_AAAAAAAAAAAAAAAAAAAAAAAA') as any);
+    expect(h.access.consumeLinkToken).toHaveBeenCalledWith('AAAAAAAAAAAAAAAAAAAAAAAA', String(CHAT));
+    expect(h.sent()).toContain('Ulandingiz, Dilnoza');
+  });
+
+  it('muddati o‘tgan token — qayta urinishni so‘raydi', async () => {
+    const h = makeHarness();
+    h.access.consumeLinkToken.mockResolvedValue('expired');
+    await h.bot.handleUpdate(startUpdate('/start L_AAAAAAAAAAAAAAAAAAAAAAAA') as any);
+    expect(h.sent()).toContain("muddati o'tgan");
+  });
+
+  it('guruh chatida token ishlatilmaydi', async () => {
+    const h = makeHarness();
+    await h.bot.handleUpdate(startUpdate('/start L_AAAAAAAAAAAAAAAAAAAAAAAA', 'group') as any);
+    expect(h.access.consumeLinkToken).not.toHaveBeenCalled();
   });
 });

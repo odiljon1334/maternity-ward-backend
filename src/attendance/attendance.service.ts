@@ -377,6 +377,11 @@ export class AttendanceService {
         `attendance:event yuborilmadi: ${e instanceof Error ? e.message : String(e)}`,
       );
     }
+    // Xodimning o'ziga shaxsiy Telegram xabari (terminal va ilova uchun
+    // yagona joy — takroriy skanerlar bu yerga yetib kelmaydi)
+    this.telegram
+      ?.notifyEmployeeAttendance?.(employee, action, attendance)
+      ?.catch?.(() => {});
   }
 
   // ──────────────────────────────────────────────────────────────────────────────

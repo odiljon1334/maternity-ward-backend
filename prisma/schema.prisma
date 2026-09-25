@@ -501,6 +501,12 @@ model Employee {
   user   User?   @relation(fields: [userId], references: [id])
 
   telegramChatId String?
+  // Shaxsiy Telegram (xodimning o'zi): ulangan vaqt va eslatmalar yoqilganmi.
+  // Ulanish mobil ilovadagi bir martalik havola yoki raqamni ulashish orqali.
+  telegramLinkedAt  DateTime?
+  telegramReminders Boolean   @default(true)
+  telegramLinkTokens TelegramLinkToken[]
+  reminderLogs       EmployeeReminderLog[]
 
   // HR botga (davomat xabarlari/hisobotlari) ulanish ruxsati. Direktor,
   // o'rinbosari, kadrlar boshlig'i kabi 3-5 shaxsga Direktor/Admin/
@@ -1406,4 +1412,32 @@ model CronLock {
   owner       String
   lockedUntil DateTime
   updatedAt   DateTime @updatedAt
+}
+
+/// Mobil ilovadan Telegram botga ulanish uchun bir martalik havola
+/// (t.me/<bot>?start=L_<token>). Token o'zi saqlanmaydi — faqat sha256.
+model TelegramLinkToken {
+  id         String    @id @default(uuid())
+  tokenHash  String    @unique
+  employeeId String
+  employee   Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  expiresAt  DateTime
+  usedAt     DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([employeeId])
+}
+
+/// Xodimga yuborilgan eslatmalar — bir kun uchun bir marta (bir nechta
+/// backend nusxasi bo'lsa ham takrorlanmasligi uchun unique kalit).
+model EmployeeReminderLog {
+  id         String   @id @default(uuid())
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  /// CHECKIN_SOON | CHECKOUT_DUE
+  kind       String
+  workDate   DateTime
+  sentAt     DateTime @default(now())
+
+  @@unique([employeeId, kind, workDate])
 }

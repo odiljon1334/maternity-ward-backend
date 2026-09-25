@@ -10,10 +10,20 @@ import { formatMinutes, isHospitalBlocked } from '../common/utils/payment.util';
 import { getStaffPricing } from '../common/utils/pricing.util';
 import { SubscriptionBillingService } from '../payments/subscription-billing.service';
 import { coverageLabel } from '../payments/billing.util';
+import { DateUtil } from '../common/utils/date.util';
 import {
   BotLinkCandidate,
+  LINK_PAYLOAD_PREFIX,
   TelegramAccessService,
 } from './telegram-access.service';
+import {
+  checkedInText,
+  checkedOutText,
+  checkinReminderText,
+  checkoutDueText,
+  esc,
+  linkedText,
+} from './employee-messages';
 
 const TZ = process.env.TIMEZONE || 'Asia/Tashkent';
 
@@ -123,6 +133,20 @@ function mainKeyboard(linked: boolean) {
   ]);
 }
 
+/** Oddiy xodim (shaxsiy ulanish) menyusi */
+function employeeKeyboard(remindersOn: boolean) {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback('📅 Bugungi smenam', 'cmd_my_today')],
+    [
+      Markup.button.callback(
+        remindersOn ? "🔕 Eslatmalarni o'chirish" : '🔔 Eslatmalarni yoqish',
+        'cmd_my_reminders',
+      ),
+    ],
+    [Markup.button.callback('🔓 Botdan uzish', 'cmd_my_unlink')],
+  ]);
+}
+
 /** Telegram raqamni o'zi tasdiqlab yuboradigan tugma (faqat shaxsiy chatda). */
 function contactKeyboard() {
   return Markup.keyboard([
@@ -133,9 +157,11 @@ function contactKeyboard() {
 }
 
 const LINK_INSTRUCTIONS =
-  '📱 Ulanish uchun pastdagi <b>«📱 Raqamni ulashish»</b> tugmasini bosing.\n\n' +
-  "Telegram raqamingizni o'zi tasdiqlab yuboradi. Faqat muassasa rahbariyati " +
-  "botdan foydalanish ro'yxatiga qo'shgan xodimlar ulana oladi.";
+  '📱 Ulanish uchun pastdagi <b>«📱 Raqamni ulashish»</b> tugmasini bosing — ' +
+  "Telegram raqamingizni o'zi tasdiqlab yuboradi.\n\n" +
+  '👤 <b>Xodimlar</b>: raqamingiz muassasa bazasidagi raqamga mos kelishi kerak. ' +
+  "Eng oson yo'l — StaffPlusPRO ilovasida «Ko'proq → Telegram bot → Ulash».\n" +
+  "👔 <b>Rahbarlar</b>: hisobotlar uchun «Telegram bot ruxsati» ro'yxatida bo'lishingiz kerak.";
 
 /** Sub-keyboard for today detail.
  *  XAVFSIZLIK: callback data'da hospitalId YO'Q — handler shifoxonani doim
@@ -153,6 +179,7 @@ function todayDetailKeyboard() {
 export class TelegramService implements OnModuleInit {
   private readonly logger = new Logger(TelegramService.name);
   private bot: Telegraf;
+  private botUsername: string | null = null;
 
   // Bir raqam bir nechta muassasadagi ruxsatli xodimga mos kelsa — tanlov
   // kutilmoqda. Callback'da faqat INDEX yuboriladi, ID emas.
@@ -191,6 +218,11 @@ export class TelegramService implements OnModuleInit {
       }
     }
     this.setupCommands();
+    // Mobil ilova ulanish havolasi (t.me/<username>?start=...) uchun
+    this.botUsername =
+      (await this.bot.telegram.getMe().catch(() => null))?.username ??
+      this.config.get<string>('TELEGRAM_BOT_USERNAME') ??
+      null;
     await this.bot.telegram
       .setMyCommands([
         {
@@ -254,6 +286,17 @@ export class TelegramService implements OnModuleInit {
       const username = ctx.from?.username || ctx.from?.first_name || '';
       const firstName = ctx.from?.first_name || 'Foydalanuvchi';
 
+      // Mobil ilovadan kelgan bir martalik havola: /start L_<token>
+      const payload = String((ctx as any).payload ?? '').trim();
+      if (payload.startsWith(LINK_PAYLOAD_PREFIX)) {
+        if (ctx.chat.type !== 'private') return;
+        await this.handleAppLink(
+          ctx,
+          payload.slice(LINK_PAYLOAD_PREFIX.length),
+        );
+        return;
+      }
+
       // Faqat FAOL subscription username ni yangilaymiz.
       // isActive=false bo'lgan (o'chirilgan) subscriptionni QAYTA TIKLAMAYMIZ —
       // foydalanuvchi telefon raqamini qayta kiritishi shart.
@@ -270,6 +313,24 @@ export class TelegramService implements OnModuleInit {
       }
 
       const linked = await this.getLinkedHospital(chatId);
+      if (!linked) {
+        // Rahbar emas, lekin xodim sifatida ulangan — xodim menyusi
+        const personal = await this.access.personalLinksOf(chatId);
+        if (personal.length) {
+          await ctx.reply(
+            `👋 Assalomu alaykum, <b>${esc(firstName)}</b>!\n\n` +
+              `StaffPlusPRO — sizning ish kuningiz yordamchisi.\n` +
+              personal
+                .map((p) => `🏥 ${esc(p.hospital?.name ?? '—')}`)
+                .join('\n'),
+            {
+              parse_mode: 'HTML',
+              ...employeeKeyboard(personal.some((p) => p.telegramReminders)),
+            },
+          );
+          return;
+        }
+      }
       const hospitalLine = linked
         ? `\n🏥 Kasalxona: <b>${linked.name}</b>`
         : '\n⚠️ Hali kasalxona ulanmagan.';
@@ -289,6 +350,7 @@ export class TelegramService implements OnModuleInit {
         where: { chatId: String(ctx.chat.id) },
         data: { isActive: false },
       });
+      await this.access.setReminders({ chatId: String(ctx.chat.id) }, false);
       await ctx.reply(
         "🔕 Bildirishnomalar o'chirildi.\n/start buyrug'i bilan qayta ulaning.",
       );
@@ -717,6 +779,38 @@ export class TelegramService implements OnModuleInit {
       await ctx.reply('🏠 Asosiy menyu:', { ...mainKeyboard(!!linked) });
     });
 
+    // ── Xodim menyusi ──────────────────────────────────────────────────────
+    bot.action('cmd_my_today', async (ctx) => {
+      await ctx.answerCbQuery();
+      await ctx.reply(await this.buildMyToday(this.chatIdFromCtx(ctx)), {
+        parse_mode: 'HTML',
+      });
+    });
+
+    bot.action('cmd_my_reminders', async (ctx) => {
+      await ctx.answerCbQuery();
+      const chatId = this.chatIdFromCtx(ctx);
+      const links = await this.access.personalLinksOf(chatId);
+      if (!links.length) return this.sendLinkPrompt(ctx);
+      const next = !links.some((l) => l.telegramReminders);
+      await this.access.setReminders({ chatId }, next);
+      await ctx.reply(
+        next
+          ? '🔔 Eslatmalar yoqildi. Ish boshlanishidan 30 daqiqa oldin xabar olasiz.'
+          : "🔕 Eslatmalar o'chirildi. Kelish/ketish va so'rov natijalari ham kelmaydi.",
+        { ...employeeKeyboard(next) },
+      );
+    });
+
+    bot.action('cmd_my_unlink', async (ctx) => {
+      await ctx.answerCbQuery();
+      await this.access.unlinkPersonal({ chatId: this.chatIdFromCtx(ctx) });
+      await ctx.reply(
+        "🔓 Bot bilan bog'lanish uzildi. Qayta ulanish uchun /start bosing.",
+        { ...mainKeyboard(false) },
+      );
+    });
+
     bot.action('cmd_link', async (ctx) => {
       await ctx.answerCbQuery();
       await this.sendLinkPrompt(ctx);
@@ -764,14 +858,31 @@ export class TelegramService implements OnModuleInit {
       const candidates = await this.access.findLinkCandidates(
         contact.phone_number,
       );
+      // Raqam egasi Telegram tomonidan tasdiqlangan — shu raqamli barcha
+      // xodim profillari shaxsiy eslatmalar uchun shu chatga bog'lanadi.
+      const personal = await this.access.linkPersonalByPhone(
+        contact.phone_number,
+        chatId,
+      );
 
       if (!candidates.length) {
+        if (personal.length) {
+          this.logger.log(
+            `Telegram (xodim) ulandi: chat=${chatId} profiles=${personal.length}`,
+          );
+          await ctx.reply(linkedText(personal), {
+            parse_mode: 'HTML',
+            ...Markup.removeKeyboard(),
+          });
+          await ctx.reply('🏠 Menyu:', { ...employeeKeyboard(true) });
+          return;
+        }
         // Hech qanday ism/muassasa/rol oshkor qilinmaydi.
         this.logger.warn(`Telegram ulanish rad etildi: chat=${chatId}`);
         await ctx.reply(
-          "⛔ Bu raqam botdan foydalanish ro'yxatida yo'q.\n\n" +
-            'Muassasangiz direktori yoki administratoriga murojaat qiling — ular sizni ' +
-            "Sozlamalar → «Telegram bot ruxsati» bo'limida qo'shishi kerak.",
+          '⛔ Bu raqam tizimda topilmadi.\n\n' +
+            "StaffPlusPRO ilovasida «Ko'proq → Telegram bot → Ulash» tugmasidan foydalaning " +
+            "yoki administratorga raqamingizni to'g'rilashni so'rang.",
           Markup.removeKeyboard(),
         );
         return;
@@ -870,6 +981,178 @@ export class TelegramService implements OnModuleInit {
       { parse_mode: 'HTML', ...Markup.removeKeyboard() },
     );
     await ctx.reply('🏠 Asosiy menyu:', { ...mainKeyboard(true) });
+  }
+
+  // ─── Shaxsiy ulanish (mobil ilova havolasi) ─────────────────────────────────
+  private async handleAppLink(ctx: any, token: string) {
+    const chatId = this.chatIdFromCtx(ctx);
+    const res = await this.access.consumeLinkToken(token, chatId);
+    if (res === 'expired' || res === 'invalid') {
+      await ctx.reply(
+        res === 'expired'
+          ? "⌛ Havola muddati o'tgan. Ilovada «Ulash» tugmasini qayta bosing."
+          : '⚠️ Havola yaroqsiz yoki allaqachon ishlatilgan. Ilovada «Ulash» tugmasini qayta bosing.',
+      );
+      return;
+    }
+    this.logger.log(
+      `Telegram (ilova) ulandi: chat=${chatId} employee=${res.employeeId}`,
+    );
+    await ctx.reply(linkedText([res]), { parse_mode: 'HTML' });
+    await ctx.reply('🏠 Menyu:', { ...employeeKeyboard(true) });
+  }
+
+  getBotUsername(): string | null {
+    return this.botUsername;
+  }
+
+  /**
+   * Xodimning shaxsiy chatiga xabar. Xodim botni bloklagan bo'lsa (403) —
+   * eslatmalar o'chiriladi, keyingi daqiqalarda qayta urinilmaydi.
+   */
+  async sendPersonal(chatId: string, html: string): Promise<boolean> {
+    if (!this.bot) return false;
+    try {
+      await this.bot.telegram.sendMessage(chatId, html, {
+        parse_mode: 'HTML',
+        link_preview_options: { is_disabled: true },
+      });
+      return true;
+    } catch (e: any) {
+      const code = e?.response?.error_code ?? e?.code;
+      if (code === 403) {
+        await this.access.setReminders({ chatId }, false).catch(() => {});
+        this.logger.warn(
+          `Xodim botni bloklagan — eslatmalar o'chirildi: chat=${chatId}`,
+        );
+      } else {
+        this.logger.warn(
+          `Shaxsiy xabar yuborilmadi (${chatId}): ${e?.message ?? e}`,
+        );
+      }
+      return false;
+    }
+  }
+
+  private personalChat(employee: any): string | null {
+    if (!employee?.telegramChatId || employee.telegramReminders === false)
+      return null;
+    return String(employee.telegramChatId);
+  }
+
+  /** Kelish/ketish qayd etilganda xodimning o'ziga (terminal va ilova uchun umumiy) */
+  async notifyEmployeeAttendance(
+    employee: any,
+    action: 'CHECK_IN' | 'CHECK_OUT',
+    attendance: any,
+    opts: { place?: string | null; night?: boolean } = {},
+  ): Promise<void> {
+    const chatId = this.personalChat(employee);
+    if (!chatId || !attendance) return;
+    const at = action === 'CHECK_IN' ? attendance.checkIn : attendance.checkOut;
+    if (!at) return;
+    const time = new Date(at).toLocaleTimeString('uz-UZ', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+      timeZone: TZ,
+    });
+    // Kechki/tungi smena: kelish 18:00 dan keyin yoki 05:00 dan oldin
+    const hour = Number(time.slice(0, 2));
+    const night =
+      opts.night ?? (action === 'CHECK_IN' && (hour >= 18 || hour < 5));
+    const html =
+      action === 'CHECK_IN'
+        ? checkedInText({
+            fullName: employee.fullName,
+            time,
+            lateMinutes: attendance.lateMinutes,
+            place: opts.place,
+            night,
+          })
+        : checkedOutText({
+            fullName: employee.fullName,
+            time,
+            workedMin: attendance.netWorkMin,
+            earlyLeaveMin: attendance.earlyLeaveMin,
+            overtimeMin: attendance.overtimeMinutes,
+          });
+    await this.sendPersonal(chatId, html);
+  }
+
+  async sendCheckinReminder(
+    employee: {
+      fullName?: string | null;
+      telegramChatId?: string | null;
+      telegramReminders?: boolean;
+    },
+    info: { start: string; shiftName?: string | null; minutesLeft: number },
+  ): Promise<boolean> {
+    const chatId = this.personalChat(employee);
+    if (!chatId) return false;
+    return this.sendPersonal(
+      chatId,
+      checkinReminderText({ fullName: employee.fullName, ...info }),
+    );
+  }
+
+  async sendCheckoutDue(
+    employee: {
+      fullName?: string | null;
+      telegramChatId?: string | null;
+      telegramReminders?: boolean;
+    },
+    end: string,
+  ): Promise<boolean> {
+    const chatId = this.personalChat(employee);
+    if (!chatId) return false;
+    return this.sendPersonal(
+      chatId,
+      checkoutDueText({ fullName: employee.fullName, end }),
+    );
+  }
+
+  /** Xodim menyusi: "Bugungi smenam" */
+  private async buildMyToday(chatId: string): Promise<string> {
+    const links = await this.access.personalLinksOf(chatId);
+    if (!links.length) return '⚠️ Siz hali ulanmagansiz. /start bosing.';
+    const workDate = DateUtil.startOfDay(new Date());
+    const hm = (d?: Date | null) =>
+      d
+        ? new Date(d).toLocaleTimeString('uz-UZ', {
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false,
+            timeZone: TZ,
+          })
+        : '—';
+
+    const parts: string[] = [];
+    for (const l of links) {
+      const [sch, rec] = await Promise.all([
+        this.prisma.schedule.findFirst({
+          where: { employeeId: l.id, date: workDate },
+          include: { shift: true },
+        }),
+        this.prisma.attendanceRecord.findFirst({
+          where: { employeeId: l.id, workDate },
+        }),
+      ]);
+      const shift = sch?.shift
+        ? `${esc(sch.shift.name)} · <b>${sch.shift.startTime} – ${sch.shift.endTime}</b>`
+        : sch && sch.status !== 'WORKING'
+          ? 'Bugun ish kuni emas'
+          : 'Grafik belgilanmagan';
+      const status = rec?.checkOut
+        ? `✅ Keldi ${hm(rec.checkIn)} · Ketdi ${hm(rec.checkOut)}`
+        : rec?.checkIn
+          ? `🟢 Ishdasiz — keldi ${hm(rec.checkIn)}${rec.lateMinutes ? ` (${rec.lateMinutes} daq kechikish)` : ''}`
+          : '⏳ Hali check-in qilinmagan';
+      parts.push(
+        `🏥 <b>${esc(l.hospital?.name ?? '—')}</b>\n📅 ${shift}\n${status}`,
+      );
+    }
+    return parts.join('\n\n');
   }
 
   // ─── helpers ────────────────────────────────────────────────────────────────
