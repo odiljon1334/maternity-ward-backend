@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  ForbiddenException,
   Get,
   Post,
   Put,
@@ -54,6 +55,32 @@ export class AuthController {
     this.setSessionCookie(req, res, result.accessToken);
     // JWT JavaScript javobiga qaytarilmaydi — uni faqat HttpOnly cookie olib yuradi.
     return { user: result.user };
+  }
+
+  /**
+   * Mobil ilova (StaffPlusPRO, Android) — cookie emas, token javobda
+   * qaytariladi va qurilmaning xavfsiz xotirasida (SecureStore) saqlanadi.
+   * Hozircha faqat xodimlar uchun (ilova — check-in va ish vaqtidagi GPS).
+   */
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ login: { ttl: 900_000, limit: 10 } })
+  @Post('mobile/login')
+  async mobileLogin(@Body() dto: LoginDto, @Req() req: Request) {
+    const result = await this.authService.login(dto, getIp(req));
+    if (result.user.role !== UserRole.EMPLOYEE) {
+      throw new ForbiddenException(
+        'Mobil ilova hozircha faqat xodimlar uchun. Rahbarlar veb-saytdan foydalanadi.',
+      );
+    }
+    return { accessToken: result.accessToken, user: result.user };
+  }
+
+  /** Mobil: muddati tugamagan token bilan yangisini olish (sliding sessiya) */
+  @UseGuards(JwtAuthGuard, ThrottlerGuard)
+  @Throttle({ login: { ttl: 900_000, limit: 30 } })
+  @Post('mobile/refresh')
+  mobileRefresh(@CurrentUser('sub') userId: string) {
+    return this.authService.refreshMobileToken(userId);
   }
 
   /** Eski UI tokenini bir marta HttpOnly cookie'ga o‘tkazish. */

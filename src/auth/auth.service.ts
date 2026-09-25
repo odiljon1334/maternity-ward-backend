@@ -79,6 +79,34 @@ export class AuthService {
     return raw.split(',')[0].trim();
   }
 
+  /**
+   * Mobil ilova: amaldagi (hali yaroqli) token bilan yangisini olish.
+   * Foydalanuvchi holati va parol almashgani JwtStrategy'da allaqachon
+   * tekshirilgan — bu yerda faqat yangi muddat bilan qayta imzolanadi.
+   */
+  async refreshMobileToken(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        username: true,
+        role: true,
+        status: true,
+        hospitalId: true,
+      },
+    });
+    if (!user || user.status !== 'ACTIVE') {
+      throw new UnauthorizedException('Hisob faol emas');
+    }
+    const accessToken = this.jwt.sign({
+      sub: user.id,
+      role: user.role,
+      username: user.username,
+      hospitalId: user.hospitalId ?? null,
+    });
+    return { accessToken };
+  }
+
   async login(dto: LoginDto, ip?: string) {
     const user = await this.prisma.user.findUnique({
       where: { username: dto.username },
