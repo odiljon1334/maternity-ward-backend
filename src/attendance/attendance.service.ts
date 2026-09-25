@@ -2121,14 +2121,17 @@ export class AttendanceService {
       'OTHER_ABSENCE',
     ]);
     const shift = activeSchedule?.shift ?? todaySchedule?.shift ?? null;
+    const dayOff =
+      action === 'CHECK_IN' &&
+      !!todaySchedule &&
+      OFF.has(String(todaySchedule.status));
 
     return {
       action,
       /** Bugun grafik bo'yicha dam olish/ta'til va hali kelmagan */
-      dayOff:
-        action === 'CHECK_IN' &&
-        !!todaySchedule &&
-        OFF.has(String(todaySchedule.status)),
+      dayOff,
+      /** Mobil ilova sarlavhasi uchun: DAY_OFF, VACATION, SICK ... */
+      dayOffStatus: dayOff ? String(todaySchedule!.status) : null,
       overnight,
       workDate,
       serverTime: now,

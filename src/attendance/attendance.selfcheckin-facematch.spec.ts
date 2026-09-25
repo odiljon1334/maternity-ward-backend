@@ -413,6 +413,7 @@ describe('AttendanceService.selfCheckIn — Qaror 4 yuz tekshiruvi gate', () => 
     expect(st).toMatchObject({
       action: 'CHECK_IN',
       dayOff: true,
+      dayOffStatus: 'DAY_OFF',
       record: null,
     });
   });
