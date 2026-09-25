@@ -72,4 +72,29 @@ describe('HospitalsController — GPS muassasa chegarasi', () => {
       ForbiddenException,
     );
   });
+
+  it('asosiy bino: SUPER_ADMIN tanlangan muassasani belgilaydi', async () => {
+    const { ctrl, svc } = makeController();
+    const dto = { lat: 40.78, lng: 72.34, radius: 150 } as any;
+    await ctrl.setHospitalGps('hZ', dto, {
+      sub: 's',
+      role: UserRole.SUPER_ADMIN,
+    });
+    expect(svc.setGps).toHaveBeenCalledWith('hZ', dto);
+  });
+
+  it('asosiy bino: ASSISTANT_ADMIN faqat biriktirilgan, DIRECTOR faqat o‘ziniki', async () => {
+    const { ctrl, svc } = makeController(['hA']);
+    const asst = { sub: 'u2', role: UserRole.ASSISTANT_ADMIN };
+    const dto = { lat: 1, lng: 1 } as any;
+    await expect(ctrl.setHospitalGps('hB', dto, asst)).rejects.toThrow(
+      ForbiddenException,
+    );
+    await expect(ctrl.getHospitalGps('hB', director)).rejects.toThrow(
+      ForbiddenException,
+    );
+    await ctrl.getHospitalGps('hA', director);
+    expect(svc.getGps).toHaveBeenCalledWith('hA');
+    expect(svc.setGps).not.toHaveBeenCalled();
+  });
 });

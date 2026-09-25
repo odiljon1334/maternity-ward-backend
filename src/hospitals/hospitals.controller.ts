@@ -307,4 +307,31 @@ export class HospitalsController {
     }
     return this.svc.updateOwnLogo(hospitalId, file.buffer);
   }
+
+  // ─────────────────────────────────────────────────────────
+  // Asosiy bino (geofence) — SUPER/ASSISTANT admin tanlangan muassasa uchun.
+  // `me/gps`dan KEYIN e'lon qilinadi: aks holda GET /hospitals/me/gps
+  // `:id/gps` ga (id="me") tushib qolardi.
+  // ─────────────────────────────────────────────────────────
+
+  @Get(':id/gps')
+  @Roles(SUPER, ASST, DIR, ADMIN)
+  async getHospitalGps(
+    @Param('id') id: string,
+    @CurrentUser() user: HospitalActor,
+  ) {
+    await this.assertCanManageHospital(id, user);
+    return this.svc.getGps(id);
+  }
+
+  @Put(':id/gps')
+  @Roles(SUPER, ASST, DIR, ADMIN)
+  async setHospitalGps(
+    @Param('id') id: string,
+    @Body() dto: SetHospitalGpsDto,
+    @CurrentUser() user: HospitalActor,
+  ) {
+    await this.assertCanManageHospital(id, user);
+    return this.svc.setGps(id, dto);
+  }
 }
