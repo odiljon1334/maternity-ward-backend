@@ -1666,6 +1666,55 @@ export class TelegramService implements OnModuleInit {
     );
   }
 
+  /** Soxta joylashuv (Fake GPS) — muassasa Telegram obunachilariga matnli xabar */
+  async notifyMockLocation(
+    employee: {
+      fullName?: string | null;
+      hospitalId: string;
+      department?: { name?: string | null } | null;
+      position?: { name?: string | null } | null;
+    },
+    context: 'CHECK_IN' | 'CHECK_OUT' | 'TRACKING',
+  ): Promise<void> {
+    if (!this.bot) return;
+    const subscribers = await this.prisma.telegramSubscription.findMany({
+      where: { isActive: true, hospitalId: employee.hospitalId },
+    });
+    if (!subscribers.length) return;
+
+    const esc = (v: string) =>
+      v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const timeStr = new Date().toLocaleTimeString('uz-UZ', {
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: TZ,
+    });
+    const where =
+      context === 'CHECK_IN'
+        ? 'Kelishni belgilashda'
+        : context === 'CHECK_OUT'
+          ? 'Ketishni belgilashda'
+          : 'Ish vaqtidagi kuzatuvda';
+    const text =
+      `🚩 <b>${esc(employee.fullName || 'Xodim')}</b> soxta joylashuvdan foydalandi\n` +
+      `📍 ${where} telefonida Fake GPS ilovasi aniqlandi\n` +
+      `🕐 Vaqt: <b>${timeStr}</b>\n` +
+      `🏢 Bo'lim: ${esc(employee.department?.name || '—')}\n` +
+      `💼 Lavozim: ${esc(employee.position?.name || '—')}`;
+
+    await Promise.allSettled(
+      subscribers.map((sub) =>
+        this.bot.telegram
+          .sendMessage(sub.chatId, text, { parse_mode: 'HTML' })
+          .catch((e) =>
+            this.logger.warn(
+              `Mock-location alert failed for ${sub.chatId}: ${e instanceof Error ? e.message : String(e)}`,
+            ),
+          ),
+      ),
+    );
+  }
+
   // ──────────────────────────────────────────
   // NOTIFY: oylik to'lov qarzdorligi eslatmasi (FAZA 5, 2-bosqich, 2026-09-19)
   // ──────────────────────────────────────────

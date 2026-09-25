@@ -359,6 +359,61 @@ export class PushService {
     return true;
   }
 
+  /**
+   * Xodim telefonida soxta joylashuv (Fake GPS / mock provider) aniqlandi.
+   * Mobil ilova Android'ning `isFromMockProvider` belgisini yuboradi. Bir
+   * xodim uchun soatiga bir martadan ko'p ogohlantirilmaydi — kuzatuv har
+   * daqiqada nuqta yuboradi.
+   */
+  async notifyMockLocation(
+    hospitalId: string,
+    employeeId: string,
+    employeeName: string,
+    context: 'CHECK_IN' | 'CHECK_OUT' | 'TRACKING',
+  ): Promise<boolean> {
+    const COOLDOWN_MIN = 60;
+    const recent = await this.prisma.notification.findFirst({
+      where: {
+        type: NotificationType.ALERT,
+        createdAt: { gte: new Date(Date.now() - COOLDOWN_MIN * 60_000) },
+        AND: [
+          { metadata: { path: ['kind'], equals: 'mock-location' } },
+          { metadata: { path: ['employeeId'], equals: employeeId } },
+        ],
+      },
+      select: { id: true },
+    });
+    if (recent) return false;
+
+    const where =
+      context === 'CHECK_IN'
+        ? 'kelishni belgilashda'
+        : context === 'CHECK_OUT'
+          ? 'ketishni belgilashda'
+          : 'ish vaqtida';
+    const title = 'Soxta joylashuv aniqlandi 🚩';
+    const body = `${employeeName} ${where} soxta GPS ilovasidan foydalandi`;
+
+    const recipientIds = await this.sendToHospital(
+      hospitalId,
+      { title, body, url: '/dashboard/live-map', tag: `mock-${employeeId}` },
+      ['DIRECTOR', 'ADMIN', 'SUPER_ADMIN'],
+    );
+
+    await this.notifications
+      .createForUsers(recipientIds, {
+        type: NotificationType.ALERT,
+        title,
+        message: body,
+        metadata: { kind: 'mock-location', hospitalId, employeeId, context },
+      })
+      .catch((e) =>
+        this.logger.warn(`Notification persist failed: ${e?.message ?? e}`),
+      );
+
+    return true;
+  }
+
   async notifyCheckoutReminder(userId: string, recordId: string) {
     const title = 'Check-out eslatmasi ⏰';
     const body = 'Ish vaqtingiz tugadi. Iltimos, check-out qilishni unutmang!';

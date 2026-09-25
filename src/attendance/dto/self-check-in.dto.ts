@@ -9,4 +9,6 @@ export class SelfCheckInDto {
    * ikkinchi check-in bo'lib ketmasligi uchun.
    */
   expectedAction?: 'CHECK_IN' | 'CHECK_OUT';
+  /** Android: joylashuv soxta provayderdan (Fake GPS ilovasi) olingan */
+  mocked?: boolean;
 }

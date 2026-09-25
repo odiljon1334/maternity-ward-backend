@@ -4,6 +4,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import {
   AttendanceStatus,
@@ -23,6 +24,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { TelegramService } from '../telegram/telegram.service';
 import { FaceMatchService } from '../face-match/face-match.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
+import { PushService } from '../push/push.service';
 import { DateUtil } from '../common/utils/date.util';
 import { isHospitalBlocked } from '../common/utils/payment.util';
 import { calcNetWorkMin } from '../common/utils/shift.util';
@@ -139,6 +141,7 @@ export class AttendanceService {
     private readonly locationGateway: LocationGateway,
     private readonly faceMatch: FaceMatchService,
     private readonly auditLog: AuditLogService,
+    @Optional() private readonly push?: PushService,
   ) {}
 
   /**
@@ -1635,6 +1638,42 @@ export class AttendanceService {
     ) {
       throw new BadRequestException(
         "Joylashuv aniqlanmadi. Telefoningizda GPS (joylashuv) ruxsatini yoqib, qaytadan urinib ko'ring.",
+      );
+    }
+
+    // 2b. Soxta joylashuv (Fake GPS). Rad etiladi va rahbariyat xabardor
+    //     qilinadi — xodim ilovani o'chirib, qayta urinishi mumkin.
+    if (dto.mocked === true) {
+      const context =
+        dto.expectedAction === 'CHECK_OUT' ? 'CHECK_OUT' : 'CHECK_IN';
+      this.auditLog.log({
+        userId,
+        hospitalId: employee.hospitalId,
+        action: 'MOCK_LOCATION_REJECTED',
+        entity: 'AttendanceRecord',
+        entityId: employee.id,
+        details: {
+          employeeId: employee.id,
+          context,
+          gpsLat: dto.gpsLat,
+          gpsLng: dto.gpsLng,
+        },
+      });
+      this.push
+        ?.notifyMockLocation(
+          employee.hospitalId,
+          employee.id,
+          employee.fullName ?? 'Xodim',
+          context,
+        )
+        .then((sent) => {
+          if (sent) {
+            this.telegram.notifyMockLocation(employee, context).catch(() => {});
+          }
+        })
+        .catch(() => {});
+      throw new BadRequestException(
+        "Telefoningizda soxta joylashuv (Fake GPS) ilovasi yoqilgan. Uni o'chirib, qayta urinib ko'ring. Rahbariyatga xabar yuborildi.",
       );
     }
 

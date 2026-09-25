@@ -6,6 +6,7 @@ import { TelegramService } from '../telegram/telegram.service';
 import { LocationGateway } from '../location/location.gateway';
 import { FaceMatchService } from '../face-match/face-match.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
+import { PushService } from '../push/push.service';
 
 jest.mock('../common/utils/payment.util', () => ({
   isHospitalBlocked: jest.fn().mockResolvedValue(false),
@@ -33,6 +34,7 @@ describe('AttendanceService.selfCheckIn — Qaror 4 yuz tekshiruvi gate', () => 
   let faceMatch: any;
   let auditLog: any;
   let telegram: any;
+  let push: any;
 
   const employee = {
     id: 'emp-1',
@@ -80,7 +82,11 @@ describe('AttendanceService.selfCheckIn — Qaror 4 yuz tekshiruvi gate', () => 
 
     faceMatch = { verify: jest.fn() };
     auditLog = { log: jest.fn() };
-    telegram = { notifyMobileCheckin: jest.fn().mockResolvedValue(undefined) };
+    telegram = {
+      notifyMobileCheckin: jest.fn().mockResolvedValue(undefined),
+      notifyMockLocation: jest.fn().mockResolvedValue(undefined),
+    };
+    push = { notifyMockLocation: jest.fn().mockResolvedValue(true) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -96,10 +102,35 @@ describe('AttendanceService.selfCheckIn — Qaror 4 yuz tekshiruvi gate', () => 
         },
         { provide: FaceMatchService, useValue: faceMatch },
         { provide: AuditLogService, useValue: auditLog },
+        { provide: PushService, useValue: push },
       ],
     }).compile();
 
     service = module.get(AttendanceService);
+  });
+
+  it('soxta joylashuv (mocked) — rad etiladi, yuz tekshirilmaydi, rahbariyat ogohlantiriladi', async () => {
+    await expect(
+      service.selfCheckIn(
+        'user-1',
+        { ...dto, mocked: true, expectedAction: 'CHECK_IN' } as any,
+        selfieBuffer,
+      ),
+    ).rejects.toThrow(/soxta joylashuv/i);
+    await new Promise((r) => setImmediate(r));
+
+    expect(faceMatch.verify).not.toHaveBeenCalled();
+    expect(prisma.attendanceRecord.create).not.toHaveBeenCalled();
+    expect(auditLog.log).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'MOCK_LOCATION_REJECTED' }),
+    );
+    expect(push.notifyMockLocation).toHaveBeenCalledWith(
+      'hosp-1',
+      'emp-1',
+      'Test Xodim',
+      'CHECK_IN',
+    );
+    expect(telegram.notifyMockLocation).toHaveBeenCalled();
   });
 
   it('ANIQ MOS KELMASLIK — check-in rad etiladi, AttendanceRecord YARATILMAYDI (GPS kuzatish boshlanmaydi)', async () => {

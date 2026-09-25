@@ -74,10 +74,12 @@ describe('LocationController.updateLiveLocation', () => {
 
     pushService = {
       notifyGeofenceViolation: jest.fn().mockResolvedValue(true),
+      notifyMockLocation: jest.fn().mockResolvedValue(true),
     };
 
     telegramService = {
       notifyGeofenceAlert: jest.fn().mockResolvedValue(undefined),
+      notifyMockLocation: jest.fn().mockResolvedValue(undefined),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -134,7 +136,7 @@ describe('LocationController.updateLiveLocation', () => {
     expect(locationService.saveLiveLocation).not.toHaveBeenCalled();
   });
 
-  it("tungi smena uchun tracking-session avvalgi kun ochiq davomatini davom ettiradi", async () => {
+  it('tungi smena uchun tracking-session avvalgi kun ochiq davomatini davom ettiradi', async () => {
     const checkIn = new Date(Date.now() - 5 * 60 * 60 * 1000);
     const expectedCheckOut = new Date(Date.now() + 3 * 60 * 60 * 1000);
     prisma.attendanceRecord.findFirst.mockResolvedValue({
@@ -283,5 +285,38 @@ describe('LocationController.updateLiveLocation', () => {
 
     expect(pushService.notifyGeofenceViolation).toHaveBeenCalled();
     expect(telegramService.notifyGeofenceAlert).not.toHaveBeenCalled();
+  });
+
+  it('soxta joylashuv (mocked) — nuqta saqlanmaydi, xaritadan olinadi, rahbariyat ogohlantiriladi', async () => {
+    const res = await controller.updateLiveLocation(
+      currentUser as any,
+      { ...baseDto, mocked: true } as any,
+    );
+    await new Promise((r) => setImmediate(r));
+
+    expect(res).toEqual({ ok: false, reason: 'MOCK_LOCATION' });
+    expect(locationService.saveLiveLocation).not.toHaveBeenCalled();
+    expect(locationGateway.broadcastLocation).not.toHaveBeenCalled();
+    expect(locationGateway.broadcastLocationRemoved).toHaveBeenCalledWith(
+      'hosp-1',
+      'user-1',
+    );
+    expect(pushService.notifyMockLocation).toHaveBeenCalledWith(
+      'hosp-1',
+      'emp-1',
+      'Test Xodim',
+      'TRACKING',
+    );
+    expect(telegramService.notifyMockLocation).toHaveBeenCalled();
+  });
+
+  it("ish vaqti tugagan bo'lsa mocked nuqta ham faqat stopTracking qaytaradi (ogohlantirishsiz)", async () => {
+    prisma.attendanceRecord.findFirst.mockResolvedValue(null);
+    const res = await controller.updateLiveLocation(
+      currentUser as any,
+      { ...baseDto, mocked: true } as any,
+    );
+    expect(res).toMatchObject({ ok: false, stopTracking: true });
+    expect(pushService.notifyMockLocation).not.toHaveBeenCalled();
   });
 });

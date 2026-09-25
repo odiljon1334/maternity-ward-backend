@@ -92,6 +92,7 @@ export class AttendanceController {
     @Body('gpsLng') gpsLng?: string,
     @Body('gpsAccuracy') gpsAccuracy?: string,
     @Body('expectedAction') expectedAction?: string,
+    @Body('mocked') mocked?: string,
     @UploadedFile() file?: Express.Multer.File,
   ) {
     const dto = new SelfCheckInDto();
@@ -110,6 +111,7 @@ export class AttendanceController {
     if (expectedAction === 'CHECK_IN' || expectedAction === 'CHECK_OUT') {
       dto.expectedAction = expectedAction;
     }
+    dto.mocked = mocked === 'true' || mocked === '1';
     return this.service.selfCheckIn(userId, dto, file?.buffer);
   }
 

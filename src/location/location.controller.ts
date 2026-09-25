@@ -146,6 +146,34 @@ export class LocationController {
       };
     }
 
+    // ── 1b. Soxta joylashuv (Fake GPS) ──
+    // Nuqta saqlanmaydi va xaritada ko'rsatilmaydi: rahbariyat xodimni
+    // "signal yo'q" holatida ko'radi, ketishda esa yuz tekshiruvi talab
+    // qilinadi (kuzatuv uzilgan). Kuzatuv to'xtatilmaydi — soxta ilova
+    // o'chirilishi bilan haqiqiy nuqtalar yana qabul qilinadi.
+    if (dto.mocked === true) {
+      this.locationGateway.broadcastLocationRemoved(user.hospitalId, user.sub);
+      this.pushService
+        .notifyMockLocation(
+          user.hospitalId,
+          employee.id,
+          employee.fullName ?? 'Xodim',
+          'TRACKING',
+        )
+        .then((sent) => {
+          if (sent) {
+            this.telegramService
+              .notifyMockLocation(
+                { ...employee, hospitalId: user.hospitalId },
+                'TRACKING',
+              )
+              .catch(() => {});
+          }
+        })
+        .catch(() => {});
+      return { ok: false, reason: 'MOCK_LOCATION' };
+    }
+
     // ── 2. Geofence tekshiruvi ──
     // FAZA 6 (4b): xodimga ruxsat etilgan BARCHA ish joylari hisobga olinadi
     // (biriktirilgan WorkSite'lar + asosiy bino). Maktabga yo'naltirilgan
