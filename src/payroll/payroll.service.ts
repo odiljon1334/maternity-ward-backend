@@ -7,6 +7,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { unexcusedLate } from '../attendance-notices/notice-excuse.util';
 import { DateUtil } from '../common/utils/date.util';
 import { isHospitalBlocked } from '../common/utils/payment.util';
 import * as ExcelJS from 'exceljs';
@@ -106,7 +107,8 @@ export class PayrollService {
     const explicitAbsences = records.filter(
       (r) => r.status === 'ABSENT',
     ).length;
-    const totalLateMin = records.reduce((s, r) => s + r.lateMinutes, 0);
+    // Tasdiqlangan "Kechikaman" xabari bilan uzrli qism hisoblanmaydi
+    const totalLateMin = records.reduce((s, r) => s + unexcusedLate(r), 0);
     const totalEarlyMin = records.reduce((s, r) => s + r.earlyLeaveMin, 0);
     const totalOvertimeMin = records.reduce((s, r) => s + r.overtimeMinutes, 0);
     // Sof ish vaqti: checkIn/checkOut bo'lgan kunlardagi netWorkMin yig'indisi
@@ -164,7 +166,13 @@ export class PayrollService {
       const minutes = row.shift ? calcShiftNetMinutes(row.shift) : 12 * 60; // eski, shiftsiz grafiklar uchun moslik
       const day = row.date ? dayKey(row.date) : null;
       if (row.status === ScheduleStatus.WORKING) {
-        plan.push({ day, kind: 'WORK', unpaid: false, minutes, scheduleId: row.id });
+        plan.push({
+          day,
+          kind: 'WORK',
+          unpaid: false,
+          minutes,
+          scheduleId: row.id,
+        });
       } else if (replacedWorkingDay(row)) {
         plan.push({
           day,
@@ -303,7 +311,11 @@ export class PayrollService {
             year: prevYear,
           },
         },
-        select: { status: true, deferredDeduction: true, deferredAdvance: true },
+        select: {
+          status: true,
+          deferredDeduction: true,
+          deferredAdvance: true,
+        },
       }),
     ]);
 
@@ -594,7 +606,12 @@ export class PayrollService {
         const uid = userIdMap[emp.id];
         if (uid) {
           this.push
-            .notifyPayrollGenerated(uid, month, year, Number(record?.netSalary ?? 0))
+            .notifyPayrollGenerated(
+              uid,
+              month,
+              year,
+              Number(record?.netSalary ?? 0),
+            )
             .catch(() => null);
         }
       } catch (e) {

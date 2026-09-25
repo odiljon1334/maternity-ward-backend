@@ -24,6 +24,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { TelegramService } from '../telegram/telegram.service';
 import { FaceMatchService } from '../face-match/face-match.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
+import { applyNoticeExcuse } from '../attendance-notices/notice-excuse.util';
 import { PushService } from '../push/push.service';
 import { DateUtil } from '../common/utils/date.util';
 import { isHospitalBlocked } from '../common/utils/payment.util';
@@ -382,6 +383,16 @@ export class AttendanceService {
     this.telegram
       ?.notifyEmployeeAttendance?.(employee, action, attendance)
       ?.catch?.(() => {});
+    // Oldindan tasdiqlangan "Kechikaman" xabari bo'lsa — kechikish uzrli
+    if (
+      action === 'CHECK_IN' &&
+      attendance?.workDate &&
+      attendance.lateMinutes > 0
+    ) {
+      applyNoticeExcuse(this.prisma, employee.id, attendance.workDate).catch(
+        () => {},
+      );
+    }
   }
 
   // ──────────────────────────────────────────────────────────────────────────────
@@ -2129,6 +2140,7 @@ export class AttendanceService {
             checkOut: existing.checkOut,
             status: existing.status,
             lateMinutes: existing.lateMinutes,
+            excusedLateMin: existing.excusedLateMin,
             earlyLeaveMin: existing.earlyLeaveMin,
             overtimeMinutes: existing.overtimeMinutes,
             netWorkMin: existing.netWorkMin,

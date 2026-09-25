@@ -27,6 +27,13 @@ import {
 
 const TZ = process.env.TIMEZONE || 'Asia/Tashkent';
 
+export type DecisionKind = 'notice' | 'swap';
+export type DecisionHandler = (
+  id: string,
+  decision: 'APPROVED' | 'REJECTED',
+  sub: { hospitalId: string | null; employeeId: string | null },
+) => Promise<string>;
+
 // ─── Yandex Static Maps ───────────────────────────────────────────────────────
 // API key .env da YANDEX_MAPS_KEY=... sifatida saqlang
 // Key bo'lmasa ham asosiy map ishlaydi (limitlangan)
@@ -180,6 +187,8 @@ export class TelegramService implements OnModuleInit {
   private readonly logger = new Logger(TelegramService.name);
   private bot: Telegraf;
   private botUsername: string | null = null;
+  /** Rahbar tugmalari (tasdiqlash/rad etish) — so'rov turi bo'yicha servislar ro'yxatdan o'tkazadi */
+  private decisionHandlers = new Map<DecisionKind, DecisionHandler>();
 
   // Bir raqam bir nechta muassasadagi ruxsatli xodimga mos kelsa — tanlov
   // kutilmoqda. Callback'da faqat INDEX yuboriladi, ID emas.
@@ -779,6 +788,38 @@ export class TelegramService implements OnModuleInit {
       await ctx.reply('🏠 Asosiy menyu:', { ...mainKeyboard(!!linked) });
     });
 
+    // ── "Kechikaman" xabari: rahbar tugmasi ───────────────────────────────
+    // XAVFSIZLIK: tasdiqlash huquqi chat obunasidan (muassasa) olinadi;
+    // xabar boshqa muassasaniki bo'lsa servis rad etadi.
+    bot.action(/^(notice|swap)_(ok|no):([0-9a-f-]{36})$/, async (ctx) => {
+      const [, kind, verb, id] = ctx.match as RegExpMatchArray;
+      const handler = this.decisionHandlers.get(kind as DecisionKind);
+      const sub = await this.getSubscriberByChatId(this.chatIdFromCtx(ctx));
+      if (!sub?.hospitalId || !handler) {
+        await ctx.answerCbQuery("Ruxsat yo'q");
+        return;
+      }
+      const result = await handler(
+        id,
+        verb === 'ok' ? 'APPROVED' : 'REJECTED',
+        {
+          hospitalId: sub.hospitalId,
+          employeeId: sub.employeeId ?? null,
+        },
+      );
+      await ctx.answerCbQuery(result.slice(0, 190));
+      const msg: any = (ctx.callbackQuery as any)?.message;
+      if (msg?.text) {
+        await ctx
+          .editMessageText(`${esc(msg.text)}\n\n<b>${esc(result)}</b>`, {
+            parse_mode: 'HTML',
+          })
+          .catch(() => {});
+      } else {
+        await ctx.editMessageReplyMarkup(undefined).catch(() => {});
+      }
+    });
+
     // ── Xodim menyusi ──────────────────────────────────────────────────────
     bot.action('cmd_my_today', async (ctx) => {
       await ctx.answerCbQuery();
@@ -1000,6 +1041,70 @@ export class TelegramService implements OnModuleInit {
     );
     await ctx.reply(linkedText([res]), { parse_mode: 'HTML' });
     await ctx.reply('🏠 Menyu:', { ...employeeKeyboard(true) });
+  }
+
+  registerDecisionHandler(kind: DecisionKind, fn: DecisionHandler) {
+    this.decisionHandlers.set(kind, fn);
+  }
+
+  /** Muassasa rahbarlariga (HR-bot obunachilari) tasdiqlash tugmalari bilan xabar */
+  async sendDecisionRequest(
+    hospitalId: string,
+    html: string,
+    kind: DecisionKind,
+    id: string,
+    labels: { ok: string; no: string } = {
+      ok: '✅ Tasdiqlash',
+      no: '❌ Rad etish',
+    },
+  ): Promise<void> {
+    if (!this.bot) return;
+    const subs = await this.prisma.telegramSubscription.findMany({
+      where: { isActive: true, hospitalId },
+      select: { chatId: true },
+    });
+    const kb = Markup.inlineKeyboard([
+      [
+        Markup.button.callback(labels.ok, `${kind}_ok:${id}`),
+        Markup.button.callback(labels.no, `${kind}_no:${id}`),
+      ],
+    ]);
+    await Promise.allSettled(
+      subs.map((s) =>
+        this.bot.telegram
+          .sendMessage(s.chatId, html, { parse_mode: 'HTML', ...kb })
+          .catch((e) =>
+            this.logger.warn(
+              `Decision request failed for ${s.chatId}: ${e?.message ?? e}`,
+            ),
+          ),
+      ),
+    );
+  }
+
+  /** Rahbarlarga "Kechikaman" xabari — tasdiqlash/rad etish tugmalari bilan */
+  async notifyAttendanceNotice(n: {
+    id: string;
+    hospitalId: string;
+    employeeName: string;
+    position?: string | null;
+    department?: string | null;
+    delayMinutes: number;
+    reason: string;
+    comment?: string | null;
+    shiftStart?: string | null;
+  }): Promise<void> {
+    const text =
+      `🕒 <b>Kechikish haqida xabar</b>\n\n` +
+      `👤 <b>${esc(n.employeeName)}</b>${n.position ? ` — ${esc(n.position)}` : ''}\n` +
+      (n.department ? `🏢 ${esc(n.department)}\n` : '') +
+      `⏱ Taxminan <b>${n.delayMinutes} daqiqa</b> kechikadi${n.shiftStart ? ` (smena ${n.shiftStart})` : ''}\n` +
+      `📝 ${esc(n.reason)}${n.comment ? ` — «${esc(n.comment)}»` : ''}\n\n` +
+      'Tasdiqlansa, bugungi kechikish uzrli hisoblanadi.';
+    await this.sendDecisionRequest(n.hospitalId, text, 'notice', n.id, {
+      ok: '✅ Uzrli',
+      no: '❌ Rad etish',
+    });
   }
 
   getBotUsername(): string | null {

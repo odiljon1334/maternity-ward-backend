@@ -27,6 +27,8 @@ import { MinistryModule } from './ministry/ministry.module';
 import { HikConnectModule } from './hikconnect/hikconnect.module';
 import { HealthModule } from './health/health.module';
 import { LeaveModule } from './leave/leave.module';
+import { AttendanceNoticesModule } from './attendance-notices/attendance-notices.module';
+import { ShiftSwapsModule } from './shift-swaps/shift-swaps.module';
 import { PushModule } from './push/push.module';
 import { BirthdayModule } from './birthday/birthday.module';
 import { HikvisionModule } from './hikvision/hikvision.module';
@@ -88,6 +90,8 @@ import { SchedulePlanningModule } from './schedule-planning/schedule-planning.mo
     HikvisionModule,
     HealthModule,
     LeaveModule,
+    AttendanceNoticesModule,
+    ShiftSwapsModule,
     PushModule,
     BirthdayModule,
     LocationModule,

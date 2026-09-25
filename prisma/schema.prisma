@@ -252,6 +252,8 @@ model Hospital {
   cameras                Camera[]
   hikTerminals           HikTerminal[]
   leaveRequests          LeaveRequest[]
+  attendanceNotices      AttendanceNotice[]
+  shiftSwaps             ShiftSwapRequest[]
   assistantAdmins        HospitalAssistant[]
   didoxCredential        HospitalDidoxCredential?
   payrollAdjustments     PayrollAdjustment[]
@@ -532,6 +534,9 @@ model Employee {
   weeklyStats                WeeklyAttendanceStat[]
   terminalEvents             AttendanceEvent[]
   leaveRequests              LeaveRequest[]
+  attendanceNotices          AttendanceNotice[]
+  swapsRequested             ShiftSwapRequest[]      @relation("SwapRequester")
+  swapsTargeted              ShiftSwapRequest[]      @relation("SwapTarget")
   payrollAdjustments         PayrollAdjustment[]
   salaryAdvances             SalaryAdvance[]
   monthlyScheduleEntries     MonthlyScheduleEntry[]
@@ -809,6 +814,9 @@ model AttendanceRecord {
 
   status          AttendanceStatus @default(ABSENT)
   lateMinutes     Int              @default(0)
+  // Tasdiqlangan "Kechikaman" xabari bilan uzrli deb topilgan kechikish
+  // (kelishdagi qismi). Hisobot va oylikda: lateMinutes − excusedLateMin.
+  excusedLateMin  Int              @default(0)
   earlyLeaveMin   Int              @default(0)
   overtimeMinutes Int              @default(0)
 
@@ -1440,4 +1448,90 @@ model EmployeeReminderLog {
   sentAt     DateTime @default(now())
 
   @@unique([employeeId, kind, workDate])
+}
+
+enum AttendanceNoticeType {
+  LATE_ARRIVAL
+}
+
+enum AttendanceNoticeReason {
+  TRAFFIC // yo'l tirband
+  TRANSPORT // taksi/avtobus/metro
+  FAMILY // oilaviy sabab
+  HEALTH // sog'liq
+  OTHER
+}
+
+enum AttendanceNoticeStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+/// Xodimning "Kechikaman" xabari. Direktor tasdiqlasa — o'sha kungi
+/// kechikish uzrli (AttendanceRecord.excusedLateMin).
+model AttendanceNotice {
+  id           String                 @id @default(uuid())
+  employeeId   String
+  employee     Employee               @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  hospitalId   String
+  hospital     Hospital               @relation(fields: [hospitalId], references: [id])
+  type         AttendanceNoticeType   @default(LATE_ARRIVAL)
+  reason       AttendanceNoticeReason
+  comment      String?
+  workDate     DateTime
+  delayMinutes Int
+  status       AttendanceNoticeStatus @default(PENDING)
+  reviewedById String?
+  reviewedAt   DateTime?
+  reviewNote   String?
+  createdAt    DateTime               @default(now())
+  updatedAt    DateTime               @updatedAt
+
+  @@index([hospitalId, status, workDate])
+  @@index([employeeId, workDate])
+}
+
+enum ShiftSwapType {
+  SWAP // kunlarni almashish: A B'ning kunida, B A'ning kunida ishlaydi
+  COVER // hamkasb A'ning o'rniga chiqadi, A dam oladi
+}
+
+enum ShiftSwapStatus {
+  REQUESTED // hamkasb javobi kutilmoqda
+  ACCEPTED // hamkasb rozi — rahbar tasdig'i kutilmoqda
+  DECLINED // hamkasb rad etdi
+  APPROVED // rahbar tasdiqladi, grafik yangilandi
+  REJECTED // rahbar rad etdi
+  CANCELLED
+}
+
+/// Oddiy (STANDARD) grafikdagi smena almashish so'rovi. POST_COVERAGE
+/// rejimidagi muassasalar ScheduleChangeRequest'dan foydalanadi.
+model ShiftSwapRequest {
+  id               String          @id @default(uuid())
+  hospitalId       String
+  hospital         Hospital        @relation(fields: [hospitalId], references: [id])
+  type             ShiftSwapType
+  requesterId      String
+  requester        Employee        @relation("SwapRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+  targetId         String
+  target           Employee        @relation("SwapTarget", fields: [targetId], references: [id], onDelete: Cascade)
+  requesterDate    DateTime
+  requesterShiftId String?
+  targetDate       DateTime?
+  targetShiftId    String?
+  reason           String?
+  status           ShiftSwapStatus @default(REQUESTED)
+  respondedAt      DateTime?
+  reviewedById     String?
+  reviewedAt       DateTime?
+  reviewNote       String?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  @@index([hospitalId, status])
+  @@index([requesterId])
+  @@index([targetId])
 }
