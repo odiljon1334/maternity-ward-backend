@@ -10,6 +10,9 @@ describe('AuthController — mobil ilova login', () => {
         user: { id: 'u1', role },
       }),
       refreshMobileToken: jest.fn().mockResolvedValue({ accessToken: 'jwt-2' }),
+      changePasswordMobile: jest
+        .fn()
+        .mockResolvedValue({ message: 'ok', accessToken: 'jwt-3' }),
     };
     return { controller: new AuthController(authService), authService };
   };
@@ -37,5 +40,21 @@ describe('AuthController — mobil ilova login', () => {
       accessToken: 'jwt-2',
     });
     expect(authService.refreshMobileToken).toHaveBeenCalledWith('u1');
+  });
+
+  it('parol almashtirish — shu qurilma uchun yangi token qaytaradi', async () => {
+    const { controller, authService } = make('EMPLOYEE');
+    const dto = { currentPassword: 'old-pass', newPassword: 'new-pass' };
+    await expect(
+      controller.mobileChangePassword('u1', dto, req),
+    ).resolves.toEqual({
+      message: 'ok',
+      accessToken: 'jwt-3',
+    });
+    expect(authService.changePasswordMobile).toHaveBeenCalledWith(
+      'u1',
+      dto,
+      '127.0.0.1',
+    );
   });
 });

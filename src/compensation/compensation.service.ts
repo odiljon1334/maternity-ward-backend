@@ -388,10 +388,63 @@ export class CompensationService {
         ? await this.employeeInScope(dto.employeeId, hospitalId)
         : null;
     if (!employee) throw new NotFoundException('Xodim topilmadi');
-    if (dto.amount > Number(employee.baseSalary)) {
+    const base = Number(employee.baseSalary);
+    if (dto.amount > base) {
       throw new BadRequestException(
         'Avans bazaviy oylikdan yuqori bo‘lishi mumkin emas',
       );
+    }
+
+    if (actorIsEmployee) {
+      // Xodim faqat joriy yoki keyingi oy uchun so'ray oladi (Toshkent vaqti)
+      const now = DateUtil.now();
+      const next = now.add(1, 'month');
+      const allowed = [
+        { m: now.month() + 1, y: now.year() },
+        { m: next.month() + 1, y: next.year() },
+      ];
+      if (!allowed.some((p) => p.m === dto.month && p.y === dto.year)) {
+        throw new BadRequestException(
+          'Avans faqat joriy yoki keyingi oy uchun so‘raladi',
+        );
+      }
+
+      const active = await this.prisma.salaryAdvance.findMany({
+        where: {
+          employeeId: employee.id,
+          month: dto.month,
+          year: dto.year,
+          status: {
+            in: [
+              SalaryAdvanceStatus.REQUESTED,
+              SalaryAdvanceStatus.APPROVED,
+              SalaryAdvanceStatus.PAID,
+            ],
+          },
+        },
+        select: {
+          status: true,
+          requestedAmount: true,
+          approvedAmount: true,
+          paidAmount: true,
+        },
+      });
+      if (active.some((a) => a.status === SalaryAdvanceStatus.REQUESTED)) {
+        throw new ConflictException(
+          'Bu oy uchun avans so‘rovingiz ko‘rib chiqilmoqda',
+        );
+      }
+      const taken = active.reduce(
+        (sum, a) =>
+          sum +
+          Number(a.paidAmount ?? a.approvedAmount ?? a.requestedAmount ?? 0),
+        0,
+      );
+      if (taken + dto.amount > base) {
+        throw new BadRequestException(
+          'Oy davomidagi avanslar jami bazaviy oylikdan oshmasligi kerak',
+        );
+      }
     }
 
     return this.prisma.salaryAdvance.create({
@@ -512,6 +565,23 @@ export class CompensationService {
       },
       include: { employee: { select: { id: true, fullName: true } } },
       orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  /** Xodim o'z so'rovini ko'rib chiqilguncha bekor qila oladi */
+  async cancelMyAdvance(id: string, userId: string) {
+    const item = await this.prisma.salaryAdvance.findFirst({
+      where: { id, employee: { userId } },
+    });
+    if (!item) throw new NotFoundException('Avans so‘rovi topilmadi');
+    if (item.status !== SalaryAdvanceStatus.REQUESTED) {
+      throw new ConflictException(
+        'Faqat ko‘rib chiqilmagan so‘rovni bekor qilish mumkin',
+      );
+    }
+    return this.prisma.salaryAdvance.update({
+      where: { id },
+      data: { status: SalaryAdvanceStatus.CANCELLED },
     });
   }
 

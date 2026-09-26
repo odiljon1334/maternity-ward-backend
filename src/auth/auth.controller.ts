@@ -83,6 +83,18 @@ export class AuthController {
     return this.authService.refreshMobileToken(userId);
   }
 
+  /** Mobil: parolni almashtirish — javobda shu qurilma uchun yangi token */
+  @UseGuards(JwtAuthGuard, ThrottlerGuard)
+  @Throttle({ login: { ttl: 900_000, limit: 10 } })
+  @Post('mobile/change-password')
+  mobileChangePassword(
+    @CurrentUser('sub') userId: string,
+    @Body() dto: ChangePasswordDto,
+    @Req() req: Request,
+  ) {
+    return this.authService.changePasswordMobile(userId, dto, getIp(req));
+  }
+
   /** Eski UI tokenini bir marta HttpOnly cookie'ga o‘tkazish. */
   @UseGuards(JwtAuthGuard)
   @Post('browser-session')

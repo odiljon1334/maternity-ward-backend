@@ -92,6 +92,12 @@ export class CompensationController {
     return this.service.requestAdvance(userId, true, undefined, dto);
   }
 
+  @Patch('my/advances/:id/cancel')
+  @Roles(UserRole.EMPLOYEE)
+  cancelMyAdvance(@Param('id') id: string, @CurrentUser('sub') userId: string) {
+    return this.service.cancelMyAdvance(id, userId);
+  }
+
   @Get('adjustments')
   @Roles(...MANAGER_ROLES)
   listAdjustments(

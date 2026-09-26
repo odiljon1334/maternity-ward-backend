@@ -237,6 +237,21 @@ export class AuthService {
     return { message: "Parol muvaffaqiyatli o'zgartirildi" };
   }
 
+  /**
+   * Mobil: parolni almashtiradi va SHU qurilma uchun yangi token qaytaradi.
+   * `credentialsChangedAt` barcha eski tokenlarni (boshqa telefonlar, veb)
+   * bekor qiladi — joriy qurilma esa uzilmasdan ishlashda davom etadi.
+   */
+  async changePasswordMobile(
+    userId: string,
+    dto: ChangePasswordDto,
+    ip?: string,
+  ) {
+    const result = await this.changePassword(userId, dto, ip);
+    const { accessToken } = await this.refreshMobileToken(userId);
+    return { ...result, accessToken };
+  }
+
   async register(dto: RegisterDto, createdByUserId?: string) {
     const exists = await this.prisma.user.findUnique({
       where: { username: dto.username },

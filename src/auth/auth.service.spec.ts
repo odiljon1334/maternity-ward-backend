@@ -336,4 +336,41 @@ describe('AuthService — Email tasdiqlash va parolni tiklash (1.1-band)', () =>
     const result = await service.forgotPassword({ username: 'yoq_user' } as any);
     expect((result as any).message).toBeTruthy();
   });
+
+  it('Mobil parol almashtirish — xesh yangilanadi, eski tokenlar bekor, shu qurilmaga yangi token', async () => {
+    prisma.__addUser({
+      id: 'u-mob',
+      username: 'hamshira',
+      role: 'EMPLOYEE',
+      status: 'ACTIVE',
+      hospitalId: 'h1',
+      passwordHash: await bcrypt.hash('eski-parol', 4),
+    });
+
+    const res = await service.changePasswordMobile('u-mob', {
+      currentPassword: 'eski-parol',
+      newPassword: 'yangi-parol',
+    });
+
+    expect(res.accessToken).toBe('fake-jwt');
+    const u = prisma.__state.users.find((x) => x.id === 'u-mob');
+    expect(await bcrypt.compare('yangi-parol', u.passwordHash)).toBe(true);
+    expect(u.credentialsChangedAt).toBeInstanceOf(Date);
+  });
+
+  it("Mobil parol almashtirish — joriy parol noto'g'ri bo'lsa token berilmaydi", async () => {
+    prisma.__addUser({
+      id: 'u-mob2',
+      username: 'shifokor',
+      role: 'EMPLOYEE',
+      status: 'ACTIVE',
+      passwordHash: await bcrypt.hash('togri-parol', 4),
+    });
+    await expect(
+      service.changePasswordMobile('u-mob2', {
+        currentPassword: 'xato',
+        newPassword: 'yangi-parol',
+      }),
+    ).rejects.toThrow("Joriy parol noto'g'ri");
+  });
 });
