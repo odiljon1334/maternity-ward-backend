@@ -32,4 +32,10 @@ describe('support bot promptlari', () => {
       ),
     ).toBe("Siz tekshiring. Sizning javob: sizga va sizdan ma'lumot kerak.");
   });
+
+  it('ilova sahifasi va jonli operatorni promptda aniq beradi', () => {
+    expect(SUPPORT_BOT_SYSTEM_PROMPT).toContain('https://clinicuk24.com/ilova');
+    expect(SUPPORT_BOT_SYSTEM_PROMPT).toContain('@staffpluse_support');
+    expect(SUPPORT_BOT_SYSTEM_PROMPT).not.toContain('staffpulse_support');
+  });
 });

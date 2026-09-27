@@ -16,6 +16,11 @@ import {
   SUPPORT_BOT_COMMANDS,
   SUPPORT_BOT_DESCRIPTION,
   SUPPORT_BOT_SHORT_DESCRIPTION,
+  MOBILE_APP_PAGE_URL,
+  SUPPORT_APP_MESSAGE,
+  SUPPORT_OPERATOR_MESSAGE,
+  SUPPORT_OPERATOR_URL,
+  SUPPORT_OPERATOR_USERNAME,
 } from './support-bot.metadata';
 import { TrialLeadsService } from '../trial-leads/trial-leads.service';
 
@@ -139,13 +144,31 @@ export class SupportBotService implements OnModuleInit {
           'vaqtidan tashqarida esa AI yordamchimiz javob beradi.\n\n' +
           '14 kunlik bepul sinovni hoziroq boshlashingiz ham mumkin:',
         Markup.inlineKeyboard([
-          Markup.button.callback(
-            '🚀 14 kunlik BEPUL sinovni boshlash',
-            'start_trial',
-          ),
+          [
+            Markup.button.callback(
+              '🚀 14 kunlik BEPUL sinovni boshlash',
+              'start_trial',
+            ),
+          ],
+          [Markup.button.callback('📱 Xodimlar ilovasi (Android)', 'app_info')],
+          [
+            Markup.button.url(
+              `👤 Operator: @${SUPPORT_OPERATOR_USERNAME}`,
+              SUPPORT_OPERATOR_URL,
+            ),
+          ],
         ]),
       );
     });
+
+    // Ilova havolasi xodimlar uchun ham kerak — ular mijoz emas, shuning
+    // uchun bu buyruq va tugma LEAD sifatida saqlanmaydi.
+    this.bot.command('ilova', (ctx) => this.replyAppInfo(ctx));
+    this.bot.action('app_info', async (ctx) => {
+      await ctx.answerCbQuery();
+      await this.replyAppInfo(ctx);
+    });
+    this.bot.command('operator', (ctx) => this.replyOperator(ctx));
 
     this.bot.action('start_trial', async (ctx) => {
       await ctx.answerCbQuery();
@@ -269,6 +292,33 @@ export class SupportBotService implements OnModuleInit {
 
     await this.registerWebhook();
     this.logger.log('Support bot started (webhook mode)');
+  }
+
+  private async replyAppInfo(ctx: any) {
+    await ctx.reply(
+      SUPPORT_APP_MESSAGE,
+      Markup.inlineKeyboard([
+        [Markup.button.url('📱 Yuklab olish sahifasi', MOBILE_APP_PAGE_URL)],
+        [
+          Markup.button.url(
+            `👤 Operator: @${SUPPORT_OPERATOR_USERNAME}`,
+            SUPPORT_OPERATOR_URL,
+          ),
+        ],
+      ]),
+    );
+  }
+
+  private async replyOperator(ctx: any) {
+    await ctx.reply(
+      SUPPORT_OPERATOR_MESSAGE,
+      Markup.inlineKeyboard([
+        Markup.button.url(
+          `✍️ @${SUPPORT_OPERATOR_USERNAME} ga yozish`,
+          SUPPORT_OPERATOR_URL,
+        ),
+      ]),
+    );
   }
 
   /**
@@ -716,7 +766,7 @@ export class SupportBotService implements OnModuleInit {
       this.logger.warn(
         'GEMINI_API_KEY sozlanmagan — support bot AI javob bera olmaydi',
       );
-      return "Kechirasiz, hozircha avtomatik javob ishlamayapti. Ish vaqtida operatorimiz bilan bog'lanishingiz mumkin.";
+      return `Kechirasiz, hozircha avtomatik javob ishlamayapti. Operatorimiz bilan bog'laning: @${SUPPORT_OPERATOR_USERNAME}`;
     }
 
     const session = this.getSession(chatId);
@@ -759,14 +809,14 @@ export class SupportBotService implements OnModuleInit {
 
       const generatedReply =
         data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ||
-        "Kechirasiz, javob shakllantira olmadim. Operatorimiz bilan bog'laning.";
+        `Kechirasiz, javob shakllantira olmadim. Operatorimiz bilan bog'laning: @${SUPPORT_OPERATOR_USERNAME}`;
       const reply = formalizeUzbekAddress(generatedReply);
       session.history.push({ role: 'assistant', content: reply });
       session.history = session.history.slice(-MAX_HISTORY);
       return reply;
     } catch (e) {
       this.logger.error(`Gemini chaqiruvida xatolik: ${e}`);
-      return 'Kechirasiz, hozir texnik nosozlik bor. Ish vaqtida operatorimiz javob beradi.';
+      return `Kechirasiz, hozir texnik nosozlik bor. Operatorimiz javob beradi: @${SUPPORT_OPERATOR_USERNAME}`;
     }
   }
 
