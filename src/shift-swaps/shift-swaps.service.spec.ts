@@ -272,4 +272,19 @@ describe('ShiftSwapsService', () => {
       }),
     ).rejects.toThrow("O'tgan kun");
   });
+
+  it('31 kundan uzoq smena create API darajasida rad etiladi', async () => {
+    const { svc, prisma } = setup([
+      { employeeId: 'A', date: D(32), shift: DAY },
+    ]);
+
+    await expect(
+      svc.create('u-A', {
+        type: 'COVER',
+        requesterDate: key(32),
+        targetId: 'B',
+      }),
+    ).rejects.toThrow('31 kun');
+    expect(prisma.shiftSwapRequest.create).not.toHaveBeenCalled();
+  });
 });

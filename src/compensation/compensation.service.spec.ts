@@ -38,6 +38,8 @@ describe('CompensationService legal workflow', () => {
       schedule: { findMany: jest.fn(async () => []) },
       notification: { create: jest.fn(async () => ({})) },
     };
+    prisma.$queryRaw = jest.fn(async () => [{ pg_advisory_xact_lock: null }]);
+    prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
     service = new CompensationService(prisma);
   });
 
@@ -176,6 +178,44 @@ describe('CompensationService legal workflow', () => {
           amount: 1_500_000,
         }),
       ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('parallel so‘rovlarni bitta xodim/oy lockida ketma-ket tekshiradi', async () => {
+      const advances: any[] = [];
+      let queue = Promise.resolve();
+      prisma.salaryAdvance.findMany.mockImplementation(async () => [
+        ...advances,
+      ]);
+      prisma.salaryAdvance.create.mockImplementation(async ({ data }: any) => {
+        const created = {
+          id: `adv-${advances.length + 1}`,
+          status: 'REQUESTED',
+          ...data,
+        };
+        advances.push(created);
+        return created;
+      });
+      prisma.$transaction.mockImplementation((fn: any) => {
+        const run = queue.then(() => fn(prisma));
+        queue = run.catch(() => undefined);
+        return run;
+      });
+
+      const request = () =>
+        service.requestAdvance(employee.userId, true, undefined, {
+          ...period(),
+          amount: 3_000_000,
+        });
+      const results = await Promise.allSettled([request(), request()]);
+
+      expect(
+        results.filter((result) => result.status === 'fulfilled'),
+      ).toHaveLength(1);
+      expect(
+        results.filter((result) => result.status === 'rejected'),
+      ).toHaveLength(1);
+      expect(advances).toHaveLength(1);
+      expect(prisma.$queryRaw).toHaveBeenCalledTimes(2);
     });
 
     it('faqat REQUESTED holatdagi so‘rov bekor qilinadi', async () => {

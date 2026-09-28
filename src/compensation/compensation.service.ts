@@ -408,8 +408,16 @@ export class CompensationService {
           'Avans faqat joriy yoki keyingi oy uchun so‘raladi',
         );
       }
+    }
 
-      const active = await this.prisma.salaryAdvance.findMany({
+    // Bir xodim/oy bo'yicha limit tekshiruvi va yaratish bitta DB lock ostida
+    // bajariladi. Aks holda parallel ikkita so'rov ikkalasi ham eski summani
+    // ko'rib, oylik limitdan oshib ketishi mumkin.
+    return this.prisma.$transaction(async (tx) => {
+      const lockKey = `salary-advance:${employee.id}:${dto.year}:${dto.month}`;
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+
+      const active = await tx.salaryAdvance.findMany({
         where: {
           employeeId: employee.id,
           month: dto.month,
@@ -429,7 +437,10 @@ export class CompensationService {
           paidAmount: true,
         },
       });
-      if (active.some((a) => a.status === SalaryAdvanceStatus.REQUESTED)) {
+      if (
+        actorIsEmployee &&
+        active.some((a) => a.status === SalaryAdvanceStatus.REQUESTED)
+      ) {
         throw new ConflictException(
           'Bu oy uchun avans so‘rovingiz ko‘rib chiqilmoqda',
         );
@@ -445,18 +456,18 @@ export class CompensationService {
           'Oy davomidagi avanslar jami bazaviy oylikdan oshmasligi kerak',
         );
       }
-    }
 
-    return this.prisma.salaryAdvance.create({
-      data: {
-        employeeId: employee.id,
-        hospitalId: employee.hospitalId,
-        month: dto.month,
-        year: dto.year,
-        requestedAmount: dto.amount,
-        note: dto.note?.trim(),
-        requestedById: actorId,
-      },
+      return tx.salaryAdvance.create({
+        data: {
+          employeeId: employee.id,
+          hospitalId: employee.hospitalId,
+          month: dto.month,
+          year: dto.year,
+          requestedAmount: dto.amount,
+          note: dto.note?.trim(),
+          requestedById: actorId,
+        },
+      });
     });
   }
 

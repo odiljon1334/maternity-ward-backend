@@ -6,11 +6,12 @@ import type { NewInvoiceParameters } from 'telegraf/typings/telegram-types';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as https from 'https';
-import { formatMinutes, isHospitalBlocked } from '../common/utils/payment.util';
+import { formatMinutes } from '../common/utils/payment.util';
 import { getStaffPricing } from '../common/utils/pricing.util';
 import { SubscriptionBillingService } from '../payments/subscription-billing.service';
 import { coverageLabel } from '../payments/billing.util';
 import { DateUtil } from '../common/utils/date.util';
+import { unexcusedLate } from '../attendance-notices/notice-excuse.util';
 import {
   BotLinkCandidate,
   LINK_PAYLOAD_PREFIX,
@@ -1606,7 +1607,7 @@ export class TelegramService implements OnModuleInit {
         await this.bot.telegram.sendMessage(sub.chatId, message, {
           parse_mode: 'HTML',
         });
-      } catch (e) {
+      } catch {
         this.logger.warn(`Broadcast failed to ${sub.chatId}`);
       }
     }
@@ -1631,7 +1632,7 @@ export class TelegramService implements OnModuleInit {
         await this.bot.telegram.sendMessage(sub.chatId, message, {
           parse_mode: 'HTML',
         });
-      } catch (e) {
+      } catch {
         this.logger.warn(`broadcastToHospital failed to ${sub.chatId}`);
       }
     }
@@ -1668,7 +1669,11 @@ export class TelegramService implements OnModuleInit {
     attWhere.employee = { hospitalId };
     const attendances = await this.prisma.attendanceRecord.findMany({
       where: attWhere,
-      select: { employeeId: true, lateMinutes: true },
+      select: {
+        employeeId: true,
+        lateMinutes: true,
+        excusedLateMin: true,
+      },
     });
 
     let totalScheduled: number;
@@ -1684,13 +1689,13 @@ export class TelegramService implements OnModuleInit {
       );
       totalScheduled = scheduled.length;
       cameCount = cameInSchedule.length;
-      lateCount = cameInSchedule.filter((a) => a.lateMinutes > 0).length;
+      lateCount = cameInSchedule.filter((a) => unexcusedLate(a) > 0).length;
       notCameCount = totalScheduled - cameCount;
     } else {
       // Schedule yo'q — barcha xodimlar va attendanceRecord dan hisoblash
       totalScheduled = await this.prisma.employee.count({ where: empWhere });
       cameCount = attendances.length;
-      lateCount = attendances.filter((a) => a.lateMinutes > 0).length;
+      lateCount = attendances.filter((a) => unexcusedLate(a) > 0).length;
       notCameCount = totalScheduled - cameCount;
     }
 
@@ -1748,7 +1753,8 @@ export class TelegramService implements OnModuleInit {
           minute: '2-digit',
           timeZone: TZ,
         });
-        const late = r.lateMinutes > 0 ? ` ⚠️ +${r.lateMinutes} daq` : '';
+        const lateMinutes = unexcusedLate(r);
+        const late = lateMinutes > 0 ? ` ⚠️ +${lateMinutes} daq` : '';
         return `${i + 1}. <b>${r.employee.fullName}</b> — ${time}${late}`;
       })
       .join('\n');
@@ -1818,39 +1824,13 @@ export class TelegramService implements OnModuleInit {
   }
 
   /**
-   * Haftalik hisobot — weeklyAttendanceStat bo'lmasa, attendanceRecord dan hisoblanadi
+   * Haftalik hisobot attendance faktlaridan hisoblanadi. Cached weekly stat
+   * tasdiqlangan izohdan oldin yozilgan bo'lishi mumkin, shuning uchun
+   * kechikishni undan olish payroll bilan zid natija berardi.
    */
   private async buildWeeklyReport(hospitalId: string): Promise<string> {
     const weekStart = this.weekStart();
 
-    const where: any = {
-      weekStart,
-      OR: [
-        { totalLateMin: { gt: 0 } },
-        { totalEarlyMin: { gt: 0 } },
-        { daysAbsent: { gt: 0 } },
-      ],
-    };
-    where.employee = { hospitalId };
-
-    const stats = await this.prisma.weeklyAttendanceStat.findMany({
-      where,
-      include: { employee: { include: { department: true } } },
-      orderBy: { totalLateMin: 'desc' },
-      take: 20,
-    });
-
-    if (stats.length) {
-      const list = stats
-        .map(
-          (s, i) =>
-            `${i + 1}. <b>${s.employee.fullName}</b>\n   ⏱ ${s.totalLateMin} min kech | 🚶 ${s.totalEarlyMin} min erta`,
-        )
-        .join('\n\n');
-      return `📈 <b>Haftalik hisobot</b>\n\n${list}`;
-    }
-
-    // weeklyAttendanceStat yo'q — raw recordlardan hisoblash
     const rawWhere: any = {
       workDate: { gte: weekStart },
       OR: [
@@ -1893,14 +1873,20 @@ export class TelegramService implements OnModuleInit {
         });
       }
       const s = empMap.get(r.employeeId)!;
-      s.lateMin += r.lateMinutes;
+      s.lateMin += unexcusedLate(r);
       s.earlyMin += r.earlyLeaveMin;
       if (r.status === 'ABSENT') s.absent++;
     }
 
     const sorted = [...empMap.values()]
+      .filter(
+        (stats) => stats.lateMin > 0 || stats.earlyMin > 0 || stats.absent > 0,
+      )
       .sort((a, b) => b.lateMin - a.lateMin)
       .slice(0, 20);
+    if (!sorted.length) {
+      return `✅ <b>Haftalik hisobot</b>\n\nBu hafta hech qanday kechikish yoki sababsiz yo\'qlik qayd etilmagan.`;
+    }
     const weekLabel = weekStart.toLocaleDateString('uz-UZ', {
       day: '2-digit',
       month: '2-digit',
@@ -2038,7 +2024,7 @@ export class TelegramService implements OnModuleInit {
             caption,
             parse_mode: 'HTML',
           });
-        } catch (e) {
+        } catch {
           // Statik xarita yuklanmasa — hech bo'lmasa matnli xabar boradi
           try {
             await this.bot.telegram.sendMessage(sub.chatId, caption, {
@@ -2164,7 +2150,6 @@ export class TelegramService implements OnModuleInit {
     if (!this.bot) return;
 
     const employee = leave.employee;
-    const hospital = employee?.hospital;
     const startStr = new Date(leave.startDate).toLocaleDateString('uz-UZ', {
       day: '2-digit',
       month: '2-digit',

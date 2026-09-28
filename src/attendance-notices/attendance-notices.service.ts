@@ -183,32 +183,30 @@ export class AttendanceNoticesService implements OnModuleInit {
     });
     if (!notice) throw new NotFoundException('Xabar topilmadi');
 
-    // Faqat PENDING — ikki rahbar bir vaqtda bosganda birinchisi o'tadi
-    const r = await this.prisma.attendanceNotice.updateMany({
-      where: { id, status: 'PENDING' },
-      data: {
-        status: decision,
-        reviewedById: reviewer.userId,
-        reviewedAt: new Date(),
-        reviewNote: note?.trim() || null,
-      },
-    });
-    if (!r.count) {
-      throw new ConflictException(
-        notice.status === 'CANCELLED'
-          ? 'Xodim xabarni bekor qilgan'
-          : "Xabar allaqachon ko'rib chiqilgan",
-      );
-    }
+    const excused = await this.prisma.$transaction(async (tx) => {
+      // Faqat PENDING — ikki rahbar bir vaqtda bosganda birinchisi o'tadi.
+      // Status va attendance excuse birga commit/rollback bo'ladi.
+      const r = await tx.attendanceNotice.updateMany({
+        where: { id, status: 'PENDING' },
+        data: {
+          status: decision,
+          reviewedById: reviewer.userId,
+          reviewedAt: new Date(),
+          reviewNote: note?.trim() || null,
+        },
+      });
+      if (!r.count) {
+        throw new ConflictException(
+          notice.status === 'CANCELLED'
+            ? 'Xodim xabarni bekor qilgan'
+            : "Xabar allaqachon ko'rib chiqilgan",
+        );
+      }
 
-    let excused: number | null = null;
-    if (decision === 'APPROVED') {
-      excused = await applyNoticeExcuse(
-        this.prisma,
-        notice.employeeId,
-        notice.workDate,
-      );
-    }
+      return decision === 'APPROVED'
+        ? applyNoticeExcuse(tx as any, notice.employeeId, notice.workDate)
+        : null;
+    });
     void this.notifyEmployee(notice, decision, note).catch(() => {});
     return { id, status: decision, excusedLateMin: excused };
   }

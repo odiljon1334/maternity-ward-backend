@@ -1,8 +1,8 @@
 # StaffPlusPRO — qolgan ishlar rejasi
 
 **Yangilangan sana:** 2026-09-28  
-**Backend bazasi:** `4ebcc1b`  
-**Frontend bazasi:** `81e915b`
+**Backend bazasi:** `main`
+**Frontend bazasi:** `main`
 
 Bu faylda faqat hali yopilmagan ishlar turadi. Bajarilgan ishlar bu rejaga
 qayta qo'shilmaydi; ularning tarixi Git commitlari va production release
@@ -21,28 +21,19 @@ Har bir bosqich alohida yakunlanadi:
 Terminal webhooklari yangi backend tayyor bo'lguncha eski healthy backendda
 qabul qilinishda davom etishi shart.
 
-## 1. Release bloklovchi regressiyalar
+## 1. Production GPS inventari va qat'iy geofence
 
 1. Productiondagi barcha muassasalar uchun GPS markazi/ish joylari inventarini
    olish. Shundan keyin markazi yo'q muassasada mobil check-in'ni jim
    o'tkazib yuborishni bekor qilish va tushunarli xabar bilan bloklash.
-2. Tasdiqlangan “kechikaman” izohida faqat so'ralgan `delayMinutes`gacha bo'lgan
-   qismni uzrli qilish; ortiqcha kechikish haqiqiy kechikish bo'lib qolishi kerak.
-3. `excusedLateMin`ni oylik/haftalik hisobot, Excel, dashboard va Telegram
-   agregatlarida bir xil qo'llash; payroll bilan hisobot bir-biriga zid bo'lmasin.
-4. Kechikish izohini tasdiqlash va attendance yozuvini yangilashni bitta
-   tranzaksiyaga olish; yarim bajarilgan `APPROVED` holat qolmasin.
-5. Avans limitini parallel so'rov bilan oshirib yuborishni DB transaction/lock
-   yoki ekvivalent atomik nazorat bilan yopish.
-6. Telegram check-in/check-out reminder logini faqat muvaffaqiyatli yuborilgach
-   yakunlash; yuborish muvaffaqiyatsiz bo'lsa keyingi cron qayta urinishi kerak.
-7. Smena almashish so'rovlarida 31 kunlik chegarani faqat ro'yxatda emas,
-   create/review API darajasida ham qat'iy tekshirish.
-8. 2-TUG `POST_COVERAGE` grafigida kasallik/ta'til/o'rin bosish va smena
-   almashish workflowini qo'llash; hozirgi servis bu rejimni rad etadi.
 
-**Yakun mezoni:** regressiya testlari yozilgan, backend test/build va frontend
-typecheck/build toza, boshqa tenant ma'lumotiga o'tish imkonsiz.
+Bu band faqat production ma'lumotlarini inventarizatsiya qilgandan keyin
+yopiladi. Markazi yo'q muassasani hozir birdan bloklash ishlab turgan mobil
+davomatni to'xtatib qo'yishi mumkin.
+
+**Yakun mezoni:** har bir faol muassasada kamida bitta tasdiqlangan GPS markazi
+yoki ish joyi bor; markazi yo'q tenantda mobil check-in tushunarli xabar bilan
+rad etiladi va boshqa tenant ma'lumotiga o'tish imkonsiz.
 
 ## 2. So'nggi versiyani productionda qabul qilish
 

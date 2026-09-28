@@ -4,6 +4,7 @@ import {
   calculateMonthlyCoverageMinutes,
   SchedulePlanningService,
 } from './schedule-planning.service';
+import dayjs from 'dayjs';
 
 describe('SchedulePlanningService', () => {
   function setup(mode: SchedulePlanningMode) {
@@ -52,8 +53,19 @@ describe('SchedulePlanningService', () => {
         findMany: jest.fn().mockResolvedValue([]),
       },
       scheduleChangeRequest: {
+        findFirst: jest.fn(),
         findMany: jest.fn().mockResolvedValue([]),
+        update: jest.fn().mockImplementation(({ data }) => ({
+          id: 'change-1',
+          ...data,
+        })),
       },
+      schedule: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        update: jest.fn().mockResolvedValue({}),
+        upsert: jest.fn().mockResolvedValue({}),
+      },
+      $transaction: jest.fn(async (fn: any) => fn(prisma)),
     };
 
     return {
@@ -168,5 +180,122 @@ describe('SchedulePlanningService', () => {
       service.getMyChangeOptions('hospital-1', 'user-1', 'entry-1'),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(prisma.employee.findMany).not.toHaveBeenCalled();
+  });
+
+  it('POST_COVERAGE create API 31 kundan uzoq o‘zgarishni rad etadi', async () => {
+    const { prisma, service } = setup(SchedulePlanningMode.POST_COVERAGE);
+    prisma.monthlyScheduleEntry.findFirst.mockResolvedValue({
+      id: 'entry-1',
+      employeeId: 'employee-1',
+      shiftId: 'shift-1',
+      entryType: 'WORKING',
+      startsAt: new Date(),
+      endsAt: new Date(),
+      workDate: dayjs().add(32, 'day').toDate(),
+      planId: 'plan-1',
+      plan: { id: 'plan-1', status: 'APPROVED' },
+      employee: {
+        id: 'employee-1',
+        userId: 'user-1',
+        departmentId: 'department-1',
+      },
+    });
+
+    await expect(
+      service.createChangeRequest('hospital-1', 'user-1', 'EMPLOYEE', {
+        type: 'ABSENCE',
+        primaryEntryId: 'entry-1',
+        absenceEntryType: 'SICK',
+        reason: 'Davolanish kerak',
+      } as never),
+    ).rejects.toThrow('31 kun');
+  });
+
+  it('POST_COVERAGE o‘rinbosarlikni tasdiqlaganda ish soatini o‘rinbosarga yozadi', async () => {
+    const { prisma, service } = setup(SchedulePlanningMode.POST_COVERAGE);
+    const workDate = dayjs().add(2, 'day').startOf('day').toDate();
+    prisma.scheduleChangeRequest.findFirst.mockResolvedValue({
+      id: 'change-1',
+      hospitalId: 'hospital-1',
+      planId: 'plan-1',
+      type: 'SUBSTITUTION',
+      status: 'ACCEPTED',
+      requestedById: 'user-1',
+      replacementEmployeeId: 'employee-2',
+      absenceEntryType: 'SICK',
+      primaryEntry: {
+        id: 'entry-1',
+        employeeId: 'employee-1',
+        shiftId: 'shift-12h',
+        workDate,
+      },
+      counterpartEntry: null,
+      replacementEmployee: { userId: 'user-2' },
+      requestedBy: { role: 'EMPLOYEE' },
+    });
+
+    await service.approveChangeRequest('hospital-1', 'change-1', 'director-1');
+
+    expect(prisma.schedule.upsert).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        update: expect.objectContaining({ status: 'SICK', shiftId: null }),
+      }),
+    );
+    expect(prisma.schedule.upsert).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        create: expect.objectContaining({
+          employeeId: 'employee-2',
+          shiftId: 'shift-12h',
+          status: 'WORKING',
+          scheduleChangeRequestId: 'change-1',
+        }),
+      }),
+    );
+  });
+
+  it('POST_COVERAGE ikki kunlik SWAPni audit izi bilan qo‘llaydi', async () => {
+    const { prisma, service } = setup(SchedulePlanningMode.POST_COVERAGE);
+    const firstDate = dayjs().add(2, 'day').startOf('day').toDate();
+    const secondDate = dayjs().add(4, 'day').startOf('day').toDate();
+    prisma.scheduleChangeRequest.findFirst.mockResolvedValue({
+      id: 'change-swap',
+      hospitalId: 'hospital-1',
+      planId: 'plan-1',
+      type: 'SWAP',
+      status: 'ACCEPTED',
+      requestedById: 'user-1',
+      replacementEmployeeId: 'employee-2',
+      absenceEntryType: null,
+      primaryEntry: {
+        id: 'entry-1',
+        employeeId: 'employee-1',
+        shiftId: 'shift-day',
+        workDate: firstDate,
+      },
+      counterpartEntry: {
+        id: 'entry-2',
+        planId: 'plan-1',
+        employeeId: 'employee-2',
+        shiftId: 'shift-night',
+        workDate: secondDate,
+        employee: { userId: 'user-2' },
+      },
+      replacementEmployee: { userId: 'user-2' },
+      requestedBy: { role: 'EMPLOYEE' },
+    });
+
+    await service.approveChangeRequest(
+      'hospital-1',
+      'change-swap',
+      'director-1',
+    );
+
+    expect(prisma.schedule.update).toHaveBeenCalledTimes(2);
+    expect(prisma.schedule.upsert).toHaveBeenCalledTimes(2);
+    for (const call of prisma.schedule.upsert.mock.calls) {
+      expect(call[0].create.scheduleChangeRequestId).toBe('change-swap');
+    }
   });
 });

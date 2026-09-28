@@ -46,7 +46,8 @@ function setup(
     attendanceNotice: {
       findFirst: jest.fn(async ({ where }: any) => {
         if (where.status?.in) return o.existing ?? null; // dublikat tekshiruvi
-        if (where.status === 'APPROVED') return { id: 'n1' }; // excuse util
+        if (where.status === 'APPROVED')
+          return { id: 'n1', delayMinutes: notice().delayMinutes }; // excuse util
         return o.found === undefined ? notice() : o.found;
       }),
       create: jest.fn(async (a: any) => notice({ ...a.data })),
@@ -57,6 +58,7 @@ function setup(
       findFirst: jest.fn(async () => ({ shift: { startTime: '08:00' } })),
     },
   };
+  prisma.$transaction = jest.fn(async (cb: any) => cb(prisma));
   const telegram: any = {
     registerDecisionHandler: jest.fn(),
     notifyAttendanceNotice: jest.fn(async () => {}),
@@ -121,7 +123,7 @@ describe('AttendanceNoticesService', () => {
     ).rejects.toThrow(BadRequestException);
   });
 
-  it('tasdiqlash — kechikish uzrli bo‘ladi (tushlik kechikishi kirmaydi), xodimga xabar', async () => {
+  it('tasdiqlash — faqat xabarda so‘ralgan kechikish uzrli bo‘ladi, xodimga xabar', async () => {
     const { svc, prisma, telegram } = setup({
       record: {
         id: 'r1',
@@ -136,11 +138,14 @@ describe('AttendanceNoticesService', () => {
       hospitalId: 'h1',
     });
     await flush();
-    expect(res.excusedLateMin).toBe(35);
+    // Kelishdagi kechikish 35 daqiqa (45 - 10 tushlik), ammo xabarda 30
+    // daqiqa so'ralgan — ortiqcha 5 daqiqa uzrsiz qoladi.
+    expect(res.excusedLateMin).toBe(30);
     expect(prisma.attendanceRecord.update).toHaveBeenCalledWith({
       where: { id: 'r1' },
-      data: { excusedLateMin: 35 },
+      data: { excusedLateMin: 30 },
     });
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     expect(telegram.sendPersonal).toHaveBeenCalledWith(
       '555',
       expect.stringContaining('uzrli'),
@@ -224,5 +229,31 @@ describe('notice-excuse.util', () => {
   it('uzrsiz kechikish = lateMinutes − excusedLateMin', () => {
     expect(unexcusedLate({ lateMinutes: 45, excusedLateMin: 35 })).toBe(10);
     expect(unexcusedLate({ lateMinutes: 10 })).toBe(10);
+  });
+
+  it('haqiqiy kelish kechikishi xabardagi limitdan kam bo‘lsa faqat haqiqiy qism uzrli', async () => {
+    const prisma: any = {
+      attendanceNotice: {
+        findFirst: jest.fn(async () => ({ id: 'n1', delayMinutes: 30 })),
+      },
+      attendanceRecord: {
+        findFirst: jest.fn(async () => ({
+          id: 'r1',
+          checkIn: new Date(),
+          lateMinutes: 18,
+          lunchLateMin: 3,
+          excusedLateMin: 0,
+        })),
+        update: jest.fn(async (args: any) => args),
+      },
+    };
+
+    await expect(
+      applyNoticeExcuse(prisma, 'e1', new Date('2026-09-25')),
+    ).resolves.toBe(15);
+    expect(prisma.attendanceRecord.update).toHaveBeenCalledWith({
+      where: { id: 'r1' },
+      data: { excusedLateMin: 15 },
+    });
   });
 });

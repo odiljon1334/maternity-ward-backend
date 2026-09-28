@@ -4,8 +4,7 @@ import * as ExcelJS from 'exceljs';
 import dayjs from 'dayjs';
 import { AttendanceService } from '../attendance/attendance.service';
 import { PayrollService } from '../payroll/payroll.service';
-
-const TZ = process.env.TIMEZONE || 'Asia/Tashkent';
+import { unexcusedLate } from '../attendance-notices/notice-excuse.util';
 
 @Injectable()
 export class ReportsService {
@@ -107,8 +106,6 @@ export class ReportsService {
 
     // Day columns
     for (let d = 1; d <= daysInMonth; d++) {
-      const date = new Date(year, month - 1, d);
-      const dow = date.getDay(); // 0=Sun
       headers.push({ header: String(d), width: 4 });
     }
 
@@ -336,6 +333,7 @@ export class ReportsService {
           select: {
             employeeId: true,
             lateMinutes: true,
+            excusedLateMin: true,
             earlyLeaveMin: true,
             overtimeMinutes: true,
           },
@@ -351,7 +349,7 @@ export class ReportsService {
         earlyLeaveDays: 0,
         overtimeDays: 0,
       };
-      if (attendance.lateMinutes > 0) stats.lateDays += 1;
+      if (unexcusedLate(attendance) > 0) stats.lateDays += 1;
       if (attendance.earlyLeaveMin > 0) stats.earlyLeaveDays += 1;
       if (attendance.overtimeMinutes > 0) stats.overtimeDays += 1;
       attendanceDays.set(attendance.employeeId, stats);
@@ -467,7 +465,7 @@ export class ReportsService {
       'Holat',
     ];
 
-    const headerRow = sheet.addRow([]);
+    sheet.addRow([]);
     sheet.mergeCells(1, 1, 1, cols.length);
     const title = sheet.getCell(1, 1);
     title.value = `Oylik hisob-kitob — ${monthName}`;

@@ -15,7 +15,7 @@ export async function applyNoticeExcuse(
 ): Promise<number | null> {
   const notice = await prisma.attendanceNotice.findFirst({
     where: { employeeId, workDate, status: 'APPROVED', type: 'LATE_ARRIVAL' },
-    select: { id: true },
+    select: { id: true, delayMinutes: true },
   });
   if (!notice) return null;
 
@@ -35,13 +35,19 @@ export async function applyNoticeExcuse(
     0,
     (rec.lateMinutes ?? 0) - (rec.lunchLateMin ?? 0),
   );
-  if (rec.excusedLateMin !== arrivalLate) {
+  // Xodim xabarda qancha kechikishini bildirgan bo'lsa, rahbar tasdig'i
+  // ko'pi bilan shu chegaragacha amal qiladi. Ortiqcha kechikish uzrsiz.
+  const excusedLate = Math.min(
+    arrivalLate,
+    Math.max(0, notice.delayMinutes ?? 0),
+  );
+  if (rec.excusedLateMin !== excusedLate) {
     await prisma.attendanceRecord.update({
       where: { id: rec.id },
-      data: { excusedLateMin: arrivalLate },
+      data: { excusedLateMin: excusedLate },
     });
   }
-  return arrivalLate;
+  return excusedLate;
 }
 
 /** Hisobot va oylik uchun: uzrsiz kechikish */

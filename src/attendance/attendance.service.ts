@@ -24,7 +24,10 @@ import { PrismaService } from '../prisma/prisma.service';
 import { TelegramService } from '../telegram/telegram.service';
 import { FaceMatchService } from '../face-match/face-match.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
-import { applyNoticeExcuse } from '../attendance-notices/notice-excuse.util';
+import {
+  applyNoticeExcuse,
+  unexcusedLate,
+} from '../attendance-notices/notice-excuse.util';
 import { PushService } from '../push/push.service';
 import { DateUtil } from '../common/utils/date.util';
 import { isHospitalBlocked } from '../common/utils/payment.util';
@@ -1059,16 +1062,20 @@ export class AttendanceService {
       //    Kelgusi rejadagi kunlar (PLANNED) va dam olish kunlari kirmaydi —
       //    aks holda foizlar noto'g'ri chiqadi.
       totalDays: expected.length,
-      present: rows.filter((r) => r.status === 'PRESENT').length,
-      late: rows.filter((r) => ['LATE', 'LATE_EARLY'].includes(r.status))
-        .length,
+      // "Kelgan" xodim kechiksa ham ishga kelgan hisoblanadi; kechikish
+      // alohida ustunda ko'rsatiladi.
+      present: rows.filter((r) => WORKED.includes(r.status)).length,
+      late: rows.filter(
+        (r) =>
+          ['LATE', 'LATE_EARLY'].includes(r.status) && unexcusedLate(r) > 0,
+      ).length,
       absent: rows.filter((r) => r.status === 'ABSENT').length,
       earlyLeave: rows.filter((r) =>
         ['EARLY_LEAVE', 'LATE_EARLY'].includes(r.status),
       ).length,
       // Kelgusidagi rejalashtirilgan ish kunlari
       planned: rows.filter((r) => r.status === 'PLANNED').length,
-      totalLateMin: records.reduce((s, r) => s + r.lateMinutes, 0),
+      totalLateMin: records.reduce((s, r) => s + unexcusedLate(r), 0),
       totalOvertimeMin: records.reduce((s, r) => s + r.overtimeMinutes, 0),
     };
 
@@ -1365,9 +1372,51 @@ export class AttendanceService {
       await this.ensureEmployeeInHospital(employeeId, hospitalId);
     }
     const start = DateUtil.startOfWeek(weekStart);
-    return this.prisma.weeklyAttendanceStat.findUnique({
-      where: { employeeId_weekStart: { employeeId, weekStart: start } },
-    });
+    const end = DateUtil.endOfWeek(start);
+    const [cached, records] = await Promise.all([
+      this.prisma.weeklyAttendanceStat.findUnique({
+        where: { employeeId_weekStart: { employeeId, weekStart: start } },
+      }),
+      this.prisma.attendanceRecord.findMany({
+        where: { employeeId, workDate: { gte: start, lte: end } },
+        select: {
+          lateMinutes: true,
+          excusedLateMin: true,
+          earlyLeaveMin: true,
+          overtimeMinutes: true,
+          status: true,
+        },
+      }),
+    ]);
+    if (!cached && records.length === 0) return null;
+
+    const totalLateMin = records.reduce(
+      (sum, record) => sum + unexcusedLate(record),
+      0,
+    );
+    if (!cached) {
+      return {
+        employeeId,
+        weekStart: start,
+        weekEnd: end,
+        totalLateMin,
+        totalEarlyMin: records.reduce(
+          (sum, record) => sum + record.earlyLeaveMin,
+          0,
+        ),
+        totalOvertime: records.reduce(
+          (sum, record) => sum + record.overtimeMinutes,
+          0,
+        ),
+        daysWorked: records.filter((record) => record.status !== 'ABSENT')
+          .length,
+        daysAbsent: records.filter((record) => record.status === 'ABSENT')
+          .length,
+        penaltyLateMin: 0,
+        deductionAmount: 0,
+      };
+    }
+    return { ...cached, totalLateMin };
   }
 
   async manualCheckIn(

@@ -133,6 +133,12 @@ export class ShiftSwapsService implements OnModuleInit {
     const today = DateUtil.startOfDay(new Date());
     if (date < today)
       throw new BadRequestException("O'tgan kunni almashtirib bo'lmaydi");
+    const lastAllowed = dayjs(today).add(WINDOW_DAYS, 'day').toDate();
+    if (date > lastAllowed) {
+      throw new BadRequestException(
+        `Smena almashish ko'pi bilan ${WINDOW_DAYS} kun oldinga rejalashtiriladi`,
+      );
+    }
     if (startTime && date.getTime() === today.getTime()) {
       const start = DateUtil.buildDateTime(date, startTime);
       if (start.getTime() - Date.now() < MIN_LEAD_MIN * 60_000) {

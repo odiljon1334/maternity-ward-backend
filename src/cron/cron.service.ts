@@ -497,11 +497,29 @@ export class CronService {
       });
       if (!claim.count) continue;
 
-      const ok = await this.telegramService.sendCheckinReminder(sch.employee, {
-        start: sch.shift.startTime,
-        shiftName: sch.shift.name,
-        minutesLeft,
-      });
+      let ok = false;
+      try {
+        ok = await this.telegramService.sendCheckinReminder(sch.employee, {
+          start: sch.shift.startTime,
+          shiftName: sch.shift.name,
+          minutesLeft,
+        });
+      } catch (error) {
+        this.logger.warn(
+          `Check-in eslatmasi yuborilmadi: ${sch.employeeId} (${error instanceof Error ? error.message : String(error)})`,
+        );
+      }
+      if (!ok) {
+        // Claim faqat muvaffaqiyatli yuborilgan eslatma uchun tarix bo'lib
+        // qoladi. Telegram vaqtincha ishlamasa keyingi cron qayta urinadi.
+        await this.prisma.employeeReminderLog.deleteMany({
+          where: {
+            employeeId: sch.employeeId,
+            kind: 'CHECKIN_SOON',
+            workDate: sch.date,
+          },
+        });
+      }
       if (ok) sent++;
     }
     if (sent) this.logger.log(`Check-in eslatmalari yuborildi: ${sent}`);
@@ -565,10 +583,26 @@ export class CronService {
             skipDuplicates: true,
           });
           if (claim.count && record.expectedCheckOut) {
-            await this.telegramService.sendCheckoutDue(
-              record.employee,
-              dayjs(record.expectedCheckOut).tz(TZ).format('HH:mm'),
-            );
+            let ok = false;
+            try {
+              ok = await this.telegramService.sendCheckoutDue(
+                record.employee,
+                dayjs(record.expectedCheckOut).tz(TZ).format('HH:mm'),
+              );
+            } catch (error) {
+              this.logger.warn(
+                `Check-out eslatmasi yuborilmadi: ${record.employeeId} (${error instanceof Error ? error.message : String(error)})`,
+              );
+            }
+            if (!ok) {
+              await this.prisma.employeeReminderLog.deleteMany({
+                where: {
+                  employeeId: record.employeeId,
+                  kind: 'CHECKOUT_DUE',
+                  workDate: record.workDate,
+                },
+              });
+            }
           }
         }
 

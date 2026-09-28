@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { DateUtil } from '../common/utils/date.util';
 import dayjs from 'dayjs';
+import { unexcusedLate } from '../attendance-notices/notice-excuse.util';
 
 @Injectable()
 export class DashboardService {
@@ -28,7 +29,7 @@ export class DashboardService {
     const [
       totalEmployees,
       todayPresentCount,
-      todayLateCount,
+      todayLateRecords,
       todayLunchLateCount,
       monthlyPayroll,
       todayAttendances,
@@ -44,12 +45,13 @@ export class DashboardService {
         },
       }),
 
-      this.prisma.attendanceRecord.count({
+      this.prisma.attendanceRecord.findMany({
         where: {
           workDate: today,
           status: { in: ['LATE', 'LATE_EARLY'] },
           employee: empFilter,
         },
+        select: { lateMinutes: true, excusedLateMin: true },
       }),
 
       // Bugun tushlikdan kech qaytganlar soni
@@ -83,6 +85,9 @@ export class DashboardService {
     // Agar jadval yo'q bo'lsa, jami xodimlar - kelgan
     const expectedToday =
       scheduledTodayCount > 0 ? scheduledTodayCount : totalEmployees;
+    const todayLateCount = todayLateRecords.filter(
+      (record) => unexcusedLate(record) > 0,
+    ).length;
     const todayAbsentCount = Math.max(0, expectedToday - todayPresentCount);
     const total = todayPresentCount + todayAbsentCount;
 
@@ -136,7 +141,7 @@ export class DashboardService {
           lunchIn: a.lunchIn,
           lunchLateMin: a.lunchLateMin ?? 0,
           status: a.status,
-          lateMinutes: a.lateMinutes ?? 0,
+          lateMinutes: unexcusedLate(a),
         })),
         ...absentAttendances,
       ],
@@ -151,10 +156,14 @@ export class DashboardService {
 
     const hospitalFilter = hospitalId ? { employee: { hospitalId } } : {};
 
-    const records = await this.prisma.attendanceRecord.groupBy({
-      by: ['workDate', 'status'],
+    const records = await this.prisma.attendanceRecord.findMany({
       where: { workDate: { gte: start }, ...hospitalFilter },
-      _count: { status: true },
+      select: {
+        workDate: true,
+        status: true,
+        lateMinutes: true,
+        excusedLateMin: true,
+      },
       orderBy: { workDate: 'asc' },
     });
 
@@ -164,11 +173,11 @@ export class DashboardService {
       if (!byDate[dateStr])
         byDate[dateStr] = { date: dateStr, present: 0, absent: 0, late: 0 };
       if (['PRESENT', 'EARLY_LEAVE'].includes(r.status))
-        byDate[dateStr].present += r._count.status;
-      if (r.status === 'ABSENT') byDate[dateStr].absent += r._count.status;
+        byDate[dateStr].present += 1;
+      if (r.status === 'ABSENT') byDate[dateStr].absent += 1;
       if (['LATE', 'LATE_EARLY'].includes(r.status)) {
-        byDate[dateStr].late += r._count.status;
-        byDate[dateStr].present += r._count.status;
+        if (unexcusedLate(r) > 0) byDate[dateStr].late += 1;
+        byDate[dateStr].present += 1;
       }
     }
 
@@ -183,18 +192,37 @@ export class DashboardService {
 
     const hospitalFilter = hospitalId ? { hospitalId } : {};
 
-    const stats = await this.prisma.attendanceRecord.groupBy({
-      by: ['employeeId'],
+    const records = await this.prisma.attendanceRecord.findMany({
       where: {
         workDate: { gte: start, lte: end },
         lateMinutes: { gt: 0 },
         employee: { ...hospitalFilter },
       },
-      _sum: { lateMinutes: true },
-      _count: { employeeId: true },
-      orderBy: { _sum: { lateMinutes: 'desc' } },
-      take: limit,
+      select: {
+        employeeId: true,
+        lateMinutes: true,
+        excusedLateMin: true,
+      },
     });
+    const byEmployee = new Map<
+      string,
+      { employeeId: string; lateCount: number; totalLateMin: number }
+    >();
+    for (const record of records) {
+      const minutes = unexcusedLate(record);
+      if (minutes <= 0) continue;
+      const stat = byEmployee.get(record.employeeId) ?? {
+        employeeId: record.employeeId,
+        lateCount: 0,
+        totalLateMin: 0,
+      };
+      stat.lateCount += 1;
+      stat.totalLateMin += minutes;
+      byEmployee.set(record.employeeId, stat);
+    }
+    const stats = [...byEmployee.values()]
+      .sort((a, b) => b.totalLateMin - a.totalLateMin)
+      .slice(0, limit);
 
     const employees = await this.prisma.employee.findMany({
       where: { id: { in: stats.map((s) => s.employeeId) } },
@@ -207,8 +235,8 @@ export class DashboardService {
         employeeId: s.employeeId,
         name: emp?.fullName ?? '—',
         department: emp?.department?.name ?? '—',
-        lateCount: s._count.employeeId,
-        totalLateMin: s._sum.lateMinutes ?? 0,
+        lateCount: s.lateCount,
+        totalLateMin: s.totalLateMin,
       };
     });
   }
@@ -237,8 +265,9 @@ export class DashboardService {
       const allRecords = d.employees.flatMap((e) => e.attendances);
       const present = allRecords.filter((r) => r.status !== 'ABSENT').length;
       const absent = allRecords.filter((r) => r.status === 'ABSENT').length;
-      const late = allRecords.filter((r) =>
-        ['LATE', 'LATE_EARLY'].includes(r.status),
+      const late = allRecords.filter(
+        (r) =>
+          ['LATE', 'LATE_EARLY'].includes(r.status) && unexcusedLate(r) > 0,
       ).length;
       return {
         department: { id: d.id, name: d.name },
@@ -268,14 +297,18 @@ export class DashboardService {
 
       const hospitalFilter = hospitalId ? { employee: { hospitalId } } : {};
 
-      const records = await this.prisma.attendanceRecord.groupBy({
-        by: ['status'],
+      const records = await this.prisma.attendanceRecord.findMany({
         where: { workDate: { gte: start, lte: end }, ...hospitalFilter },
-        _count: { status: true },
+        select: {
+          status: true,
+          lateMinutes: true,
+          excusedLateMin: true,
+        },
       });
 
       const byStatus: Record<string, number> = {};
-      for (const r of records) byStatus[r.status] = r._count.status;
+      for (const r of records)
+        byStatus[r.status] = (byStatus[r.status] ?? 0) + 1;
 
       const present =
         (byStatus['PRESENT'] ?? 0) +
@@ -283,7 +316,11 @@ export class DashboardService {
         (byStatus['LATE_EARLY'] ?? 0) +
         (byStatus['EARLY_LEAVE'] ?? 0);
       const absent = byStatus['ABSENT'] ?? 0;
-      const late = (byStatus['LATE'] ?? 0) + (byStatus['LATE_EARLY'] ?? 0);
+      const late = records.filter(
+        (record) =>
+          ['LATE', 'LATE_EARLY'].includes(record.status) &&
+          unexcusedLate(record) > 0,
+      ).length;
       const earlyLeave =
         (byStatus['EARLY_LEAVE'] ?? 0) + (byStatus['LATE_EARLY'] ?? 0);
 
@@ -315,23 +352,18 @@ export class DashboardService {
     const end = DateUtil.endOfMonth(year, month);
     const hospitalFilter = hospitalId ? { hospitalId } : {};
 
-    const records = await this.prisma.attendanceRecord.groupBy({
-      by: ['employeeId'],
-      where: {
-        workDate: { gte: start, lte: end },
-        employee: { firedAt: null, ...hospitalFilter },
-      },
-      _count: { employeeId: true },
-      _sum: { lateMinutes: true },
-    });
-
     // Per employee, count by status
     const allRecords = await this.prisma.attendanceRecord.findMany({
       where: {
         workDate: { gte: start, lte: end },
         employee: { firedAt: null, ...hospitalFilter },
       },
-      select: { employeeId: true, status: true, lateMinutes: true },
+      select: {
+        employeeId: true,
+        status: true,
+        lateMinutes: true,
+        excusedLateMin: true,
+      },
     });
 
     const empMap: Record<
@@ -357,13 +389,13 @@ export class DashboardService {
       if (['PRESENT'].includes(r.status)) e.present++;
       else if (r.status === 'ABSENT') e.absent++;
       else if (['LATE', 'LATE_EARLY'].includes(r.status)) {
-        e.late++;
+        if (unexcusedLate(r) > 0) e.late++;
         e.present++;
       } else if (r.status === 'EARLY_LEAVE') {
         e.earlyLeave++;
         e.present++;
       }
-      e.totalLateMin += r.lateMinutes ?? 0;
+      e.totalLateMin += unexcusedLate(r);
     }
 
     const empIds = Object.keys(empMap);

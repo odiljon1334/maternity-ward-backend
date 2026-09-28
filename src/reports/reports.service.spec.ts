@@ -217,6 +217,7 @@ describe('ReportsService.generatePayrollExcel', () => {
             employeeId: employee.id,
             status: 'LATE',
             lateMinutes: 20,
+            excusedLateMin: 20,
             earlyLeaveMin: 0,
             overtimeMinutes: 0,
           },
@@ -224,6 +225,7 @@ describe('ReportsService.generatePayrollExcel', () => {
             employeeId: employee.id,
             status: 'LATE_EARLY',
             lateMinutes: 10,
+            excusedLateMin: 0,
             earlyLeaveMin: 15,
             overtimeMinutes: 0,
           },
@@ -231,6 +233,7 @@ describe('ReportsService.generatePayrollExcel', () => {
             employeeId: employee.id,
             status: 'PRESENT',
             lateMinutes: 0,
+            excusedLateMin: 0,
             earlyLeaveMin: 0,
             overtimeMinutes: 120,
           },
@@ -243,7 +246,7 @@ describe('ReportsService.generatePayrollExcel', () => {
           scheduledDays: 22,
           totalWorkDays: 20,
           totalAbsences: 2,
-          totalLateMin: 30,
+          totalLateMin: 10,
           totalEarlyMin: 15,
           totalOvertimeMin: 120,
           totalNetWorkMin: 9_600,
@@ -288,8 +291,8 @@ describe('ReportsService.generatePayrollExcel', () => {
     expect(row.getCell(5).value).toBe(22);
     expect(row.getCell(6).value).toBe(20);
     expect(row.getCell(7).value).toBe(2);
-    expect(row.getCell(8).value).toBe(2);
-    expect(row.getCell(9).value).toBe(30);
+    expect(row.getCell(8).value).toBe(1);
+    expect(row.getCell(9).value).toBe(10);
     expect(row.getCell(10).value).toBe(1);
     expect(row.getCell(12).value).toBe(1);
     expect(row.getCell(14).value).toBe(160);

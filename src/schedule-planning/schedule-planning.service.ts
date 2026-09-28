@@ -37,6 +37,7 @@ dayjs.extend(utc);
 dayjs.extend(timezone);
 
 const TZ = process.env.TIMEZONE || 'Asia/Tashkent';
+const CHANGE_REQUEST_WINDOW_DAYS = 31;
 
 export function calculateMonthlyCoverageMinutes(
   year: number,
@@ -53,6 +54,21 @@ export class SchedulePlanningService {
     private readonly prisma: PrismaService,
     @Optional() private readonly notifications?: NotificationsService,
   ) {}
+
+  private assertChangeDateInWindow(date: Date) {
+    const today = dayjs().tz(TZ).startOf('day');
+    const value = dayjs(date).tz(TZ).startOf('day');
+    if (value.isBefore(today)) {
+      throw new BadRequestException(
+        'O‘tib ketgan smenani o‘zgartirib bo‘lmaydi',
+      );
+    }
+    if (value.isAfter(today.add(CHANGE_REQUEST_WINDOW_DAYS, 'day'))) {
+      throw new BadRequestException(
+        `Smena o‘zgarishi ko‘pi bilan ${CHANGE_REQUEST_WINDOW_DAYS} kun oldinga rejalashtiriladi`,
+      );
+    }
+  }
 
   async getConfig(hospitalId: string) {
     const hospital = await this.prisma.hospital.findUnique({
@@ -865,13 +881,7 @@ export class SchedulePlanningService {
         'Faqat ish smenasi o‘rnini bosiladi yoki almashtiriladi',
       );
     }
-    if (
-      dayjs(primary.workDate).tz(TZ).isBefore(dayjs().tz(TZ).startOf('day'))
-    ) {
-      throw new BadRequestException(
-        'O‘tib ketgan smenani o‘zgartirib bo‘lmaydi',
-      );
-    }
+    this.assertChangeDateInWindow(primary.workDate);
 
     const allowedAbsenceTypes: SchedulePlanEntryType[] = [
       SchedulePlanEntryType.DAY_OFF,
@@ -924,6 +934,7 @@ export class SchedulePlanningService {
       ) {
         throw new BadRequestException('Almashiladigan smena noto‘g‘ri');
       }
+      this.assertChangeDateInWindow(counterpart.workDate);
       replacementEmployeeId = counterpart.employeeId;
     } else if (dto.type === ScheduleChangeType.SUBSTITUTION) {
       if (!replacementEmployeeId) {
@@ -1094,13 +1105,7 @@ export class SchedulePlanningService {
         'Faqat tasdiqlangan ish smenasi uchun so‘rov yuboriladi',
       );
     }
-    if (
-      dayjs(primary.workDate).tz(TZ).isBefore(dayjs().tz(TZ).startOf('day'))
-    ) {
-      throw new BadRequestException(
-        'O‘tib ketgan smenani o‘zgartirib bo‘lmaydi',
-      );
-    }
+    this.assertChangeDateInWindow(primary.workDate);
 
     const [replacementEmployees, counterpartEntries] = await Promise.all([
       this.prisma.employee.findMany({
@@ -1145,6 +1150,7 @@ export class SchedulePlanningService {
     const request = await this.prisma.scheduleChangeRequest.findFirst({
       where: { id: requestId, hospitalId },
       include: {
+        primaryEntry: true,
         replacementEmployee: { select: { userId: true } },
         counterpartEntry: {
           include: { employee: { select: { userId: true } } },
@@ -1152,6 +1158,10 @@ export class SchedulePlanningService {
       },
     });
     if (!request) throw new NotFoundException('Smena o‘zgarishi topilmadi');
+    this.assertChangeDateInWindow(request.primaryEntry.workDate);
+    if (request.counterpartEntry) {
+      this.assertChangeDateInWindow(request.counterpartEntry.workDate);
+    }
     if (request.status !== ScheduleChangeStatus.REQUESTED) {
       throw new BadRequestException('Bu so‘rovni qabul qilib bo‘lmaydi');
     }
@@ -1216,6 +1226,10 @@ export class SchedulePlanningService {
       },
     });
     if (!request) throw new NotFoundException('Smena o‘zgarishi topilmadi');
+    this.assertChangeDateInWindow(request.primaryEntry.workDate);
+    if (request.counterpartEntry) {
+      this.assertChangeDateInWindow(request.counterpartEntry.workDate);
+    }
     if (
       request.status !== ScheduleChangeStatus.REQUESTED &&
       request.status !== ScheduleChangeStatus.ACCEPTED
