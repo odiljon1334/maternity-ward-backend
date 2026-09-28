@@ -39,6 +39,15 @@ dayjs.extend(timezone);
 const TZ = process.env.TIMEZONE || 'Asia/Tashkent';
 const CHANGE_REQUEST_WINDOW_DAYS = 31;
 
+type PlanEntryWithWorkDate = {
+  employeeId: string;
+  entryType: SchedulePlanEntryType;
+  startsAt: Date | null;
+  endsAt: Date | null;
+  workDate: Date;
+  [key: string]: any;
+};
+
 export function calculateMonthlyCoverageMinutes(
   year: number,
   month: number,
@@ -304,10 +313,17 @@ export class SchedulePlanningService {
     });
     if (!plan) throw new NotFoundException('Oylik grafik topilmadi');
 
-    const summary = this.buildPlanSummary(plan);
+    const entries = await this.withCanonicalCarryIn(
+      hospitalId,
+      plan.postId,
+      plan.year,
+      plan.month,
+      plan.entries,
+    );
+    const summary = this.buildPlanSummary({ ...plan, entries });
     return {
       ...plan,
-      entries: plan.entries.map((entry) => ({
+      entries: entries.map((entry) => ({
         ...entry,
         calendarMinutes:
           entry.entryType === SchedulePlanEntryType.WORKING &&
@@ -653,8 +669,19 @@ export class SchedulePlanningService {
       };
     });
 
+    const effectiveEntries = await this.withCanonicalCarryIn(
+      hospitalId,
+      plan.postId,
+      plan.year,
+      plan.month,
+      normalized,
+    );
+    const effectiveEmployeeIds = Array.from(
+      new Set(effectiveEntries.map((entry) => entry.employeeId)),
+    );
+
     const uniqueDayKeys = new Set<string>();
-    for (const entry of normalized) {
+    for (const entry of effectiveEntries) {
       const key = `${entry.employeeId}:${dayjs(entry.workDate).tz(TZ).format('YYYY-MM-DD')}`;
       if (uniqueDayKeys.has(key)) {
         throw new BadRequestException(
@@ -663,20 +690,19 @@ export class SchedulePlanningService {
       }
       uniqueDayKeys.add(key);
     }
-    assertNoEmployeeOverlaps(normalized);
+    assertNoEmployeeOverlaps(effectiveEntries);
 
-    const otherEntries = employeeIds.length
+    const otherEntries = effectiveEmployeeIds.length
       ? await this.prisma.monthlyScheduleEntry.findMany({
           where: {
             hospitalId,
             planId: { not: planId },
-            employeeId: { in: employeeIds },
+            employeeId: { in: effectiveEmployeeIds },
             workDate: {
-              // Oldingi oy rejasidagi oxirgi tun smenasi joriy oyda
-              // 00:00-08:00 sifatida carry-in qilinadi. Joriy reja shu
-              // katakni takrorlashi kerak, ammo approve paytida u qayta
-              // publish qilinmaydi. Shu sababli boshqa rejalarning faqat
-              // joriy oy ichidagi kunlari collision tekshiruviga kiradi.
+              // Oldingi tasdiqlangan oyning tungi smenasi canonical
+              // carry-in sifatida alohida olinadi. Shu sabab boshqa
+              // rejalarning faqat joriy oy kataklari collision tekshiruviga
+              // kiradi; carry-in qayta publish qilinmaydi.
               gte: monthStart.toDate(),
               lt: monthEnd.toDate(),
             },
@@ -711,10 +737,10 @@ export class SchedulePlanningService {
         'Xodimga boshqa post grafigida shu kun uchun smena biriktirilgan',
       );
     }
-    assertNoEmployeeOverlaps([...normalized, ...otherEntries]);
+    assertNoEmployeeOverlaps([...effectiveEntries, ...otherEntries]);
 
     const summary = calculateCoverageSummary(
-      normalized,
+      effectiveEntries,
       plan.year,
       plan.month,
       calculateMonthlyCoverageMinutes(
@@ -727,9 +753,10 @@ export class SchedulePlanningService {
       ([, minutes]) => minutes > plan.post.dailyCoverageMinutes,
     );
     if (overfilledDay || summary.excessMinutes > 0) {
-      throw new BadRequestException(
-        `Post soati limitdan oshgan${overfilledDay ? `: ${overfilledDay[0]}` : ''}`,
-      );
+      const detail = overfilledDay
+        ? `: ${overfilledDay[0]} (${overfilledDay[1] / 60}/${plan.post.dailyCoverageMinutes / 60} soat)`
+        : '';
+      throw new BadRequestException(`Post soati limitdan oshgan${detail}`);
     }
 
     await this.prisma.$transaction(async (tx) => {
@@ -1476,7 +1503,75 @@ export class SchedulePlanningService {
       include: { post: true, entries: true },
     });
     if (!plan) throw new NotFoundException('Oylik grafik topilmadi');
-    return plan;
+    const entries = await this.withCanonicalCarryIn(
+      hospitalId,
+      plan.postId,
+      plan.year,
+      plan.month,
+      plan.entries,
+    );
+    return { ...plan, entries };
+  }
+
+  private async withCanonicalCarryIn(
+    hospitalId: string,
+    postId: string,
+    year: number,
+    month: number,
+    entries: PlanEntryWithWorkDate[],
+  ): Promise<
+    Array<
+      PlanEntryWithWorkDate & {
+        isCarryIn?: boolean;
+        isCanonicalCarryIn?: boolean;
+      }
+    >
+  > {
+    const monthStart = dayjs.tz(
+      `${year}-${String(month).padStart(2, '0')}-01`,
+      TZ,
+    );
+    const previousMonth = monthStart.subtract(1, 'month');
+    const previousPlan = await this.prisma.monthlySchedulePlan.findFirst({
+      where: {
+        hospitalId,
+        postId,
+        year: previousMonth.year(),
+        month: previousMonth.month() + 1,
+        status: MonthlySchedulePlanStatus.APPROVED,
+      },
+      orderBy: { version: 'desc' },
+      include: {
+        entries: {
+          where: {
+            entryType: SchedulePlanEntryType.WORKING,
+            startsAt: { lt: monthStart.toDate() },
+            endsAt: { gt: monthStart.toDate() },
+          },
+          include: {
+            employee: { include: { department: true, position: true } },
+            shift: true,
+          },
+        },
+      },
+    });
+    const carryIn = (previousPlan?.entries ?? []).map((entry) => ({
+      ...entry,
+      isCarryIn: true as const,
+      isCanonicalCarryIn: true as const,
+    }));
+    const currentMonthEntries = entries.filter(
+      (entry) => !dayjs(entry.workDate).tz(TZ).isBefore(monthStart, 'day'),
+    );
+
+    if (carryIn.length) return [...carryIn, ...currentMonthEntries];
+
+    return entries.map((entry) => ({
+      ...entry,
+      ...(dayjs(entry.workDate).tz(TZ).isBefore(monthStart, 'day') && {
+        isCarryIn: true,
+      }),
+    }));
   }
 
   private buildPlanSummary(plan: {

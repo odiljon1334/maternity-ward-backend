@@ -1,5 +1,9 @@
 import { BadRequestException } from '@nestjs/common';
-import { SchedulePlanningMode } from '@prisma/client';
+import {
+  MonthlySchedulePlanStatus,
+  SchedulePlanEntryType,
+  SchedulePlanningMode,
+} from '@prisma/client';
 import {
   calculateMonthlyCoverageMinutes,
   SchedulePlanningService,
@@ -43,6 +47,11 @@ describe('SchedulePlanningService', () => {
       },
       monthlyScheduleEntry: {
         findFirst: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
+        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+        createMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+      shiftTemplate: {
         findMany: jest.fn().mockResolvedValue([]),
       },
       employee: {
@@ -131,6 +140,147 @@ describe('SchedulePlanningService', () => {
 
     expect(result.version).toBe(1);
     expect(result.targetCoverageHours).toBe(720);
+  });
+
+  it('shows the previous approved overnight shift as October carry-in', async () => {
+    const { prisma, service } = setup(SchedulePlanningMode.POST_COVERAGE);
+    const carryEntry = {
+      id: 'september-entry',
+      hospitalId: 'hospital-1',
+      planId: 'september-plan',
+      employeeId: 'employee-1',
+      shiftId: 'night-shift',
+      entryType: SchedulePlanEntryType.WORKING,
+      workDate: new Date('2026-09-30T00:00:00+05:00'),
+      startsAt: new Date('2026-09-30T20:00:00+05:00'),
+      endsAt: new Date('2026-10-01T08:00:00+05:00'),
+      note: null,
+      employee: {
+        id: 'employee-1',
+        fullName: 'Tungi xodim',
+        department: { id: 'department-1', name: 'Bo‘lim' },
+        position: { id: 'position-1', name: 'Hamshira' },
+      },
+      shift: {
+        id: 'night-shift',
+        name: 'Tungi 12 soat',
+        startTime: '20:00',
+        endTime: '08:00',
+        isOvernight: true,
+      },
+    };
+    const currentPlan = {
+      id: 'october-plan',
+      hospitalId: 'hospital-1',
+      postId: 'post-1',
+      year: 2026,
+      month: 10,
+      version: 1,
+      status: MonthlySchedulePlanStatus.DRAFT,
+      hospital: { id: 'hospital-1', name: 'Muassasa' },
+      post: {
+        id: 'post-1',
+        departmentId: 'department-1',
+        dailyCoverageMinutes: 1440,
+        department: { id: 'department-1', name: 'Bo‘lim' },
+      },
+      createdBy: { id: 'user-1', username: 'director' },
+      approvedBy: null,
+      entries: [],
+      changeRequests: [],
+    };
+    prisma.monthlySchedulePlan.findFirst
+      .mockReset()
+      .mockResolvedValueOnce(currentPlan)
+      .mockResolvedValueOnce({
+        id: 'september-plan',
+        entries: [carryEntry],
+      });
+
+    const result = await service.getPlanDetails('hospital-1', 'october-plan');
+
+    expect(result.entries).toEqual([
+      expect.objectContaining({
+        id: 'september-entry',
+        isCarryIn: true,
+        isCanonicalCarryIn: true,
+        calendarMinutes: { '2026-10-01': 480 },
+      }),
+    ]);
+    expect(result.summary.byDate['2026-10-01']).toBe(480);
+  });
+
+  it('rejects a day that exceeds 24 hours only after carry-in is counted', async () => {
+    const { prisma, service } = setup(SchedulePlanningMode.POST_COVERAGE);
+    const currentPlan = {
+      id: 'october-plan',
+      hospitalId: 'hospital-1',
+      postId: 'post-1',
+      year: 2026,
+      month: 10,
+      status: MonthlySchedulePlanStatus.DRAFT,
+      post: {
+        id: 'post-1',
+        departmentId: 'department-1',
+        dailyCoverageMinutes: 1440,
+      },
+    };
+    const carryEntry = {
+      id: 'september-entry',
+      employeeId: 'employee-1',
+      shiftId: 'night-shift',
+      entryType: SchedulePlanEntryType.WORKING,
+      workDate: new Date('2026-09-30T00:00:00+05:00'),
+      startsAt: new Date('2026-09-30T20:00:00+05:00'),
+      endsAt: new Date('2026-10-01T08:00:00+05:00'),
+    };
+    prisma.monthlySchedulePlan.findFirst
+      .mockReset()
+      .mockResolvedValueOnce(currentPlan)
+      .mockResolvedValueOnce({
+        id: 'september-plan',
+        entries: [carryEntry],
+      });
+    prisma.employee.findMany.mockResolvedValue([
+      { id: 'employee-2' },
+      { id: 'employee-3' },
+      { id: 'employee-4' },
+    ]);
+    prisma.shiftTemplate.findMany.mockResolvedValue([
+      { id: 'day-shift' },
+      { id: 'night-shift' },
+    ]);
+
+    await expect(
+      service.saveEntries('hospital-1', 'october-plan', {
+        entries: [
+          {
+            employeeId: 'employee-2',
+            shiftId: 'day-shift',
+            entryType: SchedulePlanEntryType.WORKING,
+            workDate: '2026-10-01',
+            startsAt: '2026-10-01T08:00:00+05:00',
+            endsAt: '2026-10-01T20:00:00+05:00',
+          },
+          {
+            employeeId: 'employee-3',
+            shiftId: 'night-shift',
+            entryType: SchedulePlanEntryType.WORKING,
+            workDate: '2026-10-01',
+            startsAt: '2026-10-01T20:00:00+05:00',
+            endsAt: '2026-10-02T08:00:00+05:00',
+          },
+          {
+            employeeId: 'employee-4',
+            shiftId: 'night-shift',
+            entryType: SchedulePlanEntryType.WORKING,
+            workDate: '2026-10-01',
+            startsAt: '2026-10-01T20:00:00+05:00',
+            endsAt: '2026-10-02T08:00:00+05:00',
+          },
+        ],
+      }),
+    ).rejects.toThrow('2026-10-01 (28/24 soat)');
   });
 
   it('archives a post without deleting its schedule history', async () => {
