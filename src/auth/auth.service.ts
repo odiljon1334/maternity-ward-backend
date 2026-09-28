@@ -3,6 +3,7 @@ import {
   UnauthorizedException,
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -97,6 +98,11 @@ export class AuthService {
     });
     if (!user || user.status !== 'ACTIVE') {
       throw new UnauthorizedException('Hisob faol emas');
+    }
+    if (user.role !== UserRole.EMPLOYEE) {
+      throw new ForbiddenException(
+        'Mobil ilova hozircha faqat xodimlar uchun',
+      );
     }
     const accessToken = this.jwt.sign({
       sub: user.id,

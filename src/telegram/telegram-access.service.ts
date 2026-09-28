@@ -202,20 +202,36 @@ export class TelegramAccessService {
     });
     if (!stillAllowed) return false;
 
-    await this.prisma.telegramSubscription.upsert({
-      where: {
-        chatId_hospitalId: { chatId, hospitalId: candidate.hospitalId },
-      },
-      update: { isActive: true, username, employeeId: candidate.employeeId },
-      create: {
-        chatId,
-        username,
-        role: 'DIRECTOR',
-        hospitalId: candidate.hospitalId,
-        employeeId: candidate.employeeId,
-        isActive: true,
-      },
-    });
+    await this.prisma.$transaction([
+      // HR bot buyruqlari bitta aniq tenant doirasida ishlashi kerak.
+      // Chat qayta ulanganda oldingi muassasalar faol qolmasin.
+      this.prisma.telegramSubscription.updateMany({
+        where: {
+          chatId,
+          isActive: true,
+          hospitalId: { not: candidate.hospitalId },
+        },
+        data: { isActive: false },
+      }),
+      this.prisma.telegramSubscription.upsert({
+        where: {
+          chatId_hospitalId: { chatId, hospitalId: candidate.hospitalId },
+        },
+        update: {
+          isActive: true,
+          username,
+          employeeId: candidate.employeeId,
+        },
+        create: {
+          chatId,
+          username,
+          role: 'DIRECTOR',
+          hospitalId: candidate.hospitalId,
+          employeeId: candidate.employeeId,
+          isActive: true,
+        },
+      }),
+    ]);
     return true;
   }
 

@@ -147,8 +147,12 @@ export class AttendanceController {
   resetEmployeeGps(
     @Param('employeeId') employeeId: string,
     @CurrentUser('hospitalId') hospitalId: string | null,
+    @Query('targetHospitalId') targetHospitalId?: string,
   ) {
-    return this.service.resetEmployeeGps(employeeId, hospitalId);
+    return this.service.resetEmployeeGps(
+      employeeId,
+      hospitalId || targetHospitalId || null,
+    );
   }
 
   @Post('manual-checkin')

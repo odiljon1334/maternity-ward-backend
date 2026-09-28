@@ -373,4 +373,19 @@ describe('AuthService — Email tasdiqlash va parolni tiklash (1.1-band)', () =>
       }),
     ).rejects.toThrow("Joriy parol noto'g'ri");
   });
+
+  it('Mobil refresh — EMPLOYEE bo‘lmagan rolga bearer token bermaydi', async () => {
+    prisma.__addUser({
+      id: 'u-director',
+      username: 'director',
+      role: 'DIRECTOR',
+      status: 'ACTIVE',
+      hospitalId: 'h1',
+      passwordHash: 'x',
+    });
+
+    await expect(service.refreshMobileToken('u-director')).rejects.toThrow(
+      'Mobil ilova hozircha faqat xodimlar uchun',
+    );
+  });
 });

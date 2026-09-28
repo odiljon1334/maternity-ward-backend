@@ -20,6 +20,7 @@ function makePrisma(employee: any, grantedCount = 0) {
     },
     telegramSubscription: {
       updateMany: jest.fn(async () => ({ count: 1 })),
+      upsert: jest.fn(async (args: any) => args),
     },
     $transaction: jest.fn(async (ops: any[]) => Promise.all(ops)),
   };
@@ -99,5 +100,35 @@ describe('TelegramAccessService', () => {
       where: { id: 's1', hospitalId: 'h2', isActive: true },
       data: { isActive: false },
     });
+  });
+
+  it('chat boshqa muassasaga ulanganda faqat oxirgi tanlov faol qoladi', async () => {
+    const prisma = makePrisma(emp(), 1);
+    const svc = new TelegramAccessService(prisma);
+    const candidate = {
+      employeeId: 'e1',
+      fullName: 'Test Direktor',
+      hospitalId: 'h1',
+      hospitalName: 'Klinika 1',
+    };
+
+    await expect(svc.linkChat('chat-1', 'director', candidate)).resolves.toBe(
+      true,
+    );
+    expect(prisma.telegramSubscription.updateMany).toHaveBeenCalledWith({
+      where: {
+        chatId: 'chat-1',
+        isActive: true,
+        hospitalId: { not: 'h1' },
+      },
+      data: { isActive: false },
+    });
+    expect(prisma.telegramSubscription.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          chatId_hospitalId: { chatId: 'chat-1', hospitalId: 'h1' },
+        },
+      }),
+    );
   });
 });
