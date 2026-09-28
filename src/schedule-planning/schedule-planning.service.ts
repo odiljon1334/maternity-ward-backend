@@ -1208,6 +1208,116 @@ export class SchedulePlanningService {
     return updated;
   }
 
+  async respondToChangeRequest(
+    hospitalId: string,
+    requestId: string,
+    userId: string,
+    accept: boolean,
+  ) {
+    if (accept) {
+      return this.acceptChangeRequest(hospitalId, requestId, userId);
+    }
+
+    await this.requirePostCoverage(hospitalId);
+    const request = await this.prisma.scheduleChangeRequest.findFirst({
+      where: { id: requestId, hospitalId },
+      include: {
+        primaryEntry: true,
+        replacementEmployee: { select: { userId: true } },
+        counterpartEntry: {
+          include: { employee: { select: { userId: true } } },
+        },
+      },
+    });
+    if (!request) throw new NotFoundException('Smena o‘zgarishi topilmadi');
+    if (request.status !== ScheduleChangeStatus.REQUESTED) {
+      throw new BadRequestException('Bu so‘rovga javob berib bo‘lmaydi');
+    }
+    const expectedUserId =
+      request.type === ScheduleChangeType.SWAP
+        ? request.counterpartEntry?.employee?.userId
+        : request.replacementEmployee?.userId;
+    if (!expectedUserId || expectedUserId !== userId) {
+      throw new BadRequestException(
+        'Bu smena o‘zgarishiga faqat tanlangan xodim javob beradi',
+      );
+    }
+
+    const updated = await this.prisma.scheduleChangeRequest.update({
+      where: { id: request.id },
+      data: {
+        status: ScheduleChangeStatus.REJECTED,
+        acceptedById: userId,
+        acceptedAt: new Date(),
+        decisionNote: 'Tanlangan xodim rad etdi',
+      },
+    });
+    await this.notifications?.createForUsers([request.requestedById], {
+      type: NotificationType.SYSTEM,
+      title: 'Smena so‘rovi rad etildi',
+      message: 'Tanlangan xodim smena o‘zgarishiga rozi bo‘lmadi.',
+      metadata: { scheduleChangeRequestId: request.id },
+    });
+    await this.notifications?.sendWorkflowTelegram(
+      hospitalId,
+      [request.requestedById],
+      'Tanlangan xodim smena o‘zgarishi so‘rovini rad etdi.',
+    );
+    return updated;
+  }
+
+  async cancelChangeRequest(
+    hospitalId: string,
+    requestId: string,
+    userId: string,
+  ) {
+    await this.requirePostCoverage(hospitalId);
+    const request = await this.prisma.scheduleChangeRequest.findFirst({
+      where: { id: requestId, hospitalId },
+      include: {
+        replacementEmployee: { select: { userId: true } },
+        counterpartEntry: {
+          include: { employee: { select: { userId: true } } },
+        },
+      },
+    });
+    if (!request) throw new NotFoundException('Smena o‘zgarishi topilmadi');
+    if (request.requestedById !== userId) {
+      throw new BadRequestException(
+        'Faqat o‘zingiz yuborgan so‘rovni bekor qiling',
+      );
+    }
+    if (
+      !(
+        [
+          ScheduleChangeStatus.REQUESTED,
+          ScheduleChangeStatus.ACCEPTED,
+        ] as ScheduleChangeStatus[]
+      ).includes(request.status)
+    ) {
+      throw new BadRequestException('Bu so‘rovni bekor qilib bo‘lmaydi');
+    }
+
+    const updated = await this.prisma.scheduleChangeRequest.update({
+      where: { id: request.id },
+      data: { status: ScheduleChangeStatus.CANCELLED },
+    });
+    const targetUserId =
+      request.type === ScheduleChangeType.SWAP
+        ? request.counterpartEntry?.employee?.userId
+        : request.replacementEmployee?.userId;
+    await this.notifications?.createForUsers(
+      [targetUserId].filter((id): id is string => Boolean(id)),
+      {
+        type: NotificationType.SYSTEM,
+        title: 'Smena so‘rovi bekor qilindi',
+        message: 'So‘rov yuborgan xodim smena o‘zgarishini bekor qildi.',
+        metadata: { scheduleChangeRequestId: request.id },
+      },
+    );
+    return updated;
+  }
+
   async approveChangeRequest(
     hospitalId: string,
     requestId: string,

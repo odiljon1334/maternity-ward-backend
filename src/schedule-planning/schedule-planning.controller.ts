@@ -310,6 +310,39 @@ export class SchedulePlanningController {
     );
   }
 
+  @Patch('changes/:id/respond')
+  @Roles(UserRole.EMPLOYEE)
+  respondToChangeRequest(
+    @Param('id') id: string,
+    @CurrentUser('hospitalId') hospitalId: string | null,
+    @CurrentUser('sub') userId: string,
+    @Body('accept') accept: boolean,
+  ) {
+    if (typeof accept !== 'boolean') {
+      throw new BadRequestException('accept boolean bo‘lishi kerak');
+    }
+    return this.service.respondToChangeRequest(
+      this.resolveHospitalId(hospitalId),
+      id,
+      userId,
+      accept,
+    );
+  }
+
+  @Patch('changes/:id/cancel')
+  @Roles(UserRole.EMPLOYEE)
+  cancelChangeRequest(
+    @Param('id') id: string,
+    @CurrentUser('hospitalId') hospitalId: string | null,
+    @CurrentUser('sub') userId: string,
+  ) {
+    return this.service.cancelChangeRequest(
+      this.resolveHospitalId(hospitalId),
+      id,
+      userId,
+    );
+  }
+
   @Patch('changes/:id/approve')
   @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
   approveChangeRequest(

@@ -298,4 +298,56 @@ describe('SchedulePlanningService', () => {
       expect(call[0].create.scheduleChangeRequestId).toBe('change-swap');
     }
   });
+
+  it('POST_COVERAGE tanlangan xodim so‘rovni rad eta oladi', async () => {
+    const { prisma, service } = setup(SchedulePlanningMode.POST_COVERAGE);
+    prisma.scheduleChangeRequest.findFirst.mockResolvedValue({
+      id: 'change-1',
+      type: 'SUBSTITUTION',
+      status: 'REQUESTED',
+      requestedById: 'user-1',
+      primaryEntry: { workDate: dayjs().add(2, 'day').toDate() },
+      counterpartEntry: null,
+      replacementEmployee: { userId: 'user-2' },
+    });
+
+    await service.respondToChangeRequest(
+      'hospital-1',
+      'change-1',
+      'user-2',
+      false,
+    );
+
+    expect(prisma.scheduleChangeRequest.update).toHaveBeenCalledWith({
+      where: { id: 'change-1' },
+      data: expect.objectContaining({
+        status: 'REJECTED',
+        acceptedById: 'user-2',
+        decisionNote: 'Tanlangan xodim rad etdi',
+      }),
+    });
+  });
+
+  it('POST_COVERAGE so‘rovini faqat yuborgan xodim bekor qiladi', async () => {
+    const { prisma, service } = setup(SchedulePlanningMode.POST_COVERAGE);
+    prisma.scheduleChangeRequest.findFirst.mockResolvedValue({
+      id: 'change-1',
+      type: 'SWAP',
+      status: 'ACCEPTED',
+      requestedById: 'user-1',
+      counterpartEntry: { employee: { userId: 'user-2' } },
+      replacementEmployee: null,
+    });
+
+    await expect(
+      service.cancelChangeRequest('hospital-1', 'change-1', 'user-3'),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.scheduleChangeRequest.update).not.toHaveBeenCalled();
+
+    await service.cancelChangeRequest('hospital-1', 'change-1', 'user-1');
+    expect(prisma.scheduleChangeRequest.update).toHaveBeenCalledWith({
+      where: { id: 'change-1' },
+      data: { status: 'CANCELLED' },
+    });
+  });
 });
