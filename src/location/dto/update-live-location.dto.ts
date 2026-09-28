@@ -1,4 +1,11 @@
-import { IsBoolean, IsNumber, IsOptional, Min, Max } from 'class-validator';
+import {
+  IsBoolean,
+  IsISO8601,
+  IsNumber,
+  IsOptional,
+  Min,
+  Max,
+} from 'class-validator';
 
 export class UpdateLiveLocationDto {
   @IsNumber()
@@ -24,4 +31,9 @@ export class UpdateLiveLocationDto {
   @IsOptional()
   @IsBoolean()
   mocked?: boolean;
+
+  /** Qurilma GPS nuqtasini olgan vaqt; qisqa offline navbatni xavfsiz yuborish uchun */
+  @IsOptional()
+  @IsISO8601({ strict: true })
+  capturedAt?: string;
 }

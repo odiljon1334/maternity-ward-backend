@@ -13,6 +13,9 @@ import { PushService } from '../push/push.service';
 import { TelegramService } from '../telegram/telegram.service';
 import { TenantScopeGuard } from '../common/guards/tenant-scope.guard';
 
+const MAX_LIVE_LOCATION_AGE_MS = 3 * 60 * 1000;
+const MAX_LIVE_LOCATION_FUTURE_SKEW_MS = 60 * 1000;
+
 @Controller('location')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class LocationController {
@@ -146,6 +149,22 @@ export class LocationController {
       };
     }
 
+    // Qisqa internet uzilishida mobile oxirgi nuqtani qayta yuborishi mumkin.
+    // Eski/buzilgan timestamp xaritada "hozirgi joy" bo'lib ko'rinmasin va
+    // geofence ogohlantirishini noto'g'ri ishga tushirmasin. Ish vaqti tugagan
+    // bo'lsa yuqoridagi stopTracking javobi doimo ustun turadi.
+    if (dto.capturedAt) {
+      const capturedAtMs = new Date(dto.capturedAt).getTime();
+      const ageMs = Date.now() - capturedAtMs;
+      if (
+        !Number.isFinite(capturedAtMs) ||
+        ageMs > MAX_LIVE_LOCATION_AGE_MS ||
+        ageMs < -MAX_LIVE_LOCATION_FUTURE_SKEW_MS
+      ) {
+        return { ok: false, reason: 'STALE_LOCATION' };
+      }
+    }
+
     // ── 1b. Soxta joylashuv (Fake GPS) ──
     // Nuqta saqlanmaydi va xaritada ko'rsatilmaydi: rahbariyat xodimni
     // "signal yo'q" holatida ko'radi, ketishda esa yuz tekshiruvi talab
@@ -212,7 +231,15 @@ export class LocationController {
       isOutside,
     );
 
-    if (isOutside && previous?.isOutside && distance != null) {
+    const previousIsRecent =
+      previous?.createdAt instanceof Date &&
+      Date.now() - previous.createdAt.getTime() <= MAX_LIVE_LOCATION_AGE_MS;
+    if (
+      isOutside &&
+      previous?.isOutside &&
+      previousIsRecent &&
+      distance != null
+    ) {
       this.pushService
         .notifyGeofenceViolation(
           user.hospitalId,
@@ -255,6 +282,7 @@ export class LocationController {
       checkOut: attendance?.checkOut ?? null,
       attendanceStatus: attendance?.status ?? null,
       createdAt: saved.createdAt,
+      capturedAt: dto.capturedAt ?? saved.createdAt,
       // Eski mobil clientlar uchun rollout davrida saqlanadi.
       timestamp: saved.createdAt,
     });

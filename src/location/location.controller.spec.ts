@@ -201,6 +201,20 @@ describe('LocationController.updateLiveLocation', () => {
     expect(telegramService.notifyGeofenceAlert).not.toHaveBeenCalled();
   });
 
+  it('3 daqiqadan eski offline GPS nuqta saqlanmaydi', async () => {
+    const res = await controller.updateLiveLocation(
+      currentUser as any,
+      {
+        ...baseDto,
+        capturedAt: new Date(Date.now() - 4 * 60 * 1000).toISOString(),
+      } as any,
+    );
+
+    expect(res).toEqual({ ok: false, reason: 'STALE_LOCATION' });
+    expect(locationService.saveLiveLocation).not.toHaveBeenCalled();
+    expect(locationGateway.broadcastLocation).not.toHaveBeenCalled();
+  });
+
   it("WebSocket lokatsiya xabarida xodimning ish joyi ma'lumotlari yuboriladi", async () => {
     await controller.updateLiveLocation(currentUser as any, baseDto as any);
 
@@ -258,7 +272,10 @@ describe('LocationController.updateLiveLocation', () => {
   });
 
   it('KETMA-KET 2-marta geofence tashqarisida — directorga push + Telegram xabar yuboriladi', async () => {
-    locationService.getPreviousLocation.mockResolvedValue({ isOutside: true });
+    locationService.getPreviousLocation.mockResolvedValue({
+      isOutside: true,
+      createdAt: new Date(),
+    });
     const outsideDto = { latitude: 41.5, longitude: 69.5, accuracy: 10 };
 
     await controller.updateLiveLocation(currentUser as any, outsideDto as any);
@@ -275,8 +292,25 @@ describe('LocationController.updateLiveLocation', () => {
     expect(telegramService.notifyGeofenceAlert).toHaveBeenCalled();
   });
 
+  it("oldingi tashqi nuqta eski bo'lsa geofence ogohlantirishi yuborilmaydi", async () => {
+    locationService.getPreviousLocation.mockResolvedValue({
+      isOutside: true,
+      createdAt: new Date(Date.now() - 4 * 60 * 1000),
+    });
+    const outsideDto = { latitude: 41.5, longitude: 69.5, accuracy: 10 };
+
+    await controller.updateLiveLocation(currentUser as any, outsideDto as any);
+    await new Promise((r) => setImmediate(r));
+
+    expect(pushService.notifyGeofenceViolation).not.toHaveBeenCalled();
+    expect(telegramService.notifyGeofenceAlert).not.toHaveBeenCalled();
+  });
+
   it("cooldown ichida bo'lsa (PushService false qaytarsa) — Telegram xabar yubormaydi", async () => {
-    locationService.getPreviousLocation.mockResolvedValue({ isOutside: true });
+    locationService.getPreviousLocation.mockResolvedValue({
+      isOutside: true,
+      createdAt: new Date(),
+    });
     pushService.notifyGeofenceViolation.mockResolvedValue(false);
     const outsideDto = { latitude: 41.5, longitude: 69.5, accuracy: 10 };
 
