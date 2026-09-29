@@ -79,8 +79,11 @@ export class AuthController {
   @UseGuards(JwtAuthGuard, ThrottlerGuard)
   @Throttle({ login: { ttl: 900_000, limit: 30 } })
   @Post('mobile/refresh')
-  mobileRefresh(@CurrentUser('sub') userId: string) {
-    return this.authService.refreshMobileToken(userId);
+  mobileRefresh(
+    @CurrentUser('sub') userId: string,
+    @CurrentUser('authAt') authAt?: number,
+  ) {
+    return this.authService.refreshMobileToken(userId, authAt);
   }
 
   /** Mobil: parolni almashtirish — javobda shu qurilma uchun yangi token */

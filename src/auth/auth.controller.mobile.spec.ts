@@ -36,10 +36,15 @@ describe('AuthController — mobil ilova login', () => {
 
   it('refresh yangi token beradi', async () => {
     const { controller, authService } = make('EMPLOYEE');
-    await expect(controller.mobileRefresh('u1')).resolves.toEqual({
+    await expect(
+      controller.mobileRefresh('u1', 1_700_000_000),
+    ).resolves.toEqual({
       accessToken: 'jwt-2',
     });
-    expect(authService.refreshMobileToken).toHaveBeenCalledWith('u1');
+    expect(authService.refreshMobileToken).toHaveBeenCalledWith(
+      'u1',
+      1_700_000_000,
+    );
   });
 
   it('parol almashtirish — shu qurilma uchun yangi token qaytaradi', async () => {
