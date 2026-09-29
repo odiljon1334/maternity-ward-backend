@@ -18,13 +18,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
 import { TenantScopeGuard } from '../common/guards/tenant-scope.guard';
 import { PositionNameDto, UpdatePositionGpsDto } from './dto/position.dto';
-
-function resolveHospitalId(
-  jwtHospId: string | null,
-  targetHospId?: string,
-): string | null {
-  return jwtHospId || targetHospId || null;
-}
+import { resolveHospitalId } from '../common/utils/hospital-scope.util';
 
 @Controller('positions')
 @UseGuards(JwtAuthGuard, RolesGuard, TenantScopeGuard)

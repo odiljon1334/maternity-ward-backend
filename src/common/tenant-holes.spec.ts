@@ -354,6 +354,31 @@ describe('Bloklangan muassasa — faqat o‘qish rejimi', () => {
     expect(prisma.hospital.findUnique).not.toHaveBeenCalled();
   });
 
+  it('muassasasiz tenant hisobi (ADMIN, hospitalId=null) rad etiladi — GET ham', async () => {
+    const { g } = guard(false);
+    for (const role of ['ADMIN', 'DIRECTOR', 'DEPARTMENT_HEAD', 'EMPLOYEE']) {
+      await expect(
+        g.canActivate(
+          ctx('GET', '/api/v1/employees?targetHospitalId=hB', {
+            role,
+            hospitalId: null,
+          }),
+        ),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    }
+  });
+
+  it('platforma rollari muassasasiz ishlayveradi', async () => {
+    const { g } = guard(false);
+    for (const role of ['SUPER_ADMIN', 'MINISTRY', 'ASSISTANT_ADMIN']) {
+      await expect(
+        g.canActivate(
+          ctx('GET', '/api/v1/employees', { role, hospitalId: null }),
+        ),
+      ).resolves.toBe(true);
+    }
+  });
+
   it('SUPER_ADMIN va bloklanmagan muassasa odatdagidek', async () => {
     const { g } = guard(false);
     await expect(

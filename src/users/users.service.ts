@@ -14,6 +14,7 @@ import {
 // Platforma darajasidagi rollar — shu umumiy panel orqali tayinlanmaydi/olib
 // tashlanmaydi (alohida, ataylab qilinadigan jarayon talab qiladi).
 import { assertCanManageRole } from '../common/utils/role-rank.util';
+import { TENANT_ROLES } from '../common/guards/jwt-auth.guard';
 
 const PLATFORM_ROLES: UserRole[] = [UserRole.SUPER_ADMIN, UserRole.MINISTRY];
 
@@ -117,6 +118,14 @@ export class UsersService {
     if (PLATFORM_ROLES.includes(user.role) || PLATFORM_ROLES.includes(role)) {
       throw new BadRequestException(
         'Platforma darajasidagi rollar (SUPER_ADMIN/MINISTRY) shu yerdan tayinlanmaydi',
+      );
+    }
+
+    // Muassasa rollari muassasasiz bo'lsa tenant chegarasi ishlamaydi
+    // (JwtAuthGuard bunday hisobni baribir rad etadi).
+    if (TENANT_ROLES.has(role) && !user.hospitalId) {
+      throw new BadRequestException(
+        'Bu rol uchun foydalanuvchi avval muassasaga biriktirilishi kerak',
       );
     }
 

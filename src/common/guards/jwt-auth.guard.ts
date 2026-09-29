@@ -9,8 +9,11 @@ import { UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { isHospitalBlocked } from '../utils/payment.util';
 
-/** Muassasaga bog'liq rollar — muassasa bloklansa faqat o'qish rejimi */
-const TENANT_ROLES: ReadonlySet<string> = new Set([
+/**
+ * Muassasaga bog'liq rollar: har doim `hospitalId` bo'lishi shart, muassasa
+ * bloklansa faqat o'qish rejimi.
+ */
+export const TENANT_ROLES: ReadonlySet<string> = new Set([
   UserRole.ADMIN,
   UserRole.DIRECTOR,
   UserRole.DEPARTMENT_HEAD,
@@ -60,7 +63,18 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
 
     const req = context.switchToHttp().getRequest();
     const user = req?.user;
-    if (!user?.hospitalId || !TENANT_ROLES.has(user.role)) return true;
+    if (!user || !TENANT_ROLES.has(user.role)) return true;
+    // Muassasasiz tenant hisobi (masalan ASSISTANT_ADMIN'dan ADMIN'ga
+    // o'tkazilgan) controllerlardagi `jwtHospitalId || targetHospitalId`
+    // orqali istalgan muassasani tanlay olardi — bunday holat rad etiladi.
+    if (!user.hospitalId) {
+      throw new ForbiddenException({
+        statusCode: 403,
+        code: 'HOSPITAL_NOT_ASSIGNED',
+        message:
+          'Hisobingiz birorta muassasaga biriktirilmagan. Administratorga murojaat qiling.',
+      });
+    }
     if (isBlockExemptRequest(req.method, req.originalUrl ?? req.url)) {
       return true;
     }
