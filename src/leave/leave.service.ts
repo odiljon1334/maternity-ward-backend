@@ -488,7 +488,11 @@ export class LeaveService {
           // Oldingi holat (ish kuni, dam olish kuni...) tiklanadi
           await this.prisma.schedule.update({
             where: { id: sch.id },
-            data: { status: sch.preLeaveStatus, note: null, preLeaveStatus: null },
+            data: {
+              status: sch.preLeaveStatus,
+              note: null,
+              preLeaveStatus: null,
+            },
           });
         } else if (sch.shiftId) {
           // Eski yozuv (preLeaveStatus yo'q): grafik generatori faqat ish

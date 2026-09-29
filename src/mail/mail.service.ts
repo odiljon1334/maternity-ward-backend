@@ -29,7 +29,7 @@ export class MailService {
 
     if (!apiKey) {
       this.logger.warn(
-        'RESEND_API_KEY sozlanmagan — email yuborish o\'chirilgan (faqat log qilinadi)',
+        "RESEND_API_KEY sozlanmagan — email yuborish o'chirilgan (faqat log qilinadi)",
       );
       this.resend = null;
     } else {
@@ -80,7 +80,11 @@ export class MailService {
     return this.send(to, 'MaternityCare — Parolni tiklash', html);
   }
 
-  private async send(to: string, subject: string, html: string): Promise<boolean> {
+  private async send(
+    to: string,
+    subject: string,
+    html: string,
+  ): Promise<boolean> {
     if (!this.resend) {
       this.logger.warn(
         `[MOCK EMAIL — RESEND_API_KEY yo'q] to=${to} subject="${subject}"`,
