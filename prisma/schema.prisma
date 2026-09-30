@@ -709,6 +709,9 @@ model MonthlyScheduleEntry {
   shift   ShiftTemplate? @relation(fields: [shiftId], references: [id], onDelete: SetNull)
 
   entryType SchedulePlanEntryType @default(WORKING)
+  // false — jadval/Excelda ko‘rinadi va Schedule sifatida nashr qilinadi,
+  // ammo postning 720/744 soatlik qamrov normasiga qo‘shilmaydi.
+  countsTowardPostCoverage Boolean @default(true)
   workDate  DateTime
   startsAt  DateTime?
   endsAt    DateTime?

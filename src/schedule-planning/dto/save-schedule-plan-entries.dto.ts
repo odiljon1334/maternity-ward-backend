@@ -1,6 +1,7 @@
 import { Type } from 'class-transformer';
 import {
   IsArray,
+  IsBoolean,
   IsDateString,
   IsEnum,
   IsOptional,
@@ -19,6 +20,10 @@ export class SchedulePlanEntryInputDto {
 
   @IsEnum(SchedulePlanEntryType)
   entryType: SchedulePlanEntryType;
+
+  @IsOptional()
+  @IsBoolean()
+  countsTowardPostCoverage?: boolean;
 
   @IsDateString()
   workDate: string;

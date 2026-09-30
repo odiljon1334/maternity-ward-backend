@@ -490,6 +490,7 @@ export class SchedulePlanningService {
         employee: any;
         values: Map<number, number | string>;
         totalMinutes: number;
+        countsTowardPostCoverage: boolean;
       }
     >();
     for (const entry of plan.entries) {
@@ -499,6 +500,7 @@ export class SchedulePlanningService {
           employee: entry.employee,
           values: new Map(),
           totalMinutes: 0,
+          countsTowardPostCoverage: entry.countsTowardPostCoverage !== false,
         };
         employeeRows.set(entry.employeeId, employeeRow);
       }
@@ -532,7 +534,8 @@ export class SchedulePlanningService {
       const row = worksheet.getRow(rowNumber);
       row.getCell(1).value = index;
       row.getCell(2).value = item.employee.fullName;
-      row.getCell(3).value = item.employee.position?.name ?? '';
+      row.getCell(3).value =
+        `${item.employee.position?.name ?? ''}${item.countsTowardPostCoverage ? ' — Post xodimi' : ' — Postdan tashqari'}`;
       for (let day = 1; day <= daysInMonth; day += 1) {
         row.getCell(day + 3).value = item.values.get(day) ?? '';
       }
@@ -734,6 +737,7 @@ export class SchedulePlanningService {
           employeeId: entry.employeeId,
           shiftId: entry.shiftId,
           entryType: entry.entryType,
+          countsTowardPostCoverage: entry.countsTowardPostCoverage !== false,
           workDate,
           startsAt,
           endsAt,
@@ -747,12 +751,30 @@ export class SchedulePlanningService {
         employeeId: entry.employeeId,
         shiftId: null,
         entryType: entry.entryType,
+        countsTowardPostCoverage: entry.countsTowardPostCoverage !== false,
         workDate,
         startsAt: null,
         endsAt: null,
         note: entry.note?.trim() || null,
       };
     });
+
+    const coverageRoleByEmployee = new Map<string, boolean>();
+    for (const entry of normalized) {
+      const existing = coverageRoleByEmployee.get(entry.employeeId);
+      if (
+        existing !== undefined &&
+        existing !== entry.countsTowardPostCoverage
+      ) {
+        throw new BadRequestException(
+          'Bir xodim bitta reja ichida ham post xodimi, ham postdan tashqari bo‘la olmaydi',
+        );
+      }
+      coverageRoleByEmployee.set(
+        entry.employeeId,
+        entry.countsTowardPostCoverage,
+      );
+    }
 
     const effectiveEntries = await this.withCanonicalCarryIn(
       hospitalId,
@@ -1677,6 +1699,7 @@ export class SchedulePlanningService {
       entryType: SchedulePlanEntryType;
       startsAt: Date | null;
       endsAt: Date | null;
+      countsTowardPostCoverage?: boolean;
     }>;
   }) {
     const coverageTargets = calculateMonthlyCoverageTargets(
@@ -1685,7 +1708,7 @@ export class SchedulePlanningService {
       this.planCoveragePolicy(plan),
     );
     const summary = calculateCoverageSummary(
-      plan.entries,
+      plan.entries.filter((entry) => entry.countsTowardPostCoverage !== false),
       plan.year,
       plan.month,
       coverageTargets.targetMinutes,

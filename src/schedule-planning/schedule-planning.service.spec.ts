@@ -350,6 +350,7 @@ describe('SchedulePlanningService', () => {
             employeeId: 'employee-2',
             shiftId: 'day-8-shift',
             entryType: SchedulePlanEntryType.WORKING,
+            countsTowardPostCoverage: false,
             workDate: '2026-10-01',
             startsAt: '2026-10-01T08:00:00+05:00',
             endsAt: '2026-10-01T16:00:00+05:00',
@@ -373,9 +374,17 @@ describe('SchedulePlanningService', () => {
         ],
       }),
     ).resolves.toEqual({});
+    expect(prisma.monthlyScheduleEntry.createMany).toHaveBeenCalledWith({
+      data: expect.arrayContaining([
+        expect.objectContaining({
+          employeeId: 'employee-2',
+          countsTowardPostCoverage: false,
+        }),
+      ]),
+    });
   });
 
-  it('submits an uneven daily distribution when the monthly post norm is exact', async () => {
+  it('submits an exact monthly post norm while ignoring outside-post employee hours', async () => {
     const { prisma, service } = setup(SchedulePlanningMode.POST_COVERAGE);
     const workingEntry = (employeeId: string, day: number, hours: number) => ({
       employeeId,
@@ -396,6 +405,10 @@ describe('SchedulePlanningService', () => {
       ...Array.from({ length: 28 }, (_, index) =>
         workingEntry(`employee-${index + 6}`, index + 3, 12),
       ),
+      {
+        ...workingEntry('daily-employee', 1, 8),
+        countsTowardPostCoverage: false,
+      },
     ];
     jest.spyOn(service as any, 'getPlanForWorkflow').mockResolvedValue({
       id: 'october-plan',
