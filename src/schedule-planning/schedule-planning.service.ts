@@ -33,6 +33,11 @@ import {
 } from './schedule-planning-calculator';
 import { DateUtil } from '../common/utils/date.util';
 import { NotificationsService } from '../notifications/notifications.service';
+import {
+  isLeaveWrittenSchedule,
+  LEAVE_NOTE_PREFIX,
+  LEAVE_WRITTEN_STATUSES,
+} from '../leave/leave.service';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
@@ -799,194 +804,453 @@ export class SchedulePlanningService {
     }
     assertNoEmployeeOverlaps(effectiveEntries);
 
-    const otherEntries = effectiveEmployeeIds.length
-      ? await this.prisma.monthlyScheduleEntry.findMany({
-          where: {
-            hospitalId,
-            planId: { not: planId },
-            employeeId: { in: effectiveEmployeeIds },
-            workDate: {
-              // Oldingi oyning eng so‘nggi faol tungi smenasi canonical
-              // carry-in sifatida alohida olinadi. Shu sabab boshqa
-              // rejalarning faqat joriy oy kataklari collision tekshiruviga
-              // kiradi; carry-in qayta publish qilinmaydi.
-              gte: monthStart.toDate(),
-              lt: monthEnd.toDate(),
-            },
-            plan: {
-              status: {
-                in: [
-                  MonthlySchedulePlanStatus.DRAFT,
-                  MonthlySchedulePlanStatus.SUBMITTED,
-                  MonthlySchedulePlanStatus.APPROVED,
-                ],
-              },
-            },
-          },
-          select: {
-            id: true,
-            employeeId: true,
-            entryType: true,
-            workDate: true,
-            startsAt: true,
-            endsAt: true,
-          },
-        })
-      : [];
-    const otherDayKeys = new Set(
-      otherEntries.map(
-        (entry) =>
-          `${entry.employeeId}:${dayjs(entry.workDate).tz(TZ).format('YYYY-MM-DD')}`,
-      ),
-    );
-    if ([...uniqueDayKeys].some((key) => otherDayKeys.has(key))) {
-      throw new BadRequestException(
-        'Xodimga boshqa post grafigida shu kun uchun smena biriktirilgan',
-      );
-    }
-    assertNoEmployeeOverlaps([...effectiveEntries, ...otherEntries]);
+    await this.prisma.$transaction(
+      async (tx) => {
+        // Bir muassasada rejalar ketma-ket yoziladi: ikki post bir vaqtda
+        // saqlansa ham bitta xodim ikki joyga tushib qolmaydi.
+        await this.lockPlanning(tx, hospitalId);
 
-    await this.prisma.$transaction(async (tx) => {
-      await tx.monthlyScheduleEntry.deleteMany({ where: { planId } });
-      if (normalized.length) {
-        await tx.monthlyScheduleEntry.createMany({ data: normalized });
-      }
-    });
+        // Reja hali qoralama va (versiya berilgan bo'lsa) orada boshqa
+        // foydalanuvchi saqlamagan bo'lishi shart.
+        const claimed = await tx.monthlySchedulePlan.updateMany({
+          where: {
+            id: planId,
+            hospitalId,
+            status: MonthlySchedulePlanStatus.DRAFT,
+            ...(dto.expectedUpdatedAt
+              ? { updatedAt: new Date(dto.expectedUpdatedAt) }
+              : {}),
+          },
+          data: { updatedAt: new Date() },
+        });
+        if (!claimed.count) {
+          throw new ConflictException(
+            'Grafik boshqa foydalanuvchi tomonidan o‘zgartirilgan yoki endi qoralama emas. Sahifani yangilab, qayta urinib ko‘ring.',
+          );
+        }
+
+        const otherEntries = effectiveEmployeeIds.length
+          ? await tx.monthlyScheduleEntry.findMany({
+              where: {
+                hospitalId,
+                planId: { not: planId },
+                employeeId: { in: effectiveEmployeeIds },
+                workDate: {
+                  // Oldingi oyning eng so‘nggi faol tungi smenasi canonical
+                  // carry-in sifatida alohida olinadi. Shu sabab boshqa
+                  // rejalarning faqat joriy oy kataklari collision tekshiruviga
+                  // kiradi; carry-in qayta publish qilinmaydi.
+                  gte: monthStart.toDate(),
+                  lt: monthEnd.toDate(),
+                },
+                plan: {
+                  status: {
+                    in: [
+                      MonthlySchedulePlanStatus.DRAFT,
+                      MonthlySchedulePlanStatus.SUBMITTED,
+                      MonthlySchedulePlanStatus.APPROVED,
+                    ],
+                  },
+                },
+              },
+              select: {
+                id: true,
+                employeeId: true,
+                entryType: true,
+                workDate: true,
+                startsAt: true,
+                endsAt: true,
+              },
+            })
+          : [];
+        const otherDayKeys = new Set(
+          otherEntries.map(
+            (entry) =>
+              `${entry.employeeId}:${dayjs(entry.workDate).tz(TZ).format('YYYY-MM-DD')}`,
+          ),
+        );
+        if ([...uniqueDayKeys].some((key) => otherDayKeys.has(key))) {
+          throw new BadRequestException(
+            'Xodimga boshqa post grafigida shu kun uchun smena biriktirilgan',
+          );
+        }
+        assertNoEmployeeOverlaps([...effectiveEntries, ...otherEntries]);
+
+        await this.replacePlanEntries(tx, planId, normalized);
+      },
+      { maxWait: 15_000, timeout: 60_000 },
+    );
     return this.getPlanDetails(hospitalId, planId);
   }
 
-  async submitPlan(hospitalId: string, planId: string) {
-    const plan = await this.getPlanForWorkflow(hospitalId, planId);
-    if (plan.status !== MonthlySchedulePlanStatus.DRAFT) {
-      throw new BadRequestException('Faqat qoralama grafik yuboriladi');
-    }
-    const summary = this.buildPlanSummary(plan);
-    if (summary.remainingMinutes || summary.excessMinutes) {
-      throw new BadRequestException(
-        `Postning oylik normasi to‘liq taqsimlanmagan: ${summary.plannedMinutes / 60}/${summary.targetMinutes / 60} soat`,
-      );
-    }
-    return this.prisma.monthlySchedulePlan.update({
-      where: { id: planId },
-      data: {
-        status: MonthlySchedulePlanStatus.SUBMITTED,
-        submittedAt: new Date(),
-        decisionNote: null,
+  /**
+   * Reja kataklarini yangi ro'yxatga moslaydi. Hammasini o'chirib qayta
+   * yaratish o'rniga faqat farq qo'llanadi: mavjud kataklar id'si saqlanadi
+   * (smena so'rovlari va nashr qilingan grafik ularga bog'langan), smena
+   * so'rovi bog'langan katakni esa o'chirib bo'lmaydi.
+   */
+  private async replacePlanEntries(
+    tx: Prisma.TransactionClient,
+    planId: string,
+    entries: Array<{
+      hospitalId: string;
+      planId: string;
+      employeeId: string;
+      shiftId: string | null;
+      entryType: SchedulePlanEntryType;
+      countsTowardPostCoverage: boolean;
+      workDate: Date;
+      startsAt: Date | null;
+      endsAt: Date | null;
+      note: string | null;
+    }>,
+  ) {
+    const dayKey = (employeeId: string, workDate: Date) =>
+      `${employeeId}:${dayjs(workDate).tz(TZ).format('YYYY-MM-DD')}`;
+    const existing = await tx.monthlyScheduleEntry.findMany({
+      where: { planId },
+      select: {
+        id: true,
+        employeeId: true,
+        workDate: true,
+        shiftId: true,
+        entryType: true,
+        countsTowardPostCoverage: true,
+        startsAt: true,
+        endsAt: true,
+        note: true,
       },
+    });
+    const existingByKey = new Map(
+      existing.map((entry) => [
+        dayKey(entry.employeeId, entry.workDate),
+        entry,
+      ]),
+    );
+
+    const toCreate: typeof entries = [];
+    const keep = new Set<string>();
+    const sameTime = (a: Date | null, b: Date | null) =>
+      (a?.getTime() ?? null) === (b?.getTime() ?? null);
+    for (const entry of entries) {
+      const key = dayKey(entry.employeeId, entry.workDate);
+      const current = existingByKey.get(key);
+      if (!current) {
+        toCreate.push(entry);
+        continue;
+      }
+      keep.add(current.id);
+      const unchanged =
+        current.shiftId === entry.shiftId &&
+        current.entryType === entry.entryType &&
+        current.countsTowardPostCoverage === entry.countsTowardPostCoverage &&
+        sameTime(current.startsAt, entry.startsAt) &&
+        sameTime(current.endsAt, entry.endsAt) &&
+        (current.note ?? null) === entry.note;
+      if (!unchanged) {
+        await tx.monthlyScheduleEntry.update({
+          where: { id: current.id },
+          data: {
+            shiftId: entry.shiftId,
+            entryType: entry.entryType,
+            countsTowardPostCoverage: entry.countsTowardPostCoverage,
+            startsAt: entry.startsAt,
+            endsAt: entry.endsAt,
+            note: entry.note,
+          },
+        });
+      }
+    }
+
+    const removedIds = existing
+      .filter((entry) => !keep.has(entry.id))
+      .map((entry) => entry.id);
+    if (removedIds.length) {
+      const referenced = await tx.scheduleChangeRequest.findMany({
+        where: { primaryEntryId: { in: removedIds } },
+        select: {
+          primaryEntry: {
+            select: {
+              workDate: true,
+              employee: { select: { fullName: true } },
+            },
+          },
+        },
+        take: 3,
+      });
+      if (referenced.length) {
+        const cells = referenced
+          .map(
+            (item) =>
+              `${item.primaryEntry.employee.fullName} — ${dayjs(item.primaryEntry.workDate).tz(TZ).format('DD.MM')}`,
+          )
+          .join(', ');
+        throw new ConflictException(
+          `Smena o‘zgarishi so‘rovi bog‘langan katakni o‘chirib bo‘lmaydi: ${cells}. Katakni o‘chirmasdan, smenasini o‘zgartiring.`,
+        );
+      }
+      await tx.monthlyScheduleEntry.deleteMany({
+        where: { id: { in: removedIds } },
+      });
+    }
+    if (toCreate.length) {
+      await tx.monthlyScheduleEntry.createMany({ data: toCreate });
+    }
+  }
+
+  /** Bir muassasaning post grafik amallarini tranzaksiya oxirigacha ketma-ket qiladi */
+  private async lockPlanning(tx: Prisma.TransactionClient, hospitalId: string) {
+    const key = `schedule-planning:${hospitalId}`;
+    await tx.$queryRaw`SELECT 1 AS ok FROM (SELECT pg_advisory_xact_lock(hashtext(${key}))) AS l`;
+  }
+
+  async submitPlan(hospitalId: string, planId: string) {
+    return this.prisma.$transaction(async (tx) => {
+      await this.lockPlanning(tx, hospitalId);
+      // Qulfdan keyin o'qiladi: parallel saqlash tugagan bo'ladi va norma
+      // aynan yuboriladigan kataklar bo'yicha tekshiriladi.
+      const plan = await this.getPlanForWorkflow(hospitalId, planId);
+      if (plan.status !== MonthlySchedulePlanStatus.DRAFT) {
+        throw new BadRequestException('Faqat qoralama grafik yuboriladi');
+      }
+      this.assertPlanReadyForReview(plan);
+      await this.transitionPlan(
+        tx,
+        hospitalId,
+        planId,
+        MonthlySchedulePlanStatus.DRAFT,
+        {
+          status: MonthlySchedulePlanStatus.SUBMITTED,
+          submittedAt: new Date(),
+          decisionNote: null,
+        },
+      );
+      return tx.monthlySchedulePlan.findUnique({ where: { id: planId } });
     });
   }
 
   async approvePlan(hospitalId: string, planId: string, approvedById: string) {
-    const plan = await this.getPlanForWorkflow(hospitalId, planId);
-    if (plan.status !== MonthlySchedulePlanStatus.SUBMITTED) {
-      throw new BadRequestException(
-        'Faqat tasdiqlashga yuborilgan grafik tasdiqlanadi',
-      );
-    }
-    const summary = this.buildPlanSummary(plan);
-    if (summary.remainingMinutes || summary.excessMinutes) {
-      throw new BadRequestException('Postning oylik qamrovi to‘liq emas');
-    }
+    return this.prisma.$transaction(
+      async (tx) => {
+        await this.lockPlanning(tx, hospitalId);
+        const plan = await this.getPlanForWorkflow(hospitalId, planId);
+        if (plan.status !== MonthlySchedulePlanStatus.SUBMITTED) {
+          throw new BadRequestException(
+            'Faqat tasdiqlashga yuborilgan grafik tasdiqlanadi',
+          );
+        }
+        this.assertPlanReadyForReview(plan);
+        // Holat birinchi bo'lib almashtiriladi: ikkinchi (parallel yoki
+        // takroriy) tasdiqlash shu yerda to'xtaydi.
+        await this.transitionPlan(
+          tx,
+          hospitalId,
+          planId,
+          MonthlySchedulePlanStatus.SUBMITTED,
+          {
+            status: MonthlySchedulePlanStatus.APPROVED,
+            approvedById,
+            approvedAt: new Date(),
+            decisionNote: null,
+          },
+        );
 
-    return this.prisma.$transaction(async (tx) => {
-      for (const entry of plan.entries) {
         // Oldingi oyning oxirida boshlangan carry-in smena o'sha oy grafigi
         // tomonidan nashr qilinadi; bu oy faqat Excel/qamrovda uning qismini oladi.
-        const workDay = dayjs(entry.workDate).tz(TZ);
-        if (
-          workDay.year() !== plan.year ||
-          workDay.month() + 1 !== plan.month
-        ) {
-          continue;
-        }
-        await tx.schedule.upsert({
-          where: {
+        const monthEntries = plan.entries.filter((entry) => {
+          const workDay = dayjs(entry.workDate).tz(TZ);
+          return (
+            workDay.year() === plan.year && workDay.month() + 1 === plan.month
+          );
+        });
+        const existing = monthEntries.length
+          ? await tx.schedule.findMany({
+              where: {
+                employeeId: {
+                  in: [...new Set(monthEntries.map((e) => e.employeeId))],
+                },
+                date: { in: [...new Set(monthEntries.map((e) => e.workDate))] },
+              },
+              select: {
+                employeeId: true,
+                date: true,
+                status: true,
+                note: true,
+              },
+            })
+          : [];
+        const existingByKey = new Map(
+          existing.map((row) => [
+            `${row.employeeId}:${row.date.getTime()}`,
+            row,
+          ]),
+        );
+
+        const leaveConflicts: Array<{
+          employeeId: string;
+          date: Date;
+          leaveStatus: ScheduleStatus;
+        }> = [];
+        for (const entry of monthEntries) {
+          const where = {
             employeeId_date: {
               employeeId: entry.employeeId,
               date: entry.workDate,
             },
-          },
-          create: {
-            employeeId: entry.employeeId,
-            shiftId: entry.shiftId,
-            date: entry.workDate,
-            status: this.mapEntryTypeToScheduleStatus(entry.entryType),
-            note: entry.note,
-            sourcePlanId: plan.id,
-            sourceEntryId: entry.id,
-          },
-          update: {
-            shiftId: entry.shiftId,
-            status: this.mapEntryTypeToScheduleStatus(entry.entryType),
-            note: entry.note,
-            sourcePlanId: plan.id,
-            sourceEntryId: entry.id,
-            scheduleChangeRequestId: null,
-          },
+          };
+          const planned = this.mapEntryTypeToScheduleStatus(entry.entryType);
+          const current = existingByKey.get(
+            `${entry.employeeId}:${entry.workDate.getTime()}`,
+          );
+          if (current && isLeaveWrittenSchedule(current)) {
+            // Tasdiqlangan ta'til ustidan yozilmaydi. Reja holati
+            // preLeaveStatus'ga qo'yiladi — ta'til qaytarilsa, kun reja
+            // bo'yicha tiklanadi. Post qamrovidagi bo'shliq rahbarga
+            // ko'rsatiladi.
+            await tx.schedule.update({
+              where,
+              data: {
+                shiftId: entry.shiftId,
+                preLeaveStatus: planned,
+                sourcePlanId: plan.id,
+                sourceEntryId: entry.id,
+                scheduleChangeRequestId: null,
+              },
+            });
+            if (planned === ScheduleStatus.WORKING) {
+              leaveConflicts.push({
+                employeeId: entry.employeeId,
+                date: entry.workDate,
+                leaveStatus: current.status,
+              });
+            }
+            continue;
+          }
+          await tx.schedule.upsert({
+            where,
+            create: {
+              employeeId: entry.employeeId,
+              shiftId: entry.shiftId,
+              date: entry.workDate,
+              status: planned,
+              note: entry.note,
+              sourcePlanId: plan.id,
+              sourceEntryId: entry.id,
+            },
+            update: {
+              shiftId: entry.shiftId,
+              status: planned,
+              note: entry.note,
+              sourcePlanId: plan.id,
+              sourceEntryId: entry.id,
+              scheduleChangeRequestId: null,
+            },
+          });
+        }
+
+        const approved = await tx.monthlySchedulePlan.findUnique({
+          where: { id: plan.id },
         });
-      }
-      return tx.monthlySchedulePlan.update({
-        where: { id: plan.id },
-        data: {
-          status: MonthlySchedulePlanStatus.APPROVED,
-          approvedById,
-          approvedAt: new Date(),
-          decisionNote: null,
-        },
-      });
-    });
+        return { ...approved, leaveConflicts };
+      },
+      // Katta rejada yuzlab yozuv bitta tranzaksiyada yoziladi
+      { maxWait: 15_000, timeout: 60_000 },
+    );
   }
 
   async reopenApprovedPlan(hospitalId: string, planId: string, reason: string) {
     await this.requirePostCoverage(hospitalId);
-    const plan = await this.prisma.monthlySchedulePlan.findFirst({
-      where: { id: planId, hospitalId },
-      select: {
-        id: true,
-        year: true,
-        month: true,
-        status: true,
-      },
-    });
-    if (!plan) throw new NotFoundException('Oylik grafik topilmadi');
-    if (plan.status !== MonthlySchedulePlanStatus.APPROVED) {
-      throw new BadRequestException(
-        'Faqat tasdiqlangan grafik qayta tahrirlashga ochiladi',
-      );
-    }
-
-    const monthStart = dayjs
-      .tz(`${plan.year}-${String(plan.month).padStart(2, '0')}-01`, TZ)
-      .startOf('day');
-    if (!dayjs().tz(TZ).startOf('day').isBefore(monthStart)) {
-      throw new BadRequestException(
-        'Boshlangan yoki o‘tgan oy grafigini qayta ochib bo‘lmaydi',
-      );
-    }
-
-    const attendanceCount = await this.prisma.attendanceRecord.count({
-      where: { schedule: { sourcePlanId: plan.id } },
-    });
-    if (attendanceCount) {
-      throw new ConflictException(
-        'Grafikka bog‘langan davomat mavjud; uni qayta ochib bo‘lmaydi',
-      );
-    }
-
     return this.prisma.$transaction(async (tx) => {
-      await tx.schedule.deleteMany({
-        where: { sourcePlanId: plan.id },
+      await this.lockPlanning(tx, hospitalId);
+      const plan = await tx.monthlySchedulePlan.findFirst({
+        where: { id: planId, hospitalId },
+        select: {
+          id: true,
+          year: true,
+          month: true,
+          status: true,
+        },
       });
-      return tx.monthlySchedulePlan.update({
-        where: { id: plan.id },
-        data: {
+      if (!plan) throw new NotFoundException('Oylik grafik topilmadi');
+      if (plan.status !== MonthlySchedulePlanStatus.APPROVED) {
+        throw new BadRequestException(
+          'Faqat tasdiqlangan grafik qayta tahrirlashga ochiladi',
+        );
+      }
+
+      const monthStart = dayjs
+        .tz(`${plan.year}-${String(plan.month).padStart(2, '0')}-01`, TZ)
+        .startOf('day');
+      if (!dayjs().tz(TZ).startOf('day').isBefore(monthStart)) {
+        throw new BadRequestException(
+          'Boshlangan yoki o‘tgan oy grafigini qayta ochib bo‘lmaydi',
+        );
+      }
+
+      const attendanceCount = await tx.attendanceRecord.count({
+        where: { schedule: { sourcePlanId: plan.id } },
+      });
+      if (attendanceCount) {
+        throw new ConflictException(
+          'Grafikka bog‘langan davomat mavjud; uni qayta ochib bo‘lmaydi',
+        );
+      }
+
+      // Tasdiqlangan smena o'zgarishi amaldagi grafikni allaqachon
+      // o'zgartirgan — rejani qayta ochish uni jimgina bekor qilib yuborardi.
+      const approvedChanges = await tx.scheduleChangeRequest.count({
+        where: { planId: plan.id, status: ScheduleChangeStatus.APPROVED },
+      });
+      if (approvedChanges) {
+        throw new ConflictException(
+          'Bu grafikda tasdiqlangan smena o‘zgarishlari bor. Qayta ochish o‘rniga yangi smena o‘zgarishi so‘rovidan foydalaning.',
+        );
+      }
+
+      await this.transitionPlan(
+        tx,
+        hospitalId,
+        plan.id,
+        MonthlySchedulePlanStatus.APPROVED,
+        {
           status: MonthlySchedulePlanStatus.DRAFT,
           submittedAt: null,
           approvedById: null,
           approvedAt: null,
           decisionNote: `Qayta tahrirlash: ${reason.trim()}`,
         },
+      );
+      // Kutilayotgan so'rovlar qoralama grafikda qolib ketmasin
+      await tx.scheduleChangeRequest.updateMany({
+        where: {
+          planId: plan.id,
+          status: {
+            in: [ScheduleChangeStatus.REQUESTED, ScheduleChangeStatus.ACCEPTED],
+          },
+        },
+        data: {
+          status: ScheduleChangeStatus.CANCELLED,
+          decisionNote: 'Grafik qayta tahrirlashga ochildi',
+        },
       });
+      // Ta'til yozgan kunlar o'chirilmaydi — faqat rejadan uziladi.
+      const leaveWritten: Prisma.ScheduleWhereInput = {
+        status: { in: LEAVE_WRITTEN_STATUSES },
+        note: { startsWith: LEAVE_NOTE_PREFIX },
+      };
+      await tx.schedule.updateMany({
+        where: { sourcePlanId: plan.id, ...leaveWritten },
+        data: {
+          sourcePlanId: null,
+          sourceEntryId: null,
+          shiftId: null,
+          preLeaveStatus: null,
+        },
+      });
+      await tx.schedule.deleteMany({
+        where: { sourcePlanId: plan.id, NOT: leaveWritten },
+      });
+      return tx.monthlySchedulePlan.findUnique({ where: { id: plan.id } });
     });
   }
 
@@ -996,21 +1260,50 @@ export class SchedulePlanningService {
     approvedById: string,
     reason: string,
   ) {
-    const plan = await this.getPlanForWorkflow(hospitalId, planId);
-    if (plan.status !== MonthlySchedulePlanStatus.SUBMITTED) {
-      throw new BadRequestException(
-        'Faqat tasdiqlashga yuborilgan grafik rad etiladi',
+    return this.prisma.$transaction(async (tx) => {
+      await this.lockPlanning(tx, hospitalId);
+      const plan = await this.getPlanForWorkflow(hospitalId, planId);
+      if (plan.status !== MonthlySchedulePlanStatus.SUBMITTED) {
+        throw new BadRequestException(
+          'Faqat tasdiqlashga yuborilgan grafik rad etiladi',
+        );
+      }
+      await this.transitionPlan(
+        tx,
+        hospitalId,
+        plan.id,
+        MonthlySchedulePlanStatus.SUBMITTED,
+        {
+          status: MonthlySchedulePlanStatus.REJECTED,
+          approvedById,
+          approvedAt: new Date(),
+          decisionNote: reason.trim(),
+        },
+      );
+      return tx.monthlySchedulePlan.findUnique({ where: { id: plan.id } });
+    });
+  }
+
+  /**
+   * Reja holatini faqat kutilgan holatdan o'tkazadi. Boshqa so'rov holatni
+   * allaqachon o'zgartirgan bo'lsa (ikki marta bosish, ikki rahbar) — 409.
+   */
+  private async transitionPlan(
+    tx: Prisma.TransactionClient,
+    hospitalId: string,
+    planId: string,
+    from: MonthlySchedulePlanStatus,
+    data: Prisma.MonthlySchedulePlanUncheckedUpdateManyInput,
+  ) {
+    const result = await tx.monthlySchedulePlan.updateMany({
+      where: { id: planId, hospitalId, status: from },
+      data,
+    });
+    if (!result.count) {
+      throw new ConflictException(
+        'Grafik holati allaqachon o‘zgargan. Sahifani yangilang.',
       );
     }
-    return this.prisma.monthlySchedulePlan.update({
-      where: { id: plan.id },
-      data: {
-        status: MonthlySchedulePlanStatus.REJECTED,
-        approvedById,
-        approvedAt: new Date(),
-        decisionNote: reason.trim(),
-      },
-    });
   }
 
   async createChangeRequest(
@@ -1523,6 +1816,30 @@ export class SchedulePlanningService {
     }
 
     const updated = await this.prisma.$transaction(async (tx) => {
+      await this.lockPlanning(tx, hospitalId);
+      // So'rov birinchi bo'lib "tasdiqlandi"ga o'tkaziladi: ikkinchi
+      // (takroriy yoki parallel) tasdiqlash almashishni qayta qo'llab,
+      // uni bekor qilib yubormaydi. Reja qayta ochilgan bo'lsa ham to'xtaydi.
+      const claimed = await tx.scheduleChangeRequest.updateMany({
+        where: {
+          id: request.id,
+          hospitalId,
+          status: {
+            in: [ScheduleChangeStatus.REQUESTED, ScheduleChangeStatus.ACCEPTED],
+          },
+          plan: { status: MonthlySchedulePlanStatus.APPROVED },
+        },
+        data: {
+          status: ScheduleChangeStatus.APPROVED,
+          approvedById,
+          approvedAt: new Date(),
+        },
+      });
+      if (!claimed.count) {
+        throw new ConflictException(
+          'So‘rov allaqachon ko‘rib chiqilgan yoki grafik qayta tahrirlashga ochilgan',
+        );
+      }
       if (request.type === ScheduleChangeType.SWAP) {
         if (!request.counterpartEntry) {
           throw new BadRequestException('Ikkinchi smena topilmadi');
@@ -1537,13 +1854,8 @@ export class SchedulePlanningService {
         await this.markOriginalEmployeeAbsent(tx, request);
       }
 
-      return tx.scheduleChangeRequest.update({
+      return tx.scheduleChangeRequest.findUnique({
         where: { id: request.id },
-        data: {
-          status: ScheduleChangeStatus.APPROVED,
-          approvedById,
-          approvedAt: new Date(),
-        },
       });
     });
     await this.notifications?.createForUsers(
@@ -1599,14 +1911,26 @@ export class SchedulePlanningService {
     ) {
       throw new BadRequestException('Bu so‘rovni rad etib bo‘lmaydi');
     }
-    const updated = await this.prisma.scheduleChangeRequest.update({
-      where: { id: request.id },
+    const claimed = await this.prisma.scheduleChangeRequest.updateMany({
+      where: {
+        id: request.id,
+        hospitalId,
+        status: {
+          in: [ScheduleChangeStatus.REQUESTED, ScheduleChangeStatus.ACCEPTED],
+        },
+      },
       data: {
         status: ScheduleChangeStatus.REJECTED,
         approvedById,
         approvedAt: new Date(),
         decisionNote: reason.trim(),
       },
+    });
+    if (!claimed.count) {
+      throw new ConflictException('So‘rov allaqachon ko‘rib chiqilgan');
+    }
+    const updated = await this.prisma.scheduleChangeRequest.findUnique({
+      where: { id: request.id },
     });
     await this.notifications?.createForUsers(
       [
@@ -1753,6 +2077,7 @@ export class SchedulePlanningService {
       startsAt: Date | null;
       endsAt: Date | null;
       countsTowardPostCoverage?: boolean;
+      isCarryIn?: boolean;
     }>;
   }) {
     const coverageTargets = calculateMonthlyCoverageTargets(
@@ -1777,7 +2102,41 @@ export class SchedulePlanningService {
         targetMinutes: coverageTargets.byDate[date] ?? 0,
       };
     });
-    return { ...summary, days };
+    return {
+      ...summary,
+      postCoverageRequired: this.requiresPostCoverageNorm(plan.entries),
+      days,
+    };
+  }
+
+  /**
+   * Post normasi (masalan 720/744 soat) faqat rejada shu oyning post
+   * xodimi bo'lsa talab qilinadi. Faqat postdan tashqari xodimlar
+   * grafigi (countsTowardPostCoverage=false) normaga tekshirilmaydi;
+   * oldingi oydan o'tgan tungi smena (carry-in) hisobga olinmaydi.
+   */
+  private requiresPostCoverageNorm(
+    entries: Array<{ countsTowardPostCoverage?: boolean; isCarryIn?: boolean }>,
+  ): boolean {
+    return entries.some(
+      (entry) => !entry.isCarryIn && entry.countsTowardPostCoverage !== false,
+    );
+  }
+
+  private assertPlanReadyForReview(
+    plan: Parameters<SchedulePlanningService['buildPlanSummary']>[0],
+  ) {
+    const ownEntries = plan.entries.filter((entry) => !entry.isCarryIn);
+    if (!ownEntries.length) {
+      throw new BadRequestException('Grafikda birorta ham katak yo‘q');
+    }
+    const summary = this.buildPlanSummary(plan);
+    if (!summary.postCoverageRequired) return;
+    if (summary.remainingMinutes || summary.excessMinutes) {
+      throw new BadRequestException(
+        `Postning oylik normasi to‘liq taqsimlanmagan: ${summary.plannedMinutes / 60}/${summary.targetMinutes / 60} soat`,
+      );
+    }
   }
 
   private mapEntryTypeToScheduleStatus(

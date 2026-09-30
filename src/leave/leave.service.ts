@@ -39,14 +39,29 @@ const LEAVE_TO_SCHEDULE: Record<LeaveType, ScheduleStatus> = {
 };
 
 /** Ta'til yozadigan grafik holatlari (qaytarishda shular tiklanadi) */
-const LEAVE_WRITTEN_STATUSES: ScheduleStatus[] = [
+export const LEAVE_WRITTEN_STATUSES: ScheduleStatus[] = [
   ScheduleStatus.VACATION,
   ScheduleStatus.SICK,
   ScheduleStatus.MATERNITY_LEAVE,
   ScheduleStatus.OTHER_ABSENCE,
 ];
 
-const LEAVE_NOTE_PREFIX = "Ta'til: ";
+export const LEAVE_NOTE_PREFIX = "Ta'til: ";
+
+/**
+ * Grafik kuni tasdiqlangan ta'til tomonidan yozilganmi (qo'lda qo'yilgan
+ * kasallik/yo'qlik emas). Boshqa modullar (post grafik) shu kunni
+ * ustidan yozib, ta'tilni yo'qotib qo'ymasligi uchun ishlatiladi.
+ */
+export function isLeaveWrittenSchedule(schedule: {
+  status: ScheduleStatus;
+  note: string | null;
+}): boolean {
+  return (
+    LEAVE_WRITTEN_STATUSES.includes(schedule.status) &&
+    (schedule.note ?? '').startsWith(LEAVE_NOTE_PREFIX)
+  );
+}
 
 export const LEAVE_TYPE_LABELS: Record<LeaveType, string> = {
   VACATION: "Yillik ta'til",

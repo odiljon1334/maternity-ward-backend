@@ -42,6 +42,15 @@ export class SchedulePlanEntryInputDto {
 }
 
 export class SaveSchedulePlanEntriesDto {
+  /**
+   * Tahrir boshlangan paytdagi reja `updatedAt` qiymati. Berilsa, reja
+   * orada boshqa foydalanuvchi tomonidan saqlangan bo'lsa 409 qaytadi
+   * (bir-birining ishini bildirmasdan o'chirib yubormaslik uchun).
+   */
+  @IsOptional()
+  @IsDateString()
+  expectedUpdatedAt?: string;
+
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => SchedulePlanEntryInputDto)
