@@ -46,6 +46,7 @@ describe('SchedulePlanningService', () => {
           ...data,
         })),
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+        update: jest.fn().mockImplementation(({ data }) => data),
       },
       monthlyScheduleEntry: {
         findFirst: jest.fn(),
@@ -294,8 +295,9 @@ describe('SchedulePlanningService', () => {
     );
   });
 
-  it('rejects a day that exceeds 24 hours only after carry-in is counted', async () => {
+  it('allows four employees to share 32 hours on one day in a 12-hour monthly-norm post', async () => {
     const { prisma, service } = setup(SchedulePlanningMode.POST_COVERAGE);
+    jest.spyOn(service, 'getPlanDetails').mockResolvedValue({} as never);
     const currentPlan = {
       id: 'october-plan',
       hospitalId: 'hospital-1',
@@ -303,10 +305,15 @@ describe('SchedulePlanningService', () => {
       year: 2026,
       month: 10,
       status: MonthlySchedulePlanStatus.DRAFT,
+      coverageMode: SchedulePostCoverageMode.DAILY,
+      dailyCoverageMinutes: 720,
+      coverageMinutesByWeekday: null,
       post: {
         id: 'post-1',
         departmentId: 'department-1',
-        dailyCoverageMinutes: 1440,
+        coverageMode: SchedulePostCoverageMode.DAILY,
+        dailyCoverageMinutes: 720,
+        coverageMinutesByWeekday: null,
       },
     };
     const carryEntry = {
@@ -331,7 +338,8 @@ describe('SchedulePlanningService', () => {
       { id: 'employee-4' },
     ]);
     prisma.shiftTemplate.findMany.mockResolvedValue([
-      { id: 'day-shift' },
+      { id: 'day-8-shift' },
+      { id: 'day-12-shift' },
       { id: 'night-shift' },
     ]);
 
@@ -340,19 +348,19 @@ describe('SchedulePlanningService', () => {
         entries: [
           {
             employeeId: 'employee-2',
-            shiftId: 'day-shift',
+            shiftId: 'day-8-shift',
+            entryType: SchedulePlanEntryType.WORKING,
+            workDate: '2026-10-01',
+            startsAt: '2026-10-01T08:00:00+05:00',
+            endsAt: '2026-10-01T16:00:00+05:00',
+          },
+          {
+            employeeId: 'employee-3',
+            shiftId: 'day-12-shift',
             entryType: SchedulePlanEntryType.WORKING,
             workDate: '2026-10-01',
             startsAt: '2026-10-01T08:00:00+05:00',
             endsAt: '2026-10-01T20:00:00+05:00',
-          },
-          {
-            employeeId: 'employee-3',
-            shiftId: 'night-shift',
-            entryType: SchedulePlanEntryType.WORKING,
-            workDate: '2026-10-01',
-            startsAt: '2026-10-01T20:00:00+05:00',
-            endsAt: '2026-10-02T08:00:00+05:00',
           },
           {
             employeeId: 'employee-4',
@@ -364,7 +372,57 @@ describe('SchedulePlanningService', () => {
           },
         ],
       }),
-    ).rejects.toThrow('2026-10-01 (28/24 soat)');
+    ).resolves.toEqual({});
+  });
+
+  it('submits an uneven daily distribution when the monthly post norm is exact', async () => {
+    const { prisma, service } = setup(SchedulePlanningMode.POST_COVERAGE);
+    const workingEntry = (employeeId: string, day: number, hours: number) => ({
+      employeeId,
+      entryType: SchedulePlanEntryType.WORKING,
+      startsAt: new Date(
+        `2026-10-${String(day).padStart(2, '0')}T00:00:00+05:00`,
+      ),
+      endsAt: new Date(
+        `2026-10-${String(day).padStart(2, '0')}T${String(hours).padStart(2, '0')}:00:00+05:00`,
+      ),
+    });
+    const entries = [
+      workingEntry('employee-1', 1, 8),
+      workingEntry('employee-2', 1, 8),
+      workingEntry('employee-3', 1, 8),
+      workingEntry('employee-4', 1, 8),
+      workingEntry('employee-5', 2, 4),
+      ...Array.from({ length: 28 }, (_, index) =>
+        workingEntry(`employee-${index + 6}`, index + 3, 12),
+      ),
+    ];
+    jest.spyOn(service as any, 'getPlanForWorkflow').mockResolvedValue({
+      id: 'october-plan',
+      year: 2026,
+      month: 10,
+      status: MonthlySchedulePlanStatus.DRAFT,
+      coverageMode: SchedulePostCoverageMode.DAILY,
+      dailyCoverageMinutes: 720,
+      coverageMinutesByWeekday: null,
+      post: {
+        coverageMode: SchedulePostCoverageMode.DAILY,
+        dailyCoverageMinutes: 720,
+        coverageMinutesByWeekday: null,
+      },
+      entries,
+    });
+
+    await service.submitPlan('hospital-1', 'october-plan');
+
+    expect(prisma.monthlySchedulePlan.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'october-plan' },
+        data: expect.objectContaining({
+          status: MonthlySchedulePlanStatus.SUBMITTED,
+        }),
+      }),
+    );
   });
 
   it('archives a post without deleting its schedule history', async () => {

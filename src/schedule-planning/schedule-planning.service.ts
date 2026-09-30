@@ -824,28 +824,6 @@ export class SchedulePlanningService {
     }
     assertNoEmployeeOverlaps([...effectiveEntries, ...otherEntries]);
 
-    const coveragePolicy = this.planCoveragePolicy(plan);
-    const coverageTargets = calculateMonthlyCoverageTargets(
-      plan.year,
-      plan.month,
-      coveragePolicy,
-    );
-    const summary = calculateCoverageSummary(
-      effectiveEntries,
-      plan.year,
-      plan.month,
-      coverageTargets.targetMinutes,
-    );
-    const overfilledDay = Object.entries(summary.byDate).find(
-      ([date, minutes]) => minutes > (coverageTargets.byDate[date] ?? 0),
-    );
-    if (overfilledDay || summary.excessMinutes > 0) {
-      const detail = overfilledDay
-        ? `: ${overfilledDay[0]} (${overfilledDay[1] / 60}/${(coverageTargets.byDate[overfilledDay[0]] ?? 0) / 60} soat)`
-        : '';
-      throw new BadRequestException(`Post soati limitdan oshgan${detail}`);
-    }
-
     await this.prisma.$transaction(async (tx) => {
       await tx.monthlyScheduleEntry.deleteMany({ where: { planId } });
       if (normalized.length) {
@@ -861,12 +839,9 @@ export class SchedulePlanningService {
       throw new BadRequestException('Faqat qoralama grafik yuboriladi');
     }
     const summary = this.buildPlanSummary(plan);
-    const incompleteDay = summary.days.find(
-      (day) => day.plannedMinutes !== day.targetMinutes,
-    );
-    if (incompleteDay) {
+    if (summary.remainingMinutes || summary.excessMinutes) {
       throw new BadRequestException(
-        `${incompleteDay.date} kuni post qamrovi ${incompleteDay.plannedMinutes / 60}/${incompleteDay.targetMinutes / 60} soat`,
+        `Postning oylik normasi to‘liq taqsimlanmagan: ${summary.plannedMinutes / 60}/${summary.targetMinutes / 60} soat`,
       );
     }
     return this.prisma.monthlySchedulePlan.update({
