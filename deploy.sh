@@ -135,14 +135,24 @@ git reset --hard origin/main
 cd "$BACKEND_DIR"
 success "Kod yangilandi"
 
-# Bind-mount qilingan nginx.conf diskda darhol yangilanadi, ammo Nginx workerlar
-# reload bo'lmaguncha eski konfiguratsiyada qoladi. Avval yangi faylni tekshirib,
-# xato bo'lsa application containerlariga tegmasdan deployni to'xtatamiz.
+# nginx.conf bitta fayl sifatida bind-mount qilingan. `git reset` faylni yangi
+# inode bilan yozadi, container esa eski inode'ni ko'rishda davom etadi — shu
+# sabab `nginx -s reload` ESKI konfiguratsiyani qayta yuklaydi. Shuning uchun
+# host va container nusxasini solishtiramiz: farq bo'lsa yangi fayl vaqtinchalik
+# container'da (xuddi shu tarmoqda) tekshiriladi va 9-qadamda nginx qayta yaratiladi.
 log "2.1. Nginx konfiguratsiyasi tekshirilmoqda..."
 if [ -z "$(compose ps -q nginx 2>/dev/null)" ]; then
     error "Nginx container ishlamayapti; deploy xavfsiz davom eta olmaydi."
 fi
-if ! compose exec -T nginx nginx -t; then
+HOST_NGINX_SUM=$(sha256sum nginx/nginx.conf | cut -d' ' -f1)
+LIVE_NGINX_SUM=$(compose exec -T nginx sha256sum /etc/nginx/nginx.conf 2>/dev/null | cut -d' ' -f1)
+NGINX_CONF_CHANGED=false
+if [ "$HOST_NGINX_SUM" != "$LIVE_NGINX_SUM" ]; then
+    NGINX_CONF_CHANGED=true
+    if ! compose run --rm --no-deps -T nginx nginx -t; then
+        error "Yangi nginx.conf da xato bor. Eski Nginx ishlashda davom etadi."
+    fi
+elif ! compose exec -T nginx nginx -t; then
     error "Nginx konfiguratsiyasida xato bor. Eski workerlar ishlashda davom etadi."
 fi
 success "Nginx konfiguratsiyasi to'g'ri"
@@ -300,11 +310,18 @@ compose up -d --no-deps mediamtx
 success "MediaMTX yangilandi"
 
 # ── 9. Nginx reload ──────────────────────────────────────────
-# `nginx -s reload` graceful: mavjud ulanishlar uzilmaydi, yangi workerlar
-# tekshirilgan konfiguratsiya bilan ishga tushadi.
-log "9. Nginx konfiguratsiyasi uzilishsiz yangilanmoqda..."
-compose exec -T nginx nginx -s reload
-success "Nginx graceful reload qilindi"
+# Konfiguratsiya o'zgarmagan bo'lsa — graceful reload (ulanishlar uzilmaydi).
+# O'zgargan bo'lsa container qayta yaratiladi (yangi inode'ni ko'rishi uchun):
+# 1-2 soniyalik uzilish, konfiguratsiya 2.1-qadamda allaqachon tekshirilgan.
+if [ "$NGINX_CONF_CHANGED" = true ]; then
+    log "9. nginx.conf o'zgargan — Nginx qayta yaratilmoqda..."
+    compose up -d --no-deps --force-recreate nginx
+    success "Nginx yangi konfiguratsiya bilan qayta yaratildi"
+else
+    log "9. Nginx konfiguratsiyasi uzilishsiz yangilanmoqda..."
+    compose exec -T nginx nginx -s reload
+    success "Nginx graceful reload qilindi"
+fi
 
 # ── 10. Status ───────────────────────────────────────────────
 echo ""
