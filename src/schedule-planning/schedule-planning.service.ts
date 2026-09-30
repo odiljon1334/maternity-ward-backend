@@ -699,7 +699,7 @@ export class SchedulePlanningService {
             planId: { not: planId },
             employeeId: { in: effectiveEmployeeIds },
             workDate: {
-              // Oldingi tasdiqlangan oyning tungi smenasi canonical
+              // Oldingi oyning eng so‘nggi faol tungi smenasi canonical
               // carry-in sifatida alohida olinadi. Shu sabab boshqa
               // rejalarning faqat joriy oy kataklari collision tekshiruviga
               // kiradi; carry-in qayta publish qilinmaydi.
@@ -1538,7 +1538,13 @@ export class SchedulePlanningService {
         postId,
         year: previousMonth.year(),
         month: previousMonth.month() + 1,
-        status: MonthlySchedulePlanStatus.APPROVED,
+        status: {
+          in: [
+            MonthlySchedulePlanStatus.DRAFT,
+            MonthlySchedulePlanStatus.SUBMITTED,
+            MonthlySchedulePlanStatus.APPROVED,
+          ],
+        },
       },
       orderBy: { version: 'desc' },
       include: {

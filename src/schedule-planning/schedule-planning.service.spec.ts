@@ -142,7 +142,7 @@ describe('SchedulePlanningService', () => {
     expect(result.targetCoverageHours).toBe(720);
   });
 
-  it('shows the previous approved overnight shift as October carry-in', async () => {
+  it('shows the previous active overnight shift as October carry-in', async () => {
     const { prisma, service } = setup(SchedulePlanningMode.POST_COVERAGE);
     const carryEntry = {
       id: 'september-entry',
@@ -208,6 +208,20 @@ describe('SchedulePlanningService', () => {
       }),
     ]);
     expect(result.summary.byDate['2026-10-01']).toBe(480);
+    expect(prisma.monthlySchedulePlan.findFirst).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        where: expect.objectContaining({
+          status: {
+            in: [
+              MonthlySchedulePlanStatus.DRAFT,
+              MonthlySchedulePlanStatus.SUBMITTED,
+              MonthlySchedulePlanStatus.APPROVED,
+            ],
+          },
+        }),
+      }),
+    );
   });
 
   it('rejects a day that exceeds 24 hours only after carry-in is counted', async () => {
