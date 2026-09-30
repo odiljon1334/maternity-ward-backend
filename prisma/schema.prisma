@@ -54,6 +54,13 @@ enum SchedulePlanningMode {
   POST_COVERAGE
 }
 
+enum SchedulePostCoverageMode {
+  CONTINUOUS_24_7
+  DAILY
+  WEEKDAYS
+  CUSTOM_WEEKLY
+}
+
 enum MonthlySchedulePlanStatus {
   DRAFT
   SUBMITTED
@@ -630,10 +637,12 @@ model SchedulePost {
   departmentId String
   department   Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
 
-  name                 String
-  code                 String
-  dailyCoverageMinutes Int     @default(1440)
-  isActive             Boolean @default(true)
+  name                     String
+  code                     String
+  coverageMode             SchedulePostCoverageMode @default(CONTINUOUS_24_7)
+  dailyCoverageMinutes     Int                      @default(1440)
+  coverageMinutesByWeekday Json?
+  isActive                 Boolean                  @default(true)
 
   plans MonthlySchedulePlan[]
 
@@ -657,6 +666,12 @@ model MonthlySchedulePlan {
   month   Int
   version Int                       @default(1)
   status  MonthlySchedulePlanStatus @default(DRAFT)
+
+  // Post qoidasi oylik reja yaratilgan vaqtda snapshot qilinadi. Shu tariqa
+  // postning keyingi sozlamalari tasdiqlangan tarixni o'zgartirmaydi.
+  coverageMode             SchedulePostCoverageMode @default(CONTINUOUS_24_7)
+  dailyCoverageMinutes     Int                      @default(1440)
+  coverageMinutesByWeekday Json?
 
   createdById String
   createdBy   User   @relation("MonthlySchedulePlanCreator", fields: [createdById], references: [id], onDelete: Restrict)

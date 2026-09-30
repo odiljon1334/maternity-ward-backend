@@ -22,6 +22,7 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { SchedulePlanningService } from './schedule-planning.service';
 import { CreateSchedulePostDto } from './dto/create-schedule-post.dto';
+import { UpdateSchedulePostDto } from './dto/update-schedule-post.dto';
 import { CreateMonthlySchedulePlanDto } from './dto/create-monthly-schedule-plan.dto';
 import { SaveSchedulePlanEntriesDto } from './dto/save-schedule-plan-entries.dto';
 import { CreateScheduleChangeDto } from './dto/create-schedule-change.dto';
@@ -83,6 +84,21 @@ export class SchedulePlanningController {
   ) {
     return this.service.createPost(
       this.resolveHospitalId(hospitalId, targetHospitalId),
+      dto,
+    );
+  }
+
+  @Patch('posts/:id')
+  @Roles(...WRITE_ROLES)
+  updatePost(
+    @Param('id') id: string,
+    @CurrentUser('hospitalId') hospitalId: string | null,
+    @Query('targetHospitalId') targetHospitalId: string | undefined,
+    @Body() dto: UpdateSchedulePostDto,
+  ) {
+    return this.service.updatePost(
+      this.resolveHospitalId(hospitalId, targetHospitalId),
+      id,
       dto,
     );
   }

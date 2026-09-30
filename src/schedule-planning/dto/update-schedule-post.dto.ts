@@ -1,3 +1,4 @@
+import { SchedulePostCoverageMode } from '@prisma/client';
 import {
   ArrayMaxSize,
   ArrayMinSize,
@@ -10,19 +11,17 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
-import { SchedulePostCoverageMode } from '@prisma/client';
 
-export class CreateSchedulePostDto {
+export class UpdateSchedulePostDto {
+  @IsOptional()
   @IsString()
   @MinLength(2)
-  name: string;
+  name?: string;
 
+  @IsOptional()
   @IsString()
   @MinLength(1)
-  code: string;
-
-  @IsString()
-  departmentId: string;
+  code?: string;
 
   @IsOptional()
   @IsEnum(SchedulePostCoverageMode)

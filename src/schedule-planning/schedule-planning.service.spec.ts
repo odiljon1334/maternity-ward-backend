@@ -3,6 +3,7 @@ import {
   MonthlySchedulePlanStatus,
   SchedulePlanEntryType,
   SchedulePlanningMode,
+  SchedulePostCoverageMode,
 } from '@prisma/client';
 import {
   calculateMonthlyCoverageMinutes,
@@ -44,6 +45,7 @@ describe('SchedulePlanningService', () => {
           id: 'plan-1',
           ...data,
         })),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
       monthlyScheduleEntry: {
         findFirst: jest.fn(),
@@ -88,6 +90,34 @@ describe('SchedulePlanningService', () => {
     expect(calculateMonthlyCoverageMinutes(2026, 10, 1440) / 60).toBe(744);
   });
 
+  it('calculates a monthly target from the selected post coverage mode', () => {
+    expect(
+      calculateMonthlyCoverageMinutes(
+        2026,
+        10,
+        12 * 60,
+        SchedulePostCoverageMode.DAILY,
+      ) / 60,
+    ).toBe(372);
+    expect(
+      calculateMonthlyCoverageMinutes(
+        2026,
+        10,
+        8 * 60,
+        SchedulePostCoverageMode.WEEKDAYS,
+      ) / 60,
+    ).toBe(176);
+    expect(
+      calculateMonthlyCoverageMinutes(
+        2026,
+        10,
+        8 * 60,
+        SchedulePostCoverageMode.CUSTOM_WEEKLY,
+        [0, 480, 480, 480, 480, 240, 0],
+      ) / 60,
+    ).toBe(156);
+  });
+
   it('blocks post writes for STANDARD hospitals', async () => {
     const { prisma, service } = setup(SchedulePlanningMode.STANDARD);
 
@@ -127,6 +157,46 @@ describe('SchedulePlanningService', () => {
         }),
       }),
     );
+  });
+
+  it('updates the post rule only on draft plan snapshots', async () => {
+    const { prisma, service } = setup(SchedulePlanningMode.POST_COVERAGE);
+    prisma.schedulePost.findFirst
+      .mockResolvedValueOnce({
+        id: 'post-1',
+        hospitalId: 'hospital-1',
+        name: 'Post',
+        code: 'POST-1',
+        coverageMode: SchedulePostCoverageMode.CONTINUOUS_24_7,
+        dailyCoverageMinutes: 1440,
+        coverageMinutesByWeekday: null,
+      })
+      .mockResolvedValueOnce(null);
+
+    await service.updatePost('hospital-1', 'post-1', {
+      coverageMode: SchedulePostCoverageMode.WEEKDAYS,
+      dailyCoverageMinutes: 480,
+    });
+
+    expect(prisma.schedulePost.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          coverageMode: SchedulePostCoverageMode.WEEKDAYS,
+          dailyCoverageMinutes: 480,
+        }),
+      }),
+    );
+    expect(prisma.monthlySchedulePlan.updateMany).toHaveBeenCalledWith({
+      where: {
+        postId: 'post-1',
+        hospitalId: 'hospital-1',
+        status: MonthlySchedulePlanStatus.DRAFT,
+      },
+      data: expect.objectContaining({
+        coverageMode: SchedulePostCoverageMode.WEEKDAYS,
+        dailyCoverageMinutes: 480,
+      }),
+    });
   });
 
   it('returns the monthly coverage target when a draft is created', async () => {

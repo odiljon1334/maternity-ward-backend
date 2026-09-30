@@ -1,5 +1,8 @@
 import { BadRequestException } from '@nestjs/common';
-import { SchedulePlanEntryType } from '@prisma/client';
+import {
+  SchedulePlanEntryType,
+  SchedulePostCoverageMode,
+} from '@prisma/client';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
@@ -24,6 +27,104 @@ export interface CoverageSummary {
   excessMinutes: number;
   byDate: Record<string, number>;
   byEmployee: Record<string, number>;
+}
+
+export interface PostCoveragePolicy {
+  coverageMode: SchedulePostCoverageMode;
+  dailyCoverageMinutes: number;
+  /** Yakshanba (0) dan Shanba (6) gacha. */
+  coverageMinutesByWeekday: number[] | null;
+}
+
+export function normalizePostCoveragePolicy(input: {
+  coverageMode?: SchedulePostCoverageMode | null;
+  dailyCoverageMinutes?: number | null;
+  coverageMinutesByWeekday?: unknown;
+}): PostCoveragePolicy {
+  const coverageMode =
+    input.coverageMode ?? SchedulePostCoverageMode.CONTINUOUS_24_7;
+  const requestedDaily = input.dailyCoverageMinutes ?? 1440;
+
+  if (
+    !Number.isInteger(requestedDaily) ||
+    requestedDaily < 1 ||
+    requestedDaily > 1440
+  ) {
+    throw new BadRequestException(
+      'Kunlik post qamrovi 1–1440 daqiqa oralig‘ida bo‘lishi kerak',
+    );
+  }
+
+  if (coverageMode === SchedulePostCoverageMode.CONTINUOUS_24_7) {
+    return {
+      coverageMode,
+      dailyCoverageMinutes: 1440,
+      coverageMinutesByWeekday: null,
+    };
+  }
+
+  if (coverageMode === SchedulePostCoverageMode.CUSTOM_WEEKLY) {
+    const weekly = input.coverageMinutesByWeekday;
+    if (
+      !Array.isArray(weekly) ||
+      weekly.length !== 7 ||
+      weekly.some(
+        (minutes) =>
+          !Number.isInteger(minutes) || minutes < 0 || minutes > 1440,
+      )
+    ) {
+      throw new BadRequestException(
+        'Haftalik qamrov Yakshanbadan Shanbagacha 7 ta 0–1440 daqiqalik qiymatdan iborat bo‘lishi kerak',
+      );
+    }
+    if (!weekly.some((minutes) => minutes > 0)) {
+      throw new BadRequestException(
+        'Haftalik qamrovda kamida bitta ish kuni bo‘lishi kerak',
+      );
+    }
+    return {
+      coverageMode,
+      dailyCoverageMinutes: Math.max(...weekly),
+      coverageMinutesByWeekday: [...weekly],
+    };
+  }
+
+  return {
+    coverageMode,
+    dailyCoverageMinutes: requestedDaily,
+    coverageMinutesByWeekday: null,
+  };
+}
+
+export function coverageTargetForDate(
+  date: Date | string,
+  policy: PostCoveragePolicy,
+): number {
+  const weekday = dayjs(date).tz(TZ).day();
+  if (policy.coverageMode === SchedulePostCoverageMode.WEEKDAYS) {
+    return weekday >= 1 && weekday <= 5 ? policy.dailyCoverageMinutes : 0;
+  }
+  if (policy.coverageMode === SchedulePostCoverageMode.CUSTOM_WEEKLY) {
+    return policy.coverageMinutesByWeekday?.[weekday] ?? 0;
+  }
+  return policy.dailyCoverageMinutes;
+}
+
+export function calculateMonthlyCoverageTargets(
+  year: number,
+  month: number,
+  policy: PostCoveragePolicy,
+): { targetMinutes: number; byDate: Record<string, number> } {
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const byDate: Record<string, number> = {};
+  let targetMinutes = 0;
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    const date = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const minutes = coverageTargetForDate(`${date}T12:00:00+05:00`, policy);
+    byDate[date] = minutes;
+    targetMinutes += minutes;
+  }
+  return { targetMinutes, byDate };
 }
 
 export function splitIntervalByCalendarDate(

@@ -13,17 +13,22 @@ import {
   ScheduleChangeType,
   SchedulePlanEntryType,
   SchedulePlanningMode,
+  SchedulePostCoverageMode,
   ScheduleStatus,
   UserRole,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateSchedulePostDto } from './dto/create-schedule-post.dto';
+import { UpdateSchedulePostDto } from './dto/update-schedule-post.dto';
 import { CreateMonthlySchedulePlanDto } from './dto/create-monthly-schedule-plan.dto';
 import { SaveSchedulePlanEntriesDto } from './dto/save-schedule-plan-entries.dto';
 import { CreateScheduleChangeDto } from './dto/create-schedule-change.dto';
 import {
   assertNoEmployeeOverlaps,
+  calculateMonthlyCoverageTargets,
   calculateCoverageSummary,
+  normalizePostCoveragePolicy,
+  PostCoveragePolicy,
   splitIntervalByCalendarDate,
 } from './schedule-planning-calculator';
 import { DateUtil } from '../common/utils/date.util';
@@ -52,9 +57,15 @@ export function calculateMonthlyCoverageMinutes(
   year: number,
   month: number,
   dailyCoverageMinutes: number,
+  coverageMode: SchedulePostCoverageMode = SchedulePostCoverageMode.CONTINUOUS_24_7,
+  coverageMinutesByWeekday?: unknown,
 ): number {
-  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
-  return daysInMonth * dailyCoverageMinutes;
+  const policy = normalizePostCoveragePolicy({
+    coverageMode,
+    dailyCoverageMinutes,
+    coverageMinutesByWeekday,
+  });
+  return calculateMonthlyCoverageTargets(year, month, policy).targetMinutes;
 }
 
 @Injectable()
@@ -161,15 +172,78 @@ export class SchedulePlanningService {
     });
     if (existing) throw new ConflictException('Bu post kodi allaqachon mavjud');
 
+    const coverage = normalizePostCoveragePolicy(dto);
     return this.prisma.schedulePost.create({
       data: {
         hospitalId,
         departmentId: dto.departmentId,
         name: dto.name.trim(),
         code,
-        dailyCoverageMinutes: dto.dailyCoverageMinutes ?? 1440,
+        coverageMode: coverage.coverageMode,
+        dailyCoverageMinutes: coverage.dailyCoverageMinutes,
+        coverageMinutesByWeekday:
+          coverage.coverageMinutesByWeekday ?? Prisma.JsonNull,
       },
       include: { department: true },
+    });
+  }
+
+  async updatePost(
+    hospitalId: string,
+    postId: string,
+    dto: UpdateSchedulePostDto,
+  ) {
+    await this.requirePostCoverage(hospitalId);
+    const post = await this.prisma.schedulePost.findFirst({
+      where: { id: postId, hospitalId },
+    });
+    if (!post) throw new NotFoundException('Post topilmadi');
+
+    const code = dto.code?.trim().toUpperCase() ?? post.code;
+    const duplicate = await this.prisma.schedulePost.findFirst({
+      where: { hospitalId, code, id: { not: post.id } },
+      select: { id: true },
+    });
+    if (duplicate)
+      throw new ConflictException('Bu post kodi allaqachon mavjud');
+
+    const coverage = normalizePostCoveragePolicy({
+      coverageMode: dto.coverageMode ?? post.coverageMode,
+      dailyCoverageMinutes:
+        dto.dailyCoverageMinutes ?? post.dailyCoverageMinutes,
+      coverageMinutesByWeekday:
+        dto.coverageMinutesByWeekday ?? post.coverageMinutesByWeekday,
+    });
+    const coverageJson = coverage.coverageMinutesByWeekday ?? Prisma.JsonNull;
+
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.schedulePost.update({
+        where: { id: post.id },
+        data: {
+          ...(dto.name !== undefined && { name: dto.name.trim() }),
+          code,
+          coverageMode: coverage.coverageMode,
+          dailyCoverageMinutes: coverage.dailyCoverageMinutes,
+          coverageMinutesByWeekday: coverageJson,
+        },
+        include: { department: true },
+      });
+
+      // Qoralama hali tasdiqlanmagan: yangi qoida shu rejalarga qo'llanadi.
+      // SUBMITTED/APPROVED rejalar esa audit uchun o'z snapshotida qoladi.
+      await tx.monthlySchedulePlan.updateMany({
+        where: {
+          postId: post.id,
+          hospitalId,
+          status: MonthlySchedulePlanStatus.DRAFT,
+        },
+        data: {
+          coverageMode: coverage.coverageMode,
+          dailyCoverageMinutes: coverage.dailyCoverageMinutes,
+          coverageMinutesByWeekday: coverageJson,
+        },
+      });
+      return updated;
     });
   }
 
@@ -202,7 +276,12 @@ export class SchedulePlanningService {
 
     const post = await this.prisma.schedulePost.findFirst({
       where: { id: dto.postId, hospitalId, isActive: true },
-      select: { id: true, dailyCoverageMinutes: true },
+      select: {
+        id: true,
+        coverageMode: true,
+        dailyCoverageMinutes: true,
+        coverageMinutesByWeekday: true,
+      },
     });
     if (!post) {
       throw new BadRequestException(
@@ -266,6 +345,10 @@ export class SchedulePlanningService {
         month: dto.month,
         version: (latest?.version ?? 0) + 1,
         createdById,
+        coverageMode: post.coverageMode,
+        dailyCoverageMinutes: post.dailyCoverageMinutes,
+        coverageMinutesByWeekday:
+          post.coverageMinutesByWeekday ?? Prisma.JsonNull,
       },
       include: { post: { include: { department: true } } },
     });
@@ -274,6 +357,8 @@ export class SchedulePlanningService {
       dto.year,
       dto.month,
       post.dailyCoverageMinutes,
+      post.coverageMode,
+      post.coverageMinutesByWeekday,
     );
     return {
       ...plan,
@@ -739,22 +824,24 @@ export class SchedulePlanningService {
     }
     assertNoEmployeeOverlaps([...effectiveEntries, ...otherEntries]);
 
+    const coveragePolicy = this.planCoveragePolicy(plan);
+    const coverageTargets = calculateMonthlyCoverageTargets(
+      plan.year,
+      plan.month,
+      coveragePolicy,
+    );
     const summary = calculateCoverageSummary(
       effectiveEntries,
       plan.year,
       plan.month,
-      calculateMonthlyCoverageMinutes(
-        plan.year,
-        plan.month,
-        plan.post.dailyCoverageMinutes,
-      ),
+      coverageTargets.targetMinutes,
     );
     const overfilledDay = Object.entries(summary.byDate).find(
-      ([, minutes]) => minutes > plan.post.dailyCoverageMinutes,
+      ([date, minutes]) => minutes > (coverageTargets.byDate[date] ?? 0),
     );
     if (overfilledDay || summary.excessMinutes > 0) {
       const detail = overfilledDay
-        ? `: ${overfilledDay[0]} (${overfilledDay[1] / 60}/${plan.post.dailyCoverageMinutes / 60} soat)`
+        ? `: ${overfilledDay[0]} (${overfilledDay[1] / 60}/${(coverageTargets.byDate[overfilledDay[0]] ?? 0) / 60} soat)`
         : '';
       throw new BadRequestException(`Post soati limitdan oshgan${detail}`);
     }
@@ -1580,10 +1667,36 @@ export class SchedulePlanningService {
     }));
   }
 
+  private planCoveragePolicy(plan: {
+    coverageMode?: SchedulePostCoverageMode | null;
+    dailyCoverageMinutes?: number | null;
+    coverageMinutesByWeekday?: unknown;
+    post: {
+      coverageMode?: SchedulePostCoverageMode | null;
+      dailyCoverageMinutes: number;
+      coverageMinutesByWeekday?: unknown;
+    };
+  }): PostCoveragePolicy {
+    return normalizePostCoveragePolicy({
+      coverageMode: plan.coverageMode ?? plan.post.coverageMode,
+      dailyCoverageMinutes:
+        plan.dailyCoverageMinutes ?? plan.post.dailyCoverageMinutes,
+      coverageMinutesByWeekday:
+        plan.coverageMinutesByWeekday ?? plan.post.coverageMinutesByWeekday,
+    });
+  }
+
   private buildPlanSummary(plan: {
     year: number;
     month: number;
-    post: { dailyCoverageMinutes: number };
+    coverageMode?: SchedulePostCoverageMode | null;
+    dailyCoverageMinutes?: number | null;
+    coverageMinutesByWeekday?: unknown;
+    post: {
+      coverageMode?: SchedulePostCoverageMode | null;
+      dailyCoverageMinutes: number;
+      coverageMinutesByWeekday?: unknown;
+    };
     entries: Array<{
       employeeId: string;
       entryType: SchedulePlanEntryType;
@@ -1591,16 +1704,16 @@ export class SchedulePlanningService {
       endsAt: Date | null;
     }>;
   }) {
-    const targetMinutes = calculateMonthlyCoverageMinutes(
+    const coverageTargets = calculateMonthlyCoverageTargets(
       plan.year,
       plan.month,
-      plan.post.dailyCoverageMinutes,
+      this.planCoveragePolicy(plan),
     );
     const summary = calculateCoverageSummary(
       plan.entries,
       plan.year,
       plan.month,
-      targetMinutes,
+      coverageTargets.targetMinutes,
     );
     const daysInMonth = new Date(
       Date.UTC(plan.year, plan.month, 0),
@@ -1610,7 +1723,7 @@ export class SchedulePlanningService {
       return {
         date,
         plannedMinutes: summary.byDate[date] ?? 0,
-        targetMinutes: plan.post.dailyCoverageMinutes,
+        targetMinutes: coverageTargets.byDate[date] ?? 0,
       };
     });
     return { ...summary, days };
