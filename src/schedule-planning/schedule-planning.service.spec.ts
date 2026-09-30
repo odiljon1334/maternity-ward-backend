@@ -45,12 +45,14 @@ describe('SchedulePlanningService', () => {
           id: 'plan-1',
           ...data,
         })),
-        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         update: jest.fn().mockImplementation(({ data }) => data),
+        findUnique: jest.fn().mockResolvedValue({ id: 'plan-1' }),
       },
       monthlyScheduleEntry: {
         findFirst: jest.fn(),
         findMany: jest.fn().mockResolvedValue([]),
+        update: jest.fn().mockResolvedValue({}),
         deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
         createMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
@@ -71,16 +73,22 @@ describe('SchedulePlanningService', () => {
           id: 'change-1',
           ...data,
         })),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findUnique: jest.fn().mockResolvedValue({ id: 'change-1' }),
+        count: jest.fn().mockResolvedValue(0),
       },
       schedule: {
         findUnique: jest.fn().mockResolvedValue(null),
+        findMany: jest.fn().mockResolvedValue([]),
         update: jest.fn().mockResolvedValue({}),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
         upsert: jest.fn().mockResolvedValue({}),
         deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
       attendanceRecord: {
         count: jest.fn().mockResolvedValue(0),
       },
+      $queryRaw: jest.fn().mockResolvedValue([{ ok: 1 }]),
       $transaction: jest.fn(async (fn: any) => fn(prisma)),
     };
 
@@ -238,10 +246,14 @@ describe('SchedulePlanningService', () => {
       where: { schedule: { sourcePlanId: 'october-plan' } },
     });
     expect(prisma.schedule.deleteMany).toHaveBeenCalledWith({
-      where: { sourcePlanId: 'october-plan' },
+      where: expect.objectContaining({ sourcePlanId: 'october-plan' }),
     });
-    expect(prisma.monthlySchedulePlan.update).toHaveBeenCalledWith({
-      where: { id: 'october-plan' },
+    expect(prisma.monthlySchedulePlan.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'october-plan',
+        hospitalId: 'hospital-1',
+        status: MonthlySchedulePlanStatus.APPROVED,
+      },
       data: expect.objectContaining({
         status: MonthlySchedulePlanStatus.DRAFT,
         submittedAt: null,
@@ -468,9 +480,12 @@ describe('SchedulePlanningService', () => {
 
     await service.submitPlan('hospital-1', 'october-plan');
 
-    expect(prisma.monthlySchedulePlan.update).toHaveBeenCalledWith(
+    expect(prisma.monthlySchedulePlan.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: 'october-plan' },
+        where: expect.objectContaining({
+          id: 'october-plan',
+          status: MonthlySchedulePlanStatus.DRAFT,
+        }),
         data: expect.objectContaining({
           status: MonthlySchedulePlanStatus.SUBMITTED,
         }),
