@@ -63,7 +63,16 @@ FRONTEND_PID=$!
 echo ""
 echo "▶ ngrok tunnellar ochilmoqda..."
 sleep 4
-ngrok start --all --config "$BACKEND_DIR/scripts/ngrok.yml" &
+# Token repo'dagi ngrok.yml'da emas: NGROK_AUTHTOKEN yoki ngrok'ning
+# o'z sozlamasi (ngrok config add-authtoken) ishlatiladi.
+NGROK_ARGS=(start --all --config "$BACKEND_DIR/scripts/ngrok.yml")
+if [ -n "${NGROK_AUTHTOKEN:-}" ]; then
+  NGROK_ARGS+=(--authtoken "$NGROK_AUTHTOKEN")
+else
+  DEFAULT_NGROK_CONFIG="$(ngrok config check 2>/dev/null | sed -n 's/^Valid configuration file at //p')"
+  [ -n "$DEFAULT_NGROK_CONFIG" ] && NGROK_ARGS+=(--config "$DEFAULT_NGROK_CONFIG")
+fi
+ngrok "${NGROK_ARGS[@]}" &
 NGROK_PID=$!
 
 sleep 3

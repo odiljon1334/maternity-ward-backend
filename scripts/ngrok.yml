@@ -1,5 +1,6 @@
 version: "2"
-authtoken: 3AGrr1pnnwo8vgOgu7hgj6ZIk2G_59dUfojDRLHZBnQFLaFoW
+# Token repo'da SAQLANMAYDI. Bir marta: ngrok config add-authtoken <TOKEN>
+# yoki NGROK_AUTHTOKEN muhit o'zgaruvchisi (scripts/dev-start.sh uzatadi).
 
 tunnels:
   # Backend API (NestJS :5001) — FAQAT SHUNGA ngrok kerak
