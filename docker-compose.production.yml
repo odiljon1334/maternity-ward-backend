@@ -212,6 +212,12 @@ services:
       MTX_HLSALWAYSREMUX: "yes"
       MTX_HLSSEGMENTCOUNT: "3"
       MTX_HLSSEGMENTDURATION: "1s"
+      # Har bir yuborish/o'qishni backend hal qiladi (live-access.ts):
+      # yuborish — .env.prod dagi MEDIAMTX_PUBLISH_USER/PASS (o'rnatilmagan
+      # bo'lsa eskicha loginsiz), o'qish — faqat ichki tarmoqdan (nginx /live/,
+      # u yerda foydalanuvchi sessiyasi tekshiriladi).
+      MTX_AUTHMETHOD: http
+      MTX_AUTHHTTPADDRESS: http://backend:5001/api/v1/internal/mediamtx-auth
     ports:
       - "8554:8554"
       - "1935:1935"

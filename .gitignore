@@ -39,3 +39,7 @@ nginx/certs/
 
 # Lokal DB backup fayllari (S3'ga yuklanadi, git'ga kerak emas)
 backups/
+
+# Lokal sirlar (kamera/ngrok) — hech qachon commit qilinmaydi
+scripts/ffmpeg-agent/agent.env
+scripts/ffmpeg-agent/agent.env.bat

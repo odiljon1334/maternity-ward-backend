@@ -1766,10 +1766,11 @@ export class AttendanceService {
     );
 
     if (!geoMatch) {
-      // Hech qanday markaz belgilanmagan — tekshirib bo'lmaydi.
-      // Direktor/Admin Sozlamalar → "Check-in hududi" orqali belgilashi kerak.
+      // Hech qanday markaz belgilanmagan — masofani tekshirib bo'lmaydi.
+      // Kelish pastda (holat aniqlangach) rad etiladi; ketishga ruxsat
+      // beriladi, aks holda markazsiz kelgan xodim smenani yopa olmaydi.
       this.logger.warn(
-        `Geofence markazi yo'q: hospital=${employee.hospitalId} — masofa tekshirilmadi`,
+        `Geofence markazi yo'q: hospital=${employee.hospitalId} employee=${employee.id}`,
       );
     } else if (!geoMatch.inside) {
       const distStr = formatDistance(Math.round(geoMatch.distance));
@@ -1829,6 +1830,27 @@ export class AttendanceService {
     // XAVFSIZLIK (2026-09-23 audit): check-in uchun selfie MAJBURIY. Ilgari
     // fayl yuborilmasa yuz tekshiruvi butunlay o'tkazib yuborilardi (hatto
     // strict rejimda ham). Mobil ilova har doim selfie yuboradi.
+    // XAVFSIZLIK (reja.md, 1-band): GPS markazi yo'q xodim istalgan joydan
+    // kelishni belgilay olardi. Favqulodda holat uchun o'chirish mumkin:
+    // CHECKIN_REQUIRE_GEOFENCE=false.
+    if (
+      isCheckIn &&
+      !geoMatch &&
+      process.env.CHECKIN_REQUIRE_GEOFENCE !== 'false'
+    ) {
+      this.auditLog.log({
+        userId,
+        hospitalId: employee.hospitalId,
+        action: 'CHECKIN_NO_GEOFENCE',
+        entity: 'AttendanceRecord',
+        entityId: employee.id,
+        details: { employeeId: employee.id },
+      });
+      throw new BadRequestException(
+        "Ish joyingizning GPS hududi hali belgilanmagan, shuning uchun ilovadan kelishni belgilab bo'lmaydi. Rahbariyatga murojaat qiling: Sozlamalar → Joylashuv bo'limida asosiy bino yoki ish joyi belgilanishi kerak.",
+      );
+    }
+
     if (isCheckIn && !selfieBuffer?.length) {
       throw new BadRequestException(
         'Check-in uchun selfie kerak. Kamerani yoqib, suratga tushing va qaytadan yuboring.',

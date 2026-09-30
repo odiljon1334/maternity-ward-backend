@@ -12,16 +12,21 @@
 :: ═══════════════════════════════════════════════════════════════════
 
 :: ─── SOZLAMALAR ─────────────────────────────────────────────────
-set VPS_HOST=vps-ip-yoki-domen
-set VPS_RTSP_PORT=8554
-set HOSPITAL_ID=hospital1
+:: Parollar shu faylda SAQLANMAYDI. Ular yonidagi agent.env.bat dan olinadi
+:: (namuna: agent.env.bat.example — nusxa olib to'ldiring).
+if not exist "%~dp0agent.env.bat" (
+  echo agent.env.bat topilmadi. agent.env.bat.example dan nusxa oling va to'ldiring.
+  pause
+  exit /b 1
+)
+call "%~dp0agent.env.bat"
+if "%VPS_RTSP_PORT%"=="" set VPS_RTSP_PORT=8554
+if "%CAM_USER%"=="" set CAM_USER=admin
+set PUBLISH_AUTH=
+if not "%PUBLISH_USER%"=="" set PUBLISH_AUTH=%PUBLISH_USER%:%PUBLISH_PASS%@
 
-:: Kameralar (har bir qator uchun alohida ffmpeg oynasi ochiladi)
-set CAM1_NAME=cam1
-set CAM1_RTSP=rtsp://admin:Admin123@192.168.1.64:554/Streaming/Channels/101
-
-set CAM2_NAME=cam2
-set CAM2_RTSP=rtsp://admin:Admin123@192.168.1.65:554/Streaming/Channels/101
+set CAM1_RTSP=rtsp://%CAM_USER%:%CAM_PASS%@%CAM1_ADDR%
+set CAM2_RTSP=rtsp://%CAM_USER%:%CAM_PASS%@%CAM2_ADDR%
 
 :: ─── ISHGA TUSHIRISH ─────────────────────────────────────────────
 echo Maternity Ward FFmpeg Agent
@@ -30,11 +35,11 @@ echo.
 
 :: Cam1
 start "FFmpeg-%CAM1_NAME%" /min cmd /c ^
-  "ffmpeg -rtsp_transport tcp -i %CAM1_RTSP% -c:v copy -c:a aac -f rtsp rtsp://%VPS_HOST%:%VPS_RTSP_PORT%/%HOSPITAL_ID%/%CAM1_NAME% -loglevel warning"
+  "ffmpeg -rtsp_transport tcp -i %CAM1_RTSP% -c:v copy -c:a aac -f rtsp rtsp://%PUBLISH_AUTH%%VPS_HOST%:%VPS_RTSP_PORT%/%HOSPITAL_ID%/%CAM1_NAME% -loglevel warning"
 
 :: Cam2
 start "FFmpeg-%CAM2_NAME%" /min cmd /c ^
-  "ffmpeg -rtsp_transport tcp -i %CAM2_RTSP% -c:v copy -c:a aac -f rtsp rtsp://%VPS_HOST%:%VPS_RTSP_PORT%/%HOSPITAL_ID%/%CAM2_NAME% -loglevel warning"
+  "ffmpeg -rtsp_transport tcp -i %CAM2_RTSP% -c:v copy -c:a aac -f rtsp rtsp://%PUBLISH_AUTH%%VPS_HOST%:%VPS_RTSP_PORT%/%HOSPITAL_ID%/%CAM2_NAME% -loglevel warning"
 
 echo Stream boshlandi!
 echo HLS URL lar:

@@ -18,16 +18,28 @@
 # ─── SOZLAMALAR ─────────────────────────────────────────────────────
 # Bu qiymatlarni o'zgartiring:
 
-VPS_HOST="vps-ip-yoki-domen"   # Masalan: 185.10.20.30 yoki maternity.uz
-VPS_RTSP_PORT="8554"
-HOSPITAL_ID="hospital1"         # Har bir poliklinika uchun unique (kod: TUG-01)
+# Parollar shu faylda SAQLANMAYDI (repo'ga tushib qolmasin). Ular yonidagi
+# agent.env faylidan o'qiladi — namunasi: agent.env.example.
+AGENT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ -f "$AGENT_DIR/agent.env" ]; then
+  # shellcheck disable=SC1091
+  . "$AGENT_DIR/agent.env"
+else
+  echo "agent.env topilmadi. Nusxa oling: cp agent.env.example agent.env va to'ldiring."
+  exit 1
+fi
 
-# Kameralar ro'yxati: "kamera_nomi|rtsp_url"
-CAMERAS=(
-  "cam1|rtsp://admin:Admin123@192.168.1.64:554/Streaming/Channels/101"
-  "cam2|rtsp://admin:Admin123@192.168.1.65:554/Streaming/Channels/101"
-  "cam3|rtsp://admin:Admin123@192.168.1.66:554/Streaming/Channels/101"
-)
+VPS_HOST="${VPS_HOST:?VPS_HOST agent.env da kerak}"
+VPS_RTSP_PORT="${VPS_RTSP_PORT:-8554}"
+HOSPITAL_ID="${HOSPITAL_ID:?HOSPITAL_ID agent.env da kerak}"
+CAM_USER="${CAM_USER:-admin}"
+CAM_PASS="${CAM_PASS:?CAM_PASS agent.env da kerak}"
+# VPS'ga oqim yuborish logini (MediaMTX publish). Bo'sh bo'lsa — loginsiz.
+PUBLISH_USER="${PUBLISH_USER:-}"
+PUBLISH_PASS="${PUBLISH_PASS:-}"
+
+# Kameralar ro'yxati: "kamera_nomi|ip:port/yo'l" (login/parol CAM_USER/CAM_PASS dan)
+CAMERAS=(${CAMERAS_LIST:-"cam1|192.168.1.64:554/Streaming/Channels/101"})
 
 # ─── FFMPEG PATH ────────────────────────────────────────────────────
 FFMPEG_BIN=$(which ffmpeg)
@@ -50,9 +62,11 @@ start_camera() {
   local CAM_NAME="$1"
   local RTSP_SRC="$2"
   local STREAM_PATH="${HOSPITAL_ID}/${CAM_NAME}"
-  local VPS_RTSP="rtsp://${VPS_HOST}:${VPS_RTSP_PORT}/${STREAM_PATH}"
+  local AUTH=""
+  [ -n "$PUBLISH_USER" ] && AUTH="${PUBLISH_USER}:${PUBLISH_PASS}@"
+  local VPS_RTSP="rtsp://${AUTH}${VPS_HOST}:${VPS_RTSP_PORT}/${STREAM_PATH}"
 
-  echo "▶ $CAM_NAME → $VPS_RTSP"
+  echo "▶ $CAM_NAME → rtsp://${VPS_HOST}:${VPS_RTSP_PORT}/${STREAM_PATH}"
 
   while true; do
     $FFMPEG_BIN \
@@ -75,7 +89,7 @@ start_camera() {
 # Barcha kameralarni parallel ishga tushirish
 for CAMERA in "${CAMERAS[@]}"; do
   CAM_NAME="${CAMERA%%|*}"
-  RTSP_URL="${CAMERA##*|}"
+  RTSP_URL="rtsp://${CAM_USER}:${CAM_PASS}@${CAMERA##*|}"
   start_camera "$CAM_NAME" "$RTSP_URL" &
   PIDS+=($!)
 done

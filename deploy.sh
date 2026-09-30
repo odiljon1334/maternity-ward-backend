@@ -290,6 +290,15 @@ if [ "$FRONTEND_HEALTHY" = false ]; then
     error "Yangi frontend health check'dan o'tmadi. Avtomatik rollback bajarildi; yuqoridagi natijani tekshiring."
 fi
 
+# ── 8b. MediaMTX ─────────────────────────────────────────────
+# Kamera relay'ining sozlamasi (masalan backend orqali auth) o'zgargan bo'lsa
+# qayta yaratiladi; o'zgarmagan bo'lsa `up -d` hech narsa qilmaydi. Backend
+# tayyor bo'lgandan keyin — MediaMTX har bir oqimni backend'dan so'raydi.
+# Agent'lar uzilgan zahoti 5 soniyada qayta ulanadi.
+log "8b. MediaMTX sozlamasi tekshirilmoqda..."
+compose up -d --no-deps mediamtx
+success "MediaMTX yangilandi"
+
 # ── 9. Nginx reload ──────────────────────────────────────────
 # `nginx -s reload` graceful: mavjud ulanishlar uzilmaydi, yangi workerlar
 # tekshirilgan konfiguratsiya bilan ishga tushadi.

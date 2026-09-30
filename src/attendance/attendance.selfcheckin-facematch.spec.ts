@@ -45,7 +45,8 @@ describe('AttendanceService.selfCheckIn — Qaror 4 yuz tekshiruvi gate', () => 
     gpsLng: null,
     gpsRadius: null,
     baseSalary: 3000000,
-    hospital: { gpsLat: null, gpsLng: null, gpsRadius: null },
+    // Xodim turgan nuqtada asosiy bino — bu testlar yuz tekshiruvini sinaydi
+    hospital: { gpsLat: 41.31, gpsLng: 69.28, gpsRadius: 200 },
     department: null,
     position: null,
     workSites: [],
@@ -558,6 +559,69 @@ describe('AttendanceService.selfCheckIn — Qaror 4 yuz tekshiruvi gate', () => 
           selfieBuffer,
         ),
       ).rejects.toThrow(/aniqligi past/);
+    });
+  });
+
+  describe('GPS markazi yo‘q muassasa (geofence)', () => {
+    const noCenter = {
+      ...employee,
+      hospital: { gpsLat: null, gpsLng: null, gpsRadius: null },
+    };
+    beforeEach(() => {
+      prisma.user.findUnique.mockResolvedValue({ employee: noCenter });
+      faceMatch.verify.mockResolvedValue({
+        mismatch: false,
+        skipped: false,
+        similarity: 0.8,
+      });
+    });
+
+    it('kelish rad etiladi va audit qilinadi — istalgan joydan check-in yo‘q', async () => {
+      await expect(
+        service.selfCheckIn('user-1', dto as any, selfieBuffer),
+      ).rejects.toThrow(/GPS hududi hali belgilanmagan/);
+
+      expect(prisma.attendanceRecord.create).not.toHaveBeenCalled();
+      expect(faceMatch.verify).not.toHaveBeenCalled();
+      expect(auditLog.log).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'CHECKIN_NO_GEOFENCE' }),
+      );
+    });
+
+    it('CHECKIN_REQUIRE_GEOFENCE=false — favqulodda holatda eski xulq', async () => {
+      process.env.CHECKIN_REQUIRE_GEOFENCE = 'false';
+      try {
+        const res = await service.selfCheckIn(
+          'user-1',
+          dto as any,
+          selfieBuffer,
+        );
+        expect(res.action).toBe('CHECK_IN');
+      } finally {
+        delete process.env.CHECKIN_REQUIRE_GEOFENCE;
+      }
+    });
+
+    it('ketish (check-out) bloklanmaydi — markazsiz kelgan xodim smenani yopa oladi', async () => {
+      prisma.attendanceRecord.findFirst.mockResolvedValue({
+        id: 'att-1',
+        checkIn: new Date(Date.now() - 8 * 3_600_000),
+        checkOut: null,
+        expectedCheckIn: new Date(Date.now() - 8 * 3_600_000),
+        expectedCheckOut: new Date(Date.now() - 60_000),
+        workDate: new Date(),
+      });
+
+      const result = await service
+        .selfCheckIn('user-1', dto as any, selfieBuffer)
+        .catch((e: Error) => e);
+
+      expect(String((result as Error)?.message ?? '')).not.toMatch(
+        /GPS hududi/,
+      );
+      expect(auditLog.log).not.toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'CHECKIN_NO_GEOFENCE' }),
+      );
     });
   });
 });
