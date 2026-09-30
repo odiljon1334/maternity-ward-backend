@@ -267,6 +267,24 @@ export class SchedulePlanningController {
     );
   }
 
+  @Post('plans/:id/reopen')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  reopenApprovedPlan(
+    @Param('id') id: string,
+    @CurrentUser('hospitalId') hospitalId: string | null,
+    @Query('targetHospitalId') targetHospitalId: string | undefined,
+    @Body('reason') reason: string,
+  ) {
+    if (!reason?.trim()) {
+      throw new BadRequestException('Qayta tahrirlash sababini kiriting');
+    }
+    return this.service.reopenApprovedPlan(
+      this.resolveHospitalId(hospitalId, targetHospitalId),
+      id,
+      reason,
+    );
+  }
+
   @Post('changes')
   @Roles(...CHANGE_REQUEST_ROLES)
   createChangeRequest(

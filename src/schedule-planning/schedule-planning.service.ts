@@ -937,6 +937,59 @@ export class SchedulePlanningService {
     });
   }
 
+  async reopenApprovedPlan(hospitalId: string, planId: string, reason: string) {
+    await this.requirePostCoverage(hospitalId);
+    const plan = await this.prisma.monthlySchedulePlan.findFirst({
+      where: { id: planId, hospitalId },
+      select: {
+        id: true,
+        year: true,
+        month: true,
+        status: true,
+      },
+    });
+    if (!plan) throw new NotFoundException('Oylik grafik topilmadi');
+    if (plan.status !== MonthlySchedulePlanStatus.APPROVED) {
+      throw new BadRequestException(
+        'Faqat tasdiqlangan grafik qayta tahrirlashga ochiladi',
+      );
+    }
+
+    const monthStart = dayjs
+      .tz(`${plan.year}-${String(plan.month).padStart(2, '0')}-01`, TZ)
+      .startOf('day');
+    if (!dayjs().tz(TZ).startOf('day').isBefore(monthStart)) {
+      throw new BadRequestException(
+        'Boshlangan yoki o‘tgan oy grafigini qayta ochib bo‘lmaydi',
+      );
+    }
+
+    const attendanceCount = await this.prisma.attendanceRecord.count({
+      where: { schedule: { sourcePlanId: plan.id } },
+    });
+    if (attendanceCount) {
+      throw new ConflictException(
+        'Grafikka bog‘langan davomat mavjud; uni qayta ochib bo‘lmaydi',
+      );
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.schedule.deleteMany({
+        where: { sourcePlanId: plan.id },
+      });
+      return tx.monthlySchedulePlan.update({
+        where: { id: plan.id },
+        data: {
+          status: MonthlySchedulePlanStatus.DRAFT,
+          submittedAt: null,
+          approvedById: null,
+          approvedAt: null,
+          decisionNote: `Qayta tahrirlash: ${reason.trim()}`,
+        },
+      });
+    });
+  }
+
   async rejectPlan(
     hospitalId: string,
     planId: string,

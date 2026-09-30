@@ -76,6 +76,10 @@ describe('SchedulePlanningService', () => {
         findUnique: jest.fn().mockResolvedValue(null),
         update: jest.fn().mockResolvedValue({}),
         upsert: jest.fn().mockResolvedValue({}),
+        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+      attendanceRecord: {
+        count: jest.fn().mockResolvedValue(0),
       },
       $transaction: jest.fn(async (fn: any) => fn(prisma)),
     };
@@ -211,6 +215,42 @@ describe('SchedulePlanningService', () => {
 
     expect(result.version).toBe(1);
     expect(result.targetCoverageHours).toBe(720);
+  });
+
+  it('reopens a future approved plan and removes its published schedules', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-09-30T10:00:00+05:00'));
+    const { prisma, service } = setup(SchedulePlanningMode.POST_COVERAGE);
+    prisma.monthlySchedulePlan.findFirst.mockReset().mockResolvedValue({
+      id: 'october-plan',
+      hospitalId: 'hospital-1',
+      year: 2026,
+      month: 10,
+      status: MonthlySchedulePlanStatus.APPROVED,
+    });
+
+    await service.reopenApprovedPlan(
+      'hospital-1',
+      'october-plan',
+      'Xodim qatori noto‘g‘ri saqlangan',
+    );
+
+    expect(prisma.attendanceRecord.count).toHaveBeenCalledWith({
+      where: { schedule: { sourcePlanId: 'october-plan' } },
+    });
+    expect(prisma.schedule.deleteMany).toHaveBeenCalledWith({
+      where: { sourcePlanId: 'october-plan' },
+    });
+    expect(prisma.monthlySchedulePlan.update).toHaveBeenCalledWith({
+      where: { id: 'october-plan' },
+      data: expect.objectContaining({
+        status: MonthlySchedulePlanStatus.DRAFT,
+        submittedAt: null,
+        approvedById: null,
+        approvedAt: null,
+        decisionNote: 'Qayta tahrirlash: Xodim qatori noto‘g‘ri saqlangan',
+      }),
+    });
+    jest.useRealTimers();
   });
 
   it('shows the previous active overnight shift as October carry-in', async () => {
