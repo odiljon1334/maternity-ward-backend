@@ -1,4 +1,8 @@
-import { TelegramAccessService, hashLinkToken, LINK_TOKEN_TTL_MS } from './telegram-access.service';
+import {
+  TelegramAccessService,
+  hashLinkToken,
+  LINK_TOKEN_TTL_MS,
+} from './telegram-access.service';
 
 function makePrisma(row: any) {
   const prisma: any = {
@@ -21,7 +25,12 @@ const tokenRow = (over: any = {}) => ({
   employeeId: 'e1',
   expiresAt: new Date(Date.now() + 60_000),
   usedAt: null,
-  employee: { id: 'e1', fullName: 'Karimova Dilnoza', firedAt: null, hospital: { name: 'H1' } },
+  employee: {
+    id: 'e1',
+    fullName: 'Karimova Dilnoza',
+    firedAt: null,
+    hospital: { name: 'H1' },
+  },
   ...over,
 });
 
@@ -34,20 +43,31 @@ describe('TelegramAccessService — shaxsiy ulanish', () => {
     const saved = prisma.telegramLinkToken.create.mock.calls[0][0].data;
     expect(saved.tokenHash).toBe(hashLinkToken(token));
     expect(JSON.stringify(saved)).not.toContain(token);
-    expect(expiresAt.getTime() - Date.now()).toBeLessThanOrEqual(LINK_TOKEN_TTL_MS);
+    expect(expiresAt.getTime() - Date.now()).toBeLessThanOrEqual(
+      LINK_TOKEN_TTL_MS,
+    );
     // Eski ishlatilmagan havolalar bekor qilinadi
-    expect(prisma.telegramLinkToken.deleteMany).toHaveBeenCalledWith({ where: { employeeId: 'e1', usedAt: null } });
+    expect(prisma.telegramLinkToken.deleteMany).toHaveBeenCalledWith({
+      where: { employeeId: 'e1', usedAt: null },
+    });
   });
 
   it('yaroqli token → chat xodimga bog‘lanadi, eslatmalar yoqiladi', async () => {
     const prisma = makePrisma(tokenRow());
     const svc = new TelegramAccessService(prisma);
     const res = await svc.consumeLinkToken('A'.repeat(24), '555');
-    expect(res).toEqual({ employeeId: 'e1', fullName: 'Karimova Dilnoza', hospitalName: 'H1' });
+    expect(res).toEqual({
+      employeeId: 'e1',
+      fullName: 'Karimova Dilnoza',
+      hospitalName: 'H1',
+    });
     expect(prisma.employee.update).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 'e1' },
-        data: expect.objectContaining({ telegramChatId: '555', telegramReminders: true }),
+        data: expect.objectContaining({
+          telegramChatId: '555',
+          telegramReminders: true,
+        }),
       }),
     );
   });
@@ -56,7 +76,17 @@ describe('TelegramAccessService — shaxsiy ulanish', () => {
     const cases: [any, string][] = [
       [tokenRow({ expiresAt: new Date(Date.now() - 1) }), 'expired'],
       [tokenRow({ usedAt: new Date() }), 'invalid'],
-      [tokenRow({ employee: { id: 'e1', fullName: 'X', firedAt: new Date(), hospital: null } }), 'invalid'],
+      [
+        tokenRow({
+          employee: {
+            id: 'e1',
+            fullName: 'X',
+            firedAt: new Date(),
+            hospital: null,
+          },
+        }),
+        'invalid',
+      ],
       [null, 'invalid'],
     ];
     for (const [row, expected] of cases) {
@@ -66,14 +96,22 @@ describe('TelegramAccessService — shaxsiy ulanish', () => {
       expect(prisma.employee.update).not.toHaveBeenCalled();
     }
     const prisma = makePrisma(tokenRow());
-    expect(await new TelegramAccessService(prisma).consumeLinkToken('bad token!', '1')).toBe('invalid');
+    expect(
+      await new TelegramAccessService(prisma).consumeLinkToken(
+        'bad token!',
+        '1',
+      ),
+    ).toBe('invalid');
     expect(prisma.telegramLinkToken.findUnique).not.toHaveBeenCalled();
   });
 
   it('parallel ikkinchi /start — token allaqachon band qilingan bo‘lsa bog‘lanmaydi', async () => {
     const prisma = makePrisma(tokenRow());
     prisma.telegramLinkToken.updateMany.mockResolvedValueOnce({ count: 0 });
-    const res = await new TelegramAccessService(prisma).consumeLinkToken('A'.repeat(24), '555');
+    const res = await new TelegramAccessService(prisma).consumeLinkToken(
+      'A'.repeat(24),
+      '555',
+    );
     expect(res).toBe('invalid');
     expect(prisma.employee.update).not.toHaveBeenCalled();
   });

@@ -834,7 +834,6 @@ model AttendanceRecord {
   updatedAt DateTime @updatedAt
 
   @@unique([employeeId, workDate])
-  @@index([employeeId, workDate])
   @@index([faceCheckPending, workDate])
   @@index([workDate])
 }

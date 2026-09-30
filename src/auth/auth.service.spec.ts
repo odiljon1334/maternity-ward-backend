@@ -54,7 +54,13 @@ function makeFakePrisma() {
         return { count: 0 };
       }),
       create: jest.fn(async ({ data }: any) => {
-        const token = { id: nextId(), attempts: 0, consumedAt: null, createdAt: new Date(), ...data };
+        const token = {
+          id: nextId(),
+          attempts: 0,
+          consumedAt: null,
+          createdAt: new Date(),
+          ...data,
+        };
         emailOtpTokens.push(token);
         return token;
       }),
@@ -80,7 +86,13 @@ function makeFakePrisma() {
 
     passwordResetToken: {
       create: jest.fn(async ({ data }: any) => {
-        const token = { id: nextId(), consumedAt: null, attempts: 0, createdAt: new Date(), ...data };
+        const token = {
+          id: nextId(),
+          consumedAt: null,
+          attempts: 0,
+          createdAt: new Date(),
+          ...data,
+        };
         passwordResetTokens.push(token);
         return token;
       }),
@@ -106,7 +118,8 @@ function makeFakePrisma() {
       update: jest.fn(async ({ where, data }: any) => {
         const t = passwordResetTokens.find((x) => x.id === where.id);
         const { attempts, ...rest } = data;
-        if (attempts?.increment) t.attempts = (t.attempts ?? 0) + attempts.increment;
+        if (attempts?.increment)
+          t.attempts = (t.attempts ?? 0) + attempts.increment;
         Object.assign(t, rest);
         return t;
       }),
@@ -121,13 +134,14 @@ function makeFakePrisma() {
         hit.forEach((t) => Object.assign(t, data));
         return { count: hit.length };
       }),
-      count: jest.fn(async ({ where }: any) =>
-        passwordResetTokens.filter(
-          (t) =>
-            t.userId === where.userId &&
-            t.channel === where.channel &&
-            t.createdAt >= where.createdAt.gte,
-        ).length,
+      count: jest.fn(
+        async ({ where }: any) =>
+          passwordResetTokens.filter(
+            (t) =>
+              t.userId === where.userId &&
+              t.channel === where.channel &&
+              t.createdAt >= where.createdAt.gte,
+          ).length,
       ),
     },
 
@@ -143,7 +157,10 @@ function makeFakePrisma() {
 describe('AuthService — Email tasdiqlash va parolni tiklash (1.1-band)', () => {
   let service: AuthService;
   let prisma: ReturnType<typeof makeFakePrisma>;
-  let mailService: { sendOtpEmail: jest.Mock; sendPasswordResetEmail: jest.Mock };
+  let mailService: {
+    sendOtpEmail: jest.Mock;
+    sendPasswordResetEmail: jest.Mock;
+  };
   let telegramService: { sendToChat: jest.Mock };
 
   beforeEach(async () => {
@@ -164,7 +181,10 @@ describe('AuthService — Email tasdiqlash va parolni tiklash (1.1-band)', () =>
         { provide: TelegramService, useValue: telegramService },
         {
           provide: ConfigService,
-          useValue: { get: (key: string) => (key === 'FRONTEND_URL' ? 'https://clinicuk24.com' : undefined) },
+          useValue: {
+            get: (key: string) =>
+              key === 'FRONTEND_URL' ? 'https://clinicuk24.com' : undefined,
+          },
         },
       ],
     }).compile();
@@ -172,7 +192,7 @@ describe('AuthService — Email tasdiqlash va parolni tiklash (1.1-band)', () =>
     service = module.get<AuthService>(AuthService);
   });
 
-  it('Email qo\'shish → OTP → tasdiqlash → parolni tiklash (email orqali) — TO\'LIQ OQIM', async () => {
+  it("Email qo'shish → OTP → tasdiqlash → parolni tiklash (email orqali) — TO'LIQ OQIM", async () => {
     const passwordHash = await bcrypt.hash('EskiParol123', 12);
     const user = prisma.__addUser({
       id: 'user-1',
@@ -184,7 +204,9 @@ describe('AuthService — Email tasdiqlash va parolni tiklash (1.1-band)', () =>
     });
 
     // 1) Email qo'shish — OTP yuborilishi kerak
-    await service.updateEmail(user.id, { email: 'direktor1@example.com' } as any);
+    await service.updateEmail(user.id, {
+      email: 'direktor1@example.com',
+    } as any);
     expect(user.email).toBe('direktor1@example.com');
     expect(user.emailVerifiedAt).toBeNull();
     expect(mailService.sendOtpEmail).toHaveBeenCalledTimes(1);
@@ -200,7 +222,9 @@ describe('AuthService — Email tasdiqlash va parolni tiklash (1.1-band)', () =>
     expect(user.emailVerifiedAt).toBeInstanceOf(Date);
 
     // 4) Parolni tiklash so'rovi — email orqali havola yuborilishi kerak
-    const result = await service.forgotPassword({ username: 'direktor1' } as any);
+    const result = await service.forgotPassword({
+      username: 'direktor1',
+    } as any);
     expect((result as any).channel).toBe('EMAIL');
     expect(mailService.sendPasswordResetEmail).toHaveBeenCalledTimes(1);
     const [, resetUrl] = mailService.sendPasswordResetEmail.mock.calls[0];
@@ -209,7 +233,10 @@ describe('AuthService — Email tasdiqlash va parolni tiklash (1.1-band)', () =>
 
     // 5) Noto'g'ri token bilan tiklash — rad etilishi kerak
     await expect(
-      service.resetPassword({ token: 'yolgon-token', newPassword: 'YangiParol456' } as any),
+      service.resetPassword({
+        token: 'yolgon-token',
+        newPassword: 'YangiParol456',
+      } as any),
     ).rejects.toThrow();
 
     // 6) To'g'ri token bilan yangi parol qo'yish
@@ -223,7 +250,7 @@ describe('AuthService — Email tasdiqlash va parolni tiklash (1.1-band)', () =>
     ).rejects.toThrow();
   });
 
-  it('Email yo\'q, lekin Telegram ulangan xodim — Telegram OTP orqali parolni tiklash', async () => {
+  it("Email yo'q, lekin Telegram ulangan xodim — Telegram OTP orqali parolni tiklash", async () => {
     const passwordHash = await bcrypt.hash('EskiParol123', 12);
     const user = prisma.__addUser({
       id: 'user-2',
@@ -234,7 +261,9 @@ describe('AuthService — Email tasdiqlash va parolni tiklash (1.1-band)', () =>
       employee: { fullName: 'Hamshira Ona', telegramChatId: '123456789' },
     });
 
-    const result = await service.forgotPassword({ username: 'hamshira1' } as any);
+    const result = await service.forgotPassword({
+      username: 'hamshira1',
+    } as any);
     expect((result as any).channel).toBe('TELEGRAM');
     expect(telegramService.sendToChat).toHaveBeenCalledTimes(1);
 
@@ -248,7 +277,9 @@ describe('AuthService — Email tasdiqlash va parolni tiklash (1.1-band)', () =>
       newPassword: 'YangiParolTG789',
     } as any);
 
-    expect(await bcrypt.compare('YangiParolTG789', user.passwordHash)).toBe(true);
+    expect(await bcrypt.compare('YangiParolTG789', user.passwordHash)).toBe(
+      true,
+    );
   });
 
   function addTgUser(id = 'user-tg') {
@@ -271,14 +302,26 @@ describe('AuthService — Email tasdiqlash va parolni tiklash (1.1-band)', () =>
     const wrong = code === '000000' ? '111111' : '000000';
     for (let i = 0; i < 4; i++) {
       await expect(
-        service.verifyResetOtp({ username: u.username, code: wrong, newPassword: 'YangiParol1' } as any),
+        service.verifyResetOtp({
+          username: u.username,
+          code: wrong,
+          newPassword: 'YangiParol1',
+        } as any),
       ).rejects.toThrow("Kod noto'g'ri");
     }
     await expect(
-      service.verifyResetOtp({ username: u.username, code: wrong, newPassword: 'YangiParol1' } as any),
+      service.verifyResetOtp({
+        username: u.username,
+        code: wrong,
+        newPassword: 'YangiParol1',
+      } as any),
     ).rejects.toThrow('Urinishlar soni tugadi');
     await expect(
-      service.verifyResetOtp({ username: u.username, code, newPassword: 'YangiParol1' } as any),
+      service.verifyResetOtp({
+        username: u.username,
+        code,
+        newPassword: 'YangiParol1',
+      } as any),
     ).rejects.toThrow();
     expect(u.passwordHash).toBe('x');
   });
@@ -294,25 +337,41 @@ describe('AuthService — Email tasdiqlash va parolni tiklash (1.1-band)', () =>
     const latest = lastCode();
     if (first !== latest) {
       await expect(
-        service.verifyResetOtp({ username: u.username, code: first, newPassword: 'YangiParol1' } as any),
+        service.verifyResetOtp({
+          username: u.username,
+          code: first,
+          newPassword: 'YangiParol1',
+        } as any),
       ).rejects.toThrow();
     }
-    await service.verifyResetOtp({ username: u.username, code: latest, newPassword: 'YangiParol1' } as any);
+    await service.verifyResetOtp({
+      username: u.username,
+      code: latest,
+      newPassword: 'YangiParol1',
+    } as any);
     expect(await bcrypt.compare('YangiParol1', u.passwordHash)).toBe(true);
     expect(u.credentialsChangedAt).toBeInstanceOf(Date);
     // Ishlatilgan kod qayta ishlamaydi
     await expect(
-      service.verifyResetOtp({ username: u.username, code: latest, newPassword: 'Boshqa12345' } as any),
+      service.verifyResetOtp({
+        username: u.username,
+        code: latest,
+        newPassword: 'Boshqa12345',
+      } as any),
     ).rejects.toThrow();
   });
 
-  it('OTP xeshi foydalanuvchiga bog\'langan — bir xil kod ikki hisobda unique xatosiz', async () => {
+  it("OTP xeshi foydalanuvchiga bog'langan — bir xil kod ikki hisobda unique xatosiz", async () => {
     const a = addTgUser('ua');
     const b = addTgUser('ub');
-    const spy = jest.spyOn(service as any, 'generateOtp').mockReturnValue('123456');
+    const spy = jest
+      .spyOn(service as any, 'generateOtp')
+      .mockReturnValue('123456');
     await service.forgotPassword({ username: a.username } as any);
     await service.forgotPassword({ username: b.username } as any);
-    const hashes = prisma.__state.passwordResetTokens.map((t: any) => t.tokenHash);
+    const hashes = prisma.__state.passwordResetTokens.map(
+      (t: any) => t.tokenHash,
+    );
     expect(new Set(hashes).size).toBe(2);
     spy.mockRestore();
   });
@@ -327,13 +386,17 @@ describe('AuthService — Email tasdiqlash va parolni tiklash (1.1-band)', () =>
       employee: null,
     });
 
-    const result = await service.forgotPassword({ username: 'superadmin' } as any);
+    const result = await service.forgotPassword({
+      username: 'superadmin',
+    } as any);
     expect((result as any).channel).toBeUndefined();
     expect((result as any).message).toBeTruthy();
   });
 
-  it('Mavjud bo\'lmagan username — xavfsiz umumiy xabar (hisob mavjudligini oshkor qilmaydi)', async () => {
-    const result = await service.forgotPassword({ username: 'yoq_user' } as any);
+  it("Mavjud bo'lmagan username — xavfsiz umumiy xabar (hisob mavjudligini oshkor qilmaydi)", async () => {
+    const result = await service.forgotPassword({
+      username: 'yoq_user',
+    } as any);
     expect((result as any).message).toBeTruthy();
   });
 

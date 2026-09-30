@@ -221,6 +221,23 @@ describe('UsersService', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
+    it("muassasasiz hisobga (ASSISTANT_ADMIN) muassasa rolini berib bo'lmaydi", async () => {
+      prisma.__state.users.push({
+        id: 'asst',
+        hospitalId: null,
+        role: 'ASSISTANT_ADMIN',
+        status: 'ACTIVE',
+        username: 'asst',
+      });
+
+      for (const role of ['ADMIN', 'DIRECTOR', 'DEPARTMENT_HEAD', 'EMPLOYEE']) {
+        await expect(
+          service.updateRole('asst', role as any, null),
+        ).rejects.toThrow(BadRequestException);
+      }
+      expect(prisma.__state.users[0].role).toBe('ASSISTANT_ADMIN');
+    });
+
     it("yangi DIRECTOR tayinlanganda, eski direktor avtomatik EMPLOYEE'ga tushadi", async () => {
       prisma.__state.users.push(
         {

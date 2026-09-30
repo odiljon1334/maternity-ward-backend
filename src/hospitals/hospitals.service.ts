@@ -334,7 +334,7 @@ export class HospitalsService {
       password?: string;
     },
   ) {
-    const hospital = await this.findOne(hospitalId);
+    await this.findOne(hospitalId); // muassasa mavjudligini tekshiradi
 
     const dirUser = await this.prisma.user.findFirst({
       where: { hospitalId, role: 'DIRECTOR' },

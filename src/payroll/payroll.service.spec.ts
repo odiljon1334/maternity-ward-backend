@@ -440,7 +440,9 @@ describe('PayrollService', () => {
 
     // Hamma ish kunlari kelgan — to'liq oylik
     for (let d = 1; d <= 31; d++) {
-      const date = new Date(`2026-03-${String(d).padStart(2, '0')}T00:00:00+05:00`);
+      const date = new Date(
+        `2026-03-${String(d).padStart(2, '0')}T00:00:00+05:00`,
+      );
       prisma.__state.attendanceRecords.push({
         employeeId: EMPLOYEE_ID,
         workDate: date,
@@ -462,7 +464,13 @@ describe('PayrollService', () => {
       status: 'WORKING',
       shiftId: 'shift-1',
       date: new Date(`2026-03-${String(day).padStart(2, '0')}T00:00:00+05:00`),
-      shift: { startTime: '08:00', endTime: '17:00', isOvernight: false, lunchStart: '12:00', lunchEnd: '13:00' },
+      shift: {
+        startTime: '08:00',
+        endTime: '17:00',
+        isOvernight: false,
+        lunchStart: '12:00',
+        lunchEnd: '13:00',
+      },
       ...extra,
     };
   }
@@ -470,7 +478,9 @@ describe('PayrollService', () => {
     return {
       employeeId: EMPLOYEE_ID,
       scheduleId: `s-${day}`,
-      workDate: new Date(`2026-03-${String(day).padStart(2, '0')}T00:00:00+05:00`),
+      workDate: new Date(
+        `2026-03-${String(day).padStart(2, '0')}T00:00:00+05:00`,
+      ),
       status: 'PRESENT',
       lateMinutes: 0,
       earlyLeaveMin: 0,
@@ -487,16 +497,43 @@ describe('PayrollService', () => {
       prisma.__state.attendanceRecords.push(present(d));
     }
     prisma.__state.schedules.push(
-      datedSchedule(9, { status: 'VACATION', preLeaveStatus: 'WORKING', note: "Ta'til: Yillik" }),
-      datedSchedule(10, { status: 'VACATION', preLeaveStatus: 'WORKING', note: "Ta'til: Yillik" }),
+      datedSchedule(9, {
+        status: 'VACATION',
+        preLeaveStatus: 'WORKING',
+        note: "Ta'til: Yillik",
+      }),
+      datedSchedule(10, {
+        status: 'VACATION',
+        preLeaveStatus: 'WORKING',
+        note: "Ta'til: Yillik",
+      }),
       datedSchedule(16, { status: 'VACATION', note: "Ta'til: Haqsiz" }), // eski yozuv (shiftId bor)
-      datedSchedule(17, { status: 'OTHER_ABSENCE', preLeaveStatus: 'WORKING', note: "Ta'til: Haqsiz" }),
+      datedSchedule(17, {
+        status: 'OTHER_ABSENCE',
+        preLeaveStatus: 'WORKING',
+        note: "Ta'til: Haqsiz",
+      }),
       // Dam olish kuniga tushgan ta'til — me'yorga kirmaydi
-      datedSchedule(8, { status: 'VACATION', preLeaveStatus: 'DAY_OFF', shiftId: null, note: "Ta'til: Yillik" }),
+      datedSchedule(8, {
+        status: 'VACATION',
+        preLeaveStatus: 'DAY_OFF',
+        shiftId: null,
+        note: "Ta'til: Yillik",
+      }),
     );
     prisma.__state.leaves.push(
-      { employeeId: EMPLOYEE_ID, type: 'VACATION', startDate: new Date('2026-03-08T00:00:00+05:00'), endDate: new Date('2026-03-10T00:00:00+05:00') },
-      { employeeId: EMPLOYEE_ID, type: 'UNPAID', startDate: new Date('2026-03-16T00:00:00+05:00'), endDate: new Date('2026-03-17T00:00:00+05:00') },
+      {
+        employeeId: EMPLOYEE_ID,
+        type: 'VACATION',
+        startDate: new Date('2026-03-08T00:00:00+05:00'),
+        endDate: new Date('2026-03-10T00:00:00+05:00'),
+      },
+      {
+        employeeId: EMPLOYEE_ID,
+        type: 'UNPAID',
+        startDate: new Date('2026-03-16T00:00:00+05:00'),
+        endDate: new Date('2026-03-17T00:00:00+05:00'),
+      },
     );
 
     const r = await service.calculate(EMPLOYEE_ID, MONTH, YEAR);
@@ -504,7 +541,9 @@ describe('PayrollService', () => {
     expect(r.details.paidLeaveDays).toBe(2);
     expect(r.preview.unpaidLeaveDays).toBe(2);
     expect(r.preview.totalAbsences).toBe(0);
-    expect(r.preview.unpaidLeaveDeduction).toBe(Math.round((BASE_SALARY / 10) * 2));
+    expect(r.preview.unpaidLeaveDeduction).toBe(
+      Math.round((BASE_SALARY / 10) * 2),
+    );
     expect(r.preview.netSalary).toBe(Math.round(BASE_SALARY * 0.8));
   });
 
@@ -554,10 +593,35 @@ describe('PayrollService', () => {
 
   it('faqat hisobga kirgan KPI/avans ID lari qaytariladi (saqlashda shular APPLIED bo‘ladi)', async () => {
     prisma.__state.adjustments.push(
-      { id: 'adj-1', employeeId: EMPLOYEE_ID, month: MONTH, year: YEAR, status: PayrollAdjustmentStatus.APPROVED, type: PayrollAdjustmentType.ONE_TIME_AWARD, proposedAmount: 1000, approvedAmount: 1000 },
-      { id: 'adj-2', employeeId: EMPLOYEE_ID, month: MONTH, year: YEAR, status: PayrollAdjustmentStatus.APPLIED, type: PayrollAdjustmentType.ONE_TIME_AWARD, proposedAmount: 1000, approvedAmount: 1000 },
+      {
+        id: 'adj-1',
+        employeeId: EMPLOYEE_ID,
+        month: MONTH,
+        year: YEAR,
+        status: PayrollAdjustmentStatus.APPROVED,
+        type: PayrollAdjustmentType.ONE_TIME_AWARD,
+        proposedAmount: 1000,
+        approvedAmount: 1000,
+      },
+      {
+        id: 'adj-2',
+        employeeId: EMPLOYEE_ID,
+        month: MONTH,
+        year: YEAR,
+        status: PayrollAdjustmentStatus.APPLIED,
+        type: PayrollAdjustmentType.ONE_TIME_AWARD,
+        proposedAmount: 1000,
+        approvedAmount: 1000,
+      },
     );
-    prisma.__state.advances.push({ id: 'adv-1', employeeId: EMPLOYEE_ID, month: MONTH, year: YEAR, status: SalaryAdvanceStatus.PAID, paidAmount: 5000 });
+    prisma.__state.advances.push({
+      id: 'adv-1',
+      employeeId: EMPLOYEE_ID,
+      month: MONTH,
+      year: YEAR,
+      status: SalaryAdvanceStatus.PAID,
+      paidAmount: 5000,
+    });
     const r = await service.calculate(EMPLOYEE_ID, MONTH, YEAR);
     expect(r.appliedAdjustmentIds).toEqual(['adj-1']);
     expect(r.appliedAdvanceIds).toEqual(['adv-1']);

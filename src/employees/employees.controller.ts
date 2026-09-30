@@ -24,24 +24,23 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
 import { FileInterceptor } from '@nestjs/platform-express';
-import {
-  imageUpload,
-  spreadsheetUpload,
-} from '../common/utils/upload.util';
+import { imageUpload, spreadsheetUpload } from '../common/utils/upload.util';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Response } from 'express';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { TenantScopeGuard } from '../common/guards/tenant-scope.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { RequirePermission } from '../common/decorators/require-permission.decorator';
+import { resolveHospitalId as resolveHospitalScope } from '../common/utils/hospital-scope.util';
 
 /** SUPER_ADMIN uchun: JWT'dagi hospitalId null bo'lsa, query'dan targetHospitalId oladi.
- *  Ikkalasi ham yo'q bo'lsa — '' qaytaradi (findAll unda filtersiz ko'rsatadi) */
+ *  Ikkalasi ham yo'q bo'lsa — '' qaytaradi (servislar `string` kutadi, findAll
+ *  unda filtersiz ko'rsatadi) */
 function resolveHospitalId(
   jwtHospId: string | null,
   targetHospId?: string,
 ): string {
-  return jwtHospId || targetHospId || '';
+  return resolveHospitalScope(jwtHospId, targetHospId) ?? '';
 }
 
 /**

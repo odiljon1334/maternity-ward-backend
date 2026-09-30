@@ -32,6 +32,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     username: string;
     hospitalId?: string;
     iat?: number;
+    authAt?: number;
   }) {
     const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },
@@ -71,6 +72,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       username: user.username,
       hospitalId: user.hospitalId ?? null,
       permissions,
+      // Mobil refresh uchun sessiya boshlangan vaqt (eski tokenlarda — iat)
+      authAt: payload.authAt ?? payload.iat,
     };
   }
 }

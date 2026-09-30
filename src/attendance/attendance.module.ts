@@ -8,7 +8,12 @@ import { LocationModule } from '../location/location.module';
 import { FaceMatchModule } from '../face-match/face-match.module';
 
 @Module({
-  imports: [NestScheduleModule.forRoot(), TelegramModule, LocationModule, FaceMatchModule],
+  imports: [
+    NestScheduleModule.forRoot(),
+    TelegramModule,
+    LocationModule,
+    FaceMatchModule,
+  ],
   controllers: [AttendanceController, HikvisionWebhookController],
   providers: [AttendanceService],
   exports: [AttendanceService],

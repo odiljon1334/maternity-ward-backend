@@ -555,7 +555,7 @@ export class SchedulesService {
           status: 'DAY_OFF',
         });
       } else {
-        const weekOfMonth = this.getWeekOfMonth(current, start);
+        const weekOfMonth = this.getWeekOfMonth(current);
         const shiftType = this.resolveShiftForWeek(
           weekOfMonth,
           pattern,
@@ -902,7 +902,7 @@ export class SchedulesService {
   // ──────────────────────────────────────────
   // HELPER: resolve week of month (0-indexed)
   // ──────────────────────────────────────────
-  private getWeekOfMonth(date: Dayjs, monthStart: Dayjs): number {
+  private getWeekOfMonth(date: Dayjs): number {
     const dayOfMonth = date.date();
     return Math.floor((dayOfMonth - 1) / 7);
   }
@@ -961,8 +961,6 @@ export class SchedulesService {
     const empIndex = new Map<string, string>(); // normalizedName → id
     for (const e of allEmployees)
       empIndex.set(normalizeEmpName(e.fullName), e.id);
-
-    const empById = new Map(allEmployees.map((e) => [e.id, e]));
 
     // ── 2. Yordamchi funksiyalar ───────────────────────────────────────────────
     const parseTime = (

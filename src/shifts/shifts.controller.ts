@@ -18,13 +18,7 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
 import { TenantScopeGuard } from '../common/guards/tenant-scope.guard';
-
-function resolveHospitalId(
-  jwtHospId: string | null,
-  targetHospId?: string,
-): string | null {
-  return jwtHospId || targetHospId || null;
-}
+import { resolveHospitalId } from '../common/utils/hospital-scope.util';
 
 @Controller('shifts')
 @UseGuards(JwtAuthGuard, RolesGuard, TenantScopeGuard)

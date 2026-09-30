@@ -19,6 +19,7 @@ import { UpdateUserStatusDto } from './dto/update-user-status.dto';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
 import { SetPermissionOverrideDto } from './dto/set-permission-override.dto';
 import { TenantScopeGuard } from '../common/guards/tenant-scope.guard';
+import { resolveHospitalId } from '../common/utils/hospital-scope.util';
 
 const SUPER = UserRole.SUPER_ADMIN;
 const ASST = UserRole.ASSISTANT_ADMIN;
@@ -29,12 +30,6 @@ const DIR = UserRole.DIRECTOR;
 // targetHospitalId orqali istalgan shifoxonani ko'rishi mumkin. ADMIN/DIRECTOR
 // uchun hospitalId har doim o'zining shifoxonasi (departments.controller.ts
 // bilan bir xil naqsh).
-function resolveHospitalId(
-  jwtHospId: string | null,
-  targetHospId?: string,
-): string | null {
-  return jwtHospId || targetHospId || null;
-}
 
 @Controller('users')
 @UseGuards(JwtAuthGuard, RolesGuard, TenantScopeGuard)

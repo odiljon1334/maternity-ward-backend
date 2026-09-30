@@ -29,6 +29,13 @@ const RESET_OTP_MAX_ATTEMPTS = 5;
 /** Bitta hisob uchun soatiga yuboriladigan parol tiklash kodlari */
 const RESET_OTP_PER_HOUR = 3;
 
+const INVALID_CREDENTIALS_MESSAGE = "Login yoki parol noto'g'ri";
+/** Mavjud bo'lmagan login uchun ham bcrypt ishlaydi (javob vaqti bir xil) */
+const DUMMY_PASSWORD_HASH =
+  '$2b$12$0WGTNJ1/6PVfFp4uBt9xgOBMagU1/hWMFgJNDTPjq4s63YrI9uapq';
+/** Mobil sessiya: login'dan keyin refresh bilan uzaytirishning mutlaq chegarasi */
+const DEFAULT_MOBILE_SESSION_MAX_DAYS = 90;
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -85,7 +92,23 @@ export class AuthService {
    * Foydalanuvchi holati va parol almashgani JwtStrategy'da allaqachon
    * tekshirilgan — bu yerda faqat yangi muddat bilan qayta imzolanadi.
    */
-  async refreshMobileToken(userId: string) {
+  async refreshMobileToken(userId: string, authAt?: number) {
+    // Refresh sessiyani cheksiz uzaytirmaydi: o'g'irlangan token ham ko'pi
+    // bilan MOBILE_SESSION_MAX_DAYS kun (+ token muddati) ishlaydi, keyin
+    // xodim parol bilan qayta kiradi. `authAt` yo'q eski tokenlarda JwtStrategy
+    // `iat`ni beradi — ular shu refresh'dan boshlab hisoblanadi.
+    const nowSec = Math.floor(Date.now() / 1000);
+    const sessionStart =
+      typeof authAt === 'number' && Number.isFinite(authAt) ? authAt : nowSec;
+    const maxDays =
+      Number(this.config.get('MOBILE_SESSION_MAX_DAYS')) ||
+      DEFAULT_MOBILE_SESSION_MAX_DAYS;
+    if (nowSec - sessionStart > maxDays * 86_400) {
+      throw new UnauthorizedException(
+        'Sessiya muddati tugadi, login va parol bilan qayta kiring',
+      );
+    }
+
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: {
@@ -100,15 +123,14 @@ export class AuthService {
       throw new UnauthorizedException('Hisob faol emas');
     }
     if (user.role !== UserRole.EMPLOYEE) {
-      throw new ForbiddenException(
-        'Mobil ilova hozircha faqat xodimlar uchun',
-      );
+      throw new ForbiddenException('Mobil ilova hozircha faqat xodimlar uchun');
     }
     const accessToken = this.jwt.sign({
       sub: user.id,
       role: user.role,
       username: user.username,
       hospitalId: user.hospitalId ?? null,
+      authAt: sessionStart,
     });
     return { accessToken };
   }
@@ -133,29 +155,17 @@ export class AuthService {
       },
     });
 
-    // Foydalanuvchi topilmadi
+    // Foydalanuvchi topilmadi. Javob matni va vaqti noto'g'ri paroldan farq
+    // qilmasligi kerak — aks holda login'lar ro'yxatini terib olish mumkin.
     if (!user) {
+      await bcrypt.compare(dto.password, DUMMY_PASSWORD_HASH);
       this.auditLog.log({
         action: 'LOGIN_FAILED',
         entity: 'User',
         details: { username: dto.username, reason: 'user_not_found' },
         ip,
       });
-      throw new UnauthorizedException('Foydalanuvchi topilmadi');
-    }
-
-    // Hisob bloklangan
-    if (user.status !== 'ACTIVE') {
-      this.auditLog.log({
-        userId: user.id,
-        hospitalId: user.hospitalId ?? undefined,
-        action: 'LOGIN_FAILED',
-        entity: 'User',
-        entityId: user.id,
-        details: { username: user.username, reason: 'account_blocked' },
-        ip,
-      });
-      throw new UnauthorizedException('Hisob bloklangan');
+      throw new UnauthorizedException(INVALID_CREDENTIALS_MESSAGE);
     }
 
     // Noto'g'ri parol
@@ -170,7 +180,21 @@ export class AuthService {
         details: { username: user.username, reason: 'wrong_password' },
         ip,
       });
-      throw new UnauthorizedException("Parol noto'g'ri");
+      throw new UnauthorizedException(INVALID_CREDENTIALS_MESSAGE);
+    }
+
+    // Hisob bloklangan — faqat to'g'ri parol kiritgan odamga aytiladi
+    if (user.status !== 'ACTIVE') {
+      this.auditLog.log({
+        userId: user.id,
+        hospitalId: user.hospitalId ?? undefined,
+        action: 'LOGIN_FAILED',
+        entity: 'User',
+        entityId: user.id,
+        details: { username: user.username, reason: 'account_blocked' },
+        ip,
+      });
+      throw new UnauthorizedException('Hisob bloklangan');
     }
 
     const payload = {
@@ -178,6 +202,7 @@ export class AuthService {
       role: user.role,
       username: user.username,
       hospitalId: user.hospitalId ?? null,
+      authAt: Math.floor(Date.now() / 1000),
     };
     const token = this.jwt.sign(payload);
 
