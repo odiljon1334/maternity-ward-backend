@@ -1013,12 +1013,7 @@ export class SchedulePlanningService {
       if (plan.status !== MonthlySchedulePlanStatus.DRAFT) {
         throw new BadRequestException('Faqat qoralama grafik yuboriladi');
       }
-      const summary = this.buildPlanSummary(plan);
-      if (summary.remainingMinutes || summary.excessMinutes) {
-        throw new BadRequestException(
-          `Postning oylik normasi to‘liq taqsimlanmagan: ${summary.plannedMinutes / 60}/${summary.targetMinutes / 60} soat`,
-        );
-      }
+      this.assertPlanReadyForReview(plan);
       await this.transitionPlan(
         tx,
         hospitalId,
@@ -1044,10 +1039,7 @@ export class SchedulePlanningService {
             'Faqat tasdiqlashga yuborilgan grafik tasdiqlanadi',
           );
         }
-        const summary = this.buildPlanSummary(plan);
-        if (summary.remainingMinutes || summary.excessMinutes) {
-          throw new BadRequestException('Postning oylik qamrovi to‘liq emas');
-        }
+        this.assertPlanReadyForReview(plan);
         // Holat birinchi bo'lib almashtiriladi: ikkinchi (parallel yoki
         // takroriy) tasdiqlash shu yerda to'xtaydi.
         await this.transitionPlan(
@@ -2085,6 +2077,7 @@ export class SchedulePlanningService {
       startsAt: Date | null;
       endsAt: Date | null;
       countsTowardPostCoverage?: boolean;
+      isCarryIn?: boolean;
     }>;
   }) {
     const coverageTargets = calculateMonthlyCoverageTargets(
@@ -2109,7 +2102,41 @@ export class SchedulePlanningService {
         targetMinutes: coverageTargets.byDate[date] ?? 0,
       };
     });
-    return { ...summary, days };
+    return {
+      ...summary,
+      postCoverageRequired: this.requiresPostCoverageNorm(plan.entries),
+      days,
+    };
+  }
+
+  /**
+   * Post normasi (masalan 720/744 soat) faqat rejada shu oyning post
+   * xodimi bo'lsa talab qilinadi. Faqat postdan tashqari xodimlar
+   * grafigi (countsTowardPostCoverage=false) normaga tekshirilmaydi;
+   * oldingi oydan o'tgan tungi smena (carry-in) hisobga olinmaydi.
+   */
+  private requiresPostCoverageNorm(
+    entries: Array<{ countsTowardPostCoverage?: boolean; isCarryIn?: boolean }>,
+  ): boolean {
+    return entries.some(
+      (entry) => !entry.isCarryIn && entry.countsTowardPostCoverage !== false,
+    );
+  }
+
+  private assertPlanReadyForReview(
+    plan: Parameters<SchedulePlanningService['buildPlanSummary']>[0],
+  ) {
+    const ownEntries = plan.entries.filter((entry) => !entry.isCarryIn);
+    if (!ownEntries.length) {
+      throw new BadRequestException('Grafikda birorta ham katak yo‘q');
+    }
+    const summary = this.buildPlanSummary(plan);
+    if (!summary.postCoverageRequired) return;
+    if (summary.remainingMinutes || summary.excessMinutes) {
+      throw new BadRequestException(
+        `Postning oylik normasi to‘liq taqsimlanmagan: ${summary.plannedMinutes / 60}/${summary.targetMinutes / 60} soat`,
+      );
+    }
   }
 
   private mapEntryTypeToScheduleStatus(

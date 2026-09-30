@@ -86,6 +86,112 @@ describe('SchedulePlanningService — production xavfsizligi', () => {
       .mockReturnValue({ remainingMinutes: 0, excessMinutes: 0 });
   }
 
+  describe('postdan tashqari grafik', () => {
+    const dayShift = (employeeId: string, day: number, counts: boolean) => ({
+      id: `${employeeId}-${day}`,
+      employeeId,
+      shiftId: 'shift-1',
+      entryType: SchedulePlanEntryType.WORKING,
+      countsTowardPostCoverage: counts,
+      workDate: new Date(Date.UTC(2026, 9, day - 1, 19)),
+      startsAt: new Date(
+        `2026-10-${String(day).padStart(2, '0')}T08:00:00+05:00`,
+      ),
+      endsAt: new Date(
+        `2026-10-${String(day).padStart(2, '0')}T16:00:00+05:00`,
+      ),
+      note: null,
+    });
+    const draftWith = (entries: any[]) => ({
+      id: 'plan-1',
+      year: 2026,
+      month: 10,
+      status: MonthlySchedulePlanStatus.DRAFT,
+      coverageMode: 'CONTINUOUS_24_7',
+      dailyCoverageMinutes: 1440,
+      coverageMinutesByWeekday: null,
+      post: { coverageMode: 'CONTINUOUS_24_7', dailyCoverageMinutes: 1440 },
+      entries,
+    });
+
+    it('faqat postdan tashqari xodimlar grafigi 744 soat talab qilmasdan yuboriladi', async () => {
+      const { prisma, service } = setup();
+      jest
+        .spyOn(service as any, 'getPlanForWorkflow')
+        .mockResolvedValue(
+          draftWith([
+            dayShift('employee-1', 1, false),
+            dayShift('employee-1', 2, false),
+          ]),
+        );
+
+      await service.submitPlan('hospital-1', 'plan-1');
+
+      expect(prisma.monthlySchedulePlan.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            status: MonthlySchedulePlanStatus.SUBMITTED,
+          }),
+        }),
+      );
+    });
+
+    it('post xodimi bor grafikda norma hali ham talab qilinadi', async () => {
+      const { service } = setup();
+      jest
+        .spyOn(service as any, 'getPlanForWorkflow')
+        .mockResolvedValue(
+          draftWith([
+            dayShift('employee-1', 1, true),
+            dayShift('employee-2', 1, false),
+          ]),
+        );
+
+      await expect(service.submitPlan('hospital-1', 'plan-1')).rejects.toThrow(
+        /normasi to‘liq taqsimlanmagan: 8\/744/,
+      );
+    });
+
+    it("oldingi oydan o'tgan post smenasi (carry-in) normani majburiy qilmaydi", async () => {
+      const { service } = setup();
+      jest
+        .spyOn(service as any, 'getPlanForWorkflow')
+        .mockResolvedValue(
+          draftWith([
+            { ...dayShift('employee-9', 1, true), isCarryIn: true },
+            dayShift('employee-1', 2, false),
+          ]),
+        );
+
+      await expect(
+        service.submitPlan('hospital-1', 'plan-1'),
+      ).resolves.toBeDefined();
+    });
+
+    it('bo‘sh grafik yuborilmaydi', async () => {
+      const { service } = setup();
+      jest
+        .spyOn(service as any, 'getPlanForWorkflow')
+        .mockResolvedValue(draftWith([]));
+
+      await expect(service.submitPlan('hospital-1', 'plan-1')).rejects.toThrow(
+        /birorta ham katak yo‘q/,
+      );
+    });
+
+    it('xulosada postCoverageRequired belgisi qaytadi', () => {
+      const { service } = setup();
+      const outsideOnly = (service as any).buildPlanSummary(
+        draftWith([dayShift('employee-1', 1, false)]),
+      );
+      const withPost = (service as any).buildPlanSummary(
+        draftWith([dayShift('employee-1', 1, true)]),
+      );
+      expect(outsideOnly.postCoverageRequired).toBe(false);
+      expect(withPost.postCoverageRequired).toBe(true);
+    });
+  });
+
   describe('approvePlan', () => {
     it("tasdiqlangan ta'til kunini ish kuniga aylantirmaydi", async () => {
       const { prisma, service } = setup();
