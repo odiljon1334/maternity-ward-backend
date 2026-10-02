@@ -289,13 +289,21 @@ export class AttendanceService {
     const workDate = DateUtil.startOfDay(eventDate);
     const tzDate = dayjs(eventDate).tz(TZ);
 
-    // 3. Bugungi jadval
+    // 3. Bugungi e'lon qilingan holat va faol ish jadvali.
+    // `findTodaySchedule` faqat WORKING (yoki kechagi tungi WORKING) ni
+    // qaytaradi. Ta'til/kasallik/dam olishni "grafik yo'q" bilan adashtirmaslik
+    // uchun bugungi xom Schedule yozuvini alohida o'qiymiz.
+    const declaredSchedule = await this.prisma.schedule.findUnique({
+      where: { employeeId_date: { employeeId: employee.id, date: workDate } },
+      include: { shift: true },
+    });
     const schedule = await this.findTodaySchedule(
       employee.id,
       workDate,
       tzDate,
     );
-    const fallbackShift = !schedule
+    const hasDeclaredPlan = Boolean(declaredSchedule || schedule);
+    const fallbackShift = !hasDeclaredPlan
       ? await this.findFallbackShift(employee.hospitalId, tzDate)
       : null;
     const shift = schedule?.shift ?? fallbackShift ?? null;
@@ -306,8 +314,14 @@ export class AttendanceService {
     });
 
     // 5. Event turini aniqlash: terminal explicit → fallback time-based
-    const resolvedType =
-      terminalEventType ?? this.inferEventType(attendance, eventDate, shift);
+    // Grafigi yo'q xodimda terminal tugmasiga ishonib bo'lmaydi: ko'p
+    // qurilmalar har bir muvaffaqiyatli yuz skanini CHECK_IN deb yuboradi,
+    // ayrimlari esa doim CHECK_OUT rejimida qoladi. Shuning uchun bunda
+    // birinchi skan = keldi, 2 soatdan keyingi skan = ketdi qoidasi ishlaydi.
+    // Grafik bor xodimda terminal yuborgan aniq event turi saqlanadi.
+    const resolvedType = !hasDeclaredPlan
+      ? this.inferEventType(attendance, eventDate, shift)
+      : terminalEventType ?? this.inferEventType(attendance, eventDate, shift);
 
     // Diagnostika: terminal YUBORGAN xom vaqt va biz TUSHUNGAN vaqt yonma-yon.
     // Ikkalasi mos kelmasa (masalan 5 soat farq) — terminal soati yoki
@@ -329,6 +343,21 @@ export class AttendanceService {
       rawPayload,
       recordId: attendance?.id ?? null,
     });
+
+    // Ta'til/kasallik/dam olish kuni terminal skani grafikdagi statusni
+    // yashirincha PRESENT ga aylantirmaydi. Hodisa auditda saqlanadi; real
+    // ish bo'lgan bo'lsa rahbar grafikni rasmiy o'zgartiradi.
+    if (
+      declaredSchedule &&
+      declaredSchedule.status !== ScheduleStatus.WORKING &&
+      !schedule
+    ) {
+      this.logger.warn(
+        `${employee.fullName}: ${declaredSchedule.status} kuni terminal skani ` +
+          `auditga yozildi, davomat o'zgartirilmadi`,
+      );
+      return null;
+    }
 
     // 7. Harakatni bajarish
     return this.dispatch(resolvedType, {
@@ -501,13 +530,17 @@ export class AttendanceService {
       schedule?.shift?.graceMinutes ??
       fallbackShift?.graceMinutes ??
       LATE_GRACE_MINUTES;
-    const lateMinutes = this.resolveLateMinutes(
-      eventDate,
-      expectedCheckIn,
-      graceMin,
-      !schedule, // grafik yo'q → smena taxmin qilingan
-      employee.fullName,
-    );
+    // Grafik bo'lmasa terminal faqat real "keldi/ketdi" faktini beradi;
+    // taxminiy smena asosida kechikish yozilmaydi.
+    const lateMinutes = schedule
+      ? this.resolveLateMinutes(
+          eventDate,
+          expectedCheckIn,
+          graceMin,
+          false,
+          employee.fullName,
+        )
+      : 0;
     const status: AttendanceStatus = lateMinutes > 0 ? 'LATE' : 'PRESENT';
 
     const attendance = await this.prisma.attendanceRecord.create({
@@ -571,13 +604,15 @@ export class AttendanceService {
       fallbackShift?.graceMinutes ??
       LATE_GRACE_MINUTES;
 
-    const lateMinutes = this.resolveLateMinutes(
-      eventDate,
-      expectedCheckIn,
-      graceMin,
-      !schedule,
-      employee.fullName,
-    );
+    const lateMinutes = schedule
+      ? this.resolveLateMinutes(
+          eventDate,
+          expectedCheckIn,
+          graceMin,
+          false,
+          employee.fullName,
+        )
+      : 0;
 
     const updated = await this.prisma.attendanceRecord.update({
       where: { id: rec.id },
@@ -626,8 +661,14 @@ export class AttendanceService {
       rec.expectedCheckOut ??
       this.buildExpectedCheckOut(rec.workDate, schedule, fallbackShift);
 
-    const earlyLeaveMin = this.calcEarlyLeaveMinutes(eventDate, expectedEnd);
-    const overtimeMinutes = this.calcOvertimeMinutes(eventDate, expectedEnd);
+    // Grafik yo'q xodimga taxminiy smena orqali "erta ketdi" yoki
+    // "qo'shimcha ishladi" yozmaymiz — faqat real kirish/chiqish vaqti.
+    const earlyLeaveMin = schedule
+      ? this.calcEarlyLeaveMinutes(eventDate, expectedEnd)
+      : 0;
+    const overtimeMinutes = schedule
+      ? this.calcOvertimeMinutes(eventDate, expectedEnd)
+      : 0;
     const newStatus = this.recalcStatus(
       rec.status,
       rec.lateMinutes,
@@ -635,7 +676,7 @@ export class AttendanceService {
     );
 
     // Sof ish vaqti: brutto − tushlik (haqiqiy yoki rejalashtirilgan)
-    const shift = schedule?.shift ?? fallbackShift;
+    const shift = schedule?.shift ?? null;
     const netWorkMin = rec.checkIn
       ? calcNetWorkMin(
           rec.checkIn,
