@@ -164,6 +164,21 @@ describe('UsersService', () => {
 
       expect(result.meta.total).toBe(2);
     });
+
+    it('emailVerified filtri va email ustunlari so‘rovga qo‘shiladi', async () => {
+      const findMany = jest.spyOn(prisma.user, 'findMany');
+
+      await service.findAll({ emailVerified: 'true' } as any, 'h1');
+      expect(findMany.mock.calls[0][0]).toMatchObject({
+        where: { hospitalId: 'h1', emailVerifiedAt: { not: null } },
+        select: { email: true, emailVerifiedAt: true },
+      });
+
+      await service.findAll({ emailVerified: 'false' } as any, 'h1');
+      expect((findMany.mock.calls[1][0] as any).where).toMatchObject({
+        emailVerifiedAt: null,
+      });
+    });
   });
 
   describe('updateStatus', () => {
