@@ -468,7 +468,7 @@ export class SchedulePlanningService {
     worksheet.getCell(3, 1).value = `ISH JADVALI — ${plan.post.name}`;
     worksheet.mergeCells(4, 1, 4, totalColumn);
     worksheet.getCell(4, 1).value =
-      `Holat: ${plan.status} | Versiya: ${plan.version} | Post normasi: ${plan.summary.targetMinutes / 60} soat`;
+      `Holat: ${plan.status} | Versiya: ${plan.version} | Post normasi: ${plan.summary.targetMinutes / 60} soat | Yuklab olingan: ${dayjs().tz(TZ).format('DD.MM.YYYY HH:mm')}`;
 
     for (let row = 1; row <= 4; row += 1) {
       const cell = worksheet.getCell(row, 1);
@@ -535,7 +535,9 @@ export class SchedulePlanningService {
 
     let rowNumber = 6;
     let index = 1;
-    for (const item of employeeRows.values()) {
+    const rowByEmployee = new Map<string, number>();
+    for (const [employeeId, item] of employeeRows) {
+      rowByEmployee.set(employeeId, rowNumber);
       const row = worksheet.getRow(rowNumber);
       row.getCell(1).value = index;
       row.getCell(2).value = item.employee.fullName;
@@ -624,6 +626,51 @@ export class SchedulePlanningService {
     }
     postTotalRow.font = { name: 'Arial', size: 9, bold: true };
     targetRow.font = { name: 'Arial', size: 9, bold: true };
+
+    // Tasdiqlangan reja hujjat sifatida o'zgarmaydi; tasdiqdan keyingi
+    // o'zgarishlar (almashish, o'rniga chiqish, ishga chiqmaslik) katakda
+    // sariq rang + izoh bilan belgilanadi va "O'zgarishlar" varag'ida sanasi
+    // bilan ro'yxatlanadi.
+    const changes = this.approvedChangesForExcel(plan);
+    const notesByCell = new Map<string, string[]>();
+    changes.forEach((change, changeIndex) => {
+      const seen = new Set<string>();
+      for (const target of change.targets) {
+        const row = rowByEmployee.get(target.employeeId);
+        const local = dayjs(target.workDate).tz(TZ);
+        if (
+          !row ||
+          local.year() !== plan.year ||
+          local.month() + 1 !== plan.month
+        ) {
+          continue;
+        }
+        const key = `${row}:${local.date() + 3}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const notes = notesByCell.get(key) ?? [];
+        notes.push(
+          `№${changeIndex + 1} ${change.typeLabel}: ${change.description}. Tasdiqlandi: ${change.approvedAtText}`,
+        );
+        notesByCell.set(key, notes);
+      }
+    });
+    for (const [key, notes] of notesByCell) {
+      const [row, column] = key.split(':').map(Number);
+      const cell = worksheet.getCell(row, column);
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFFFE699' },
+      };
+      cell.note = notes.join('\n');
+    }
+    const legendRow = worksheet.getRow(rowNumber + 3);
+    legendRow.getCell(1).value = changes.length
+      ? `Sariq katak — tasdiqdan keyingi o‘zgarish (${changes.length} ta, oxirgisi ${changes[changes.length - 1].approvedAtText}). Batafsil: «O‘zgarishlar» varag‘i.`
+      : 'Tasdiqdan keyin o‘zgarish kiritilmagan.';
+    legendRow.getCell(1).font = { name: 'Arial', size: 9, italic: true };
+    this.addChangesSheet(workbook, plan, changes);
     worksheet.autoFilter = {
       from: { row: 5, column: 1 },
       to: { row: Math.max(5, rowNumber - 1), column: totalColumn },
@@ -2152,6 +2199,173 @@ export class SchedulePlanningService {
       OTHER_ABSENCE: ScheduleStatus.OTHER_ABSENCE,
     };
     return map[entryType];
+  }
+
+  private approvedChangesForExcel(plan: any) {
+    const typeLabels: Record<ScheduleChangeType, string> = {
+      SWAP: 'Smena almashish',
+      SUBSTITUTION: 'O‘rniga chiqish',
+      ABSENCE: 'Ishga chiqmaslik',
+    };
+    const absenceLabels: Record<SchedulePlanEntryType, string> = {
+      WORKING: 'Ish',
+      DAY_OFF: 'Dam olish',
+      SICK: 'Kasallik',
+      VACATION: 'Mehnat ta‘tili',
+      MATERNITY_LEAVE: 'Tug‘ruq ta‘tili',
+      TRAINING: 'Malaka oshirish',
+      OTHER_ABSENCE: 'Boshqa sabab',
+    };
+    const date = (value: Date) => dayjs(value).tz(TZ).format('DD.MM.YYYY');
+    const dateTime = (value?: Date | null) =>
+      value ? dayjs(value).tz(TZ).format('DD.MM.YYYY HH:mm') : '';
+
+    return ((plan.changeRequests ?? []) as any[])
+      .filter(
+        (request) =>
+          request.status === ScheduleChangeStatus.APPROVED &&
+          request.primaryEntry,
+      )
+      .sort(
+        (a, b) =>
+          new Date(a.approvedAt ?? a.createdAt).getTime() -
+          new Date(b.approvedAt ?? b.createdAt).getTime(),
+      )
+      .map((request) => {
+        const primary = request.primaryEntry;
+        const counterpart = request.counterpartEntry;
+        const absence =
+          absenceLabels[
+            (request.absenceEntryType as SchedulePlanEntryType) ??
+              SchedulePlanEntryType.DAY_OFF
+          ];
+        const fromName = primary.employee?.fullName ?? '';
+        let toName = '';
+        let description: string;
+        const targets: Array<{ employeeId: string; workDate: Date }> = [
+          { employeeId: primary.employeeId, workDate: primary.workDate },
+        ];
+        if (request.type === ScheduleChangeType.SWAP && counterpart) {
+          toName = counterpart.employee?.fullName ?? '';
+          description = `${fromName} (${date(primary.workDate)}) ↔ ${toName} (${date(counterpart.workDate)})`;
+          targets.push(
+            {
+              employeeId: counterpart.employeeId,
+              workDate: counterpart.workDate,
+            },
+            { employeeId: counterpart.employeeId, workDate: primary.workDate },
+            { employeeId: primary.employeeId, workDate: counterpart.workDate },
+          );
+        } else if (request.type === ScheduleChangeType.SUBSTITUTION) {
+          toName = request.replacementEmployee?.fullName ?? '';
+          description = `${fromName} o‘rniga ${toName}, ${date(primary.workDate)} (${absence})`;
+          if (request.replacementEmployeeId) {
+            targets.push({
+              employeeId: request.replacementEmployeeId,
+              workDate: primary.workDate,
+            });
+          }
+        } else {
+          description = `${fromName} ${date(primary.workDate)} ishga chiqmaydi (${absence})`;
+        }
+        return {
+          typeLabel: typeLabels[request.type as ScheduleChangeType],
+          shiftDateText:
+            request.type === ScheduleChangeType.SWAP && counterpart
+              ? `${date(primary.workDate)} ↔ ${date(counterpart.workDate)}`
+              : date(primary.workDate),
+          fromName,
+          toName,
+          absenceLabel: request.type === ScheduleChangeType.SWAP ? '' : absence,
+          reason: request.reason ?? '',
+          requestedBy: request.requestedBy?.username ?? '',
+          requestedAtText: dateTime(request.createdAt),
+          approvedBy: request.approvedBy?.username ?? '',
+          approvedAtText: dateTime(request.approvedAt),
+          description,
+          targets,
+        };
+      });
+  }
+
+  private addChangesSheet(
+    workbook: ExcelJS.Workbook,
+    plan: any,
+    changes: ReturnType<SchedulePlanningService['approvedChangesForExcel']>,
+  ) {
+    const sheet = workbook.addWorksheet('O‘zgarishlar', {
+      pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1 },
+      views: [{ state: 'frozen', ySplit: 2 }],
+    });
+    const columns = [
+      { header: '№', width: 5 },
+      { header: 'Smena sanasi', width: 22 },
+      { header: 'Turi', width: 17 },
+      { header: 'Asl xodim', width: 26 },
+      { header: 'Yangi xodim', width: 26 },
+      { header: 'Sabab turi', width: 16 },
+      { header: 'Izoh', width: 32 },
+      { header: 'So‘radi', width: 14 },
+      { header: 'So‘ralgan sana', width: 17 },
+      { header: 'Tasdiqladi', width: 14 },
+      { header: 'Tasdiqlangan sana', width: 17 },
+    ];
+    sheet.mergeCells(1, 1, 1, columns.length);
+    sheet.getCell(1, 1).value =
+      `${plan.post.name} — ${plan.year}-yil ${plan.month}-oy: tasdiqdan keyingi o‘zgarishlar`;
+    sheet.getCell(1, 1).font = { name: 'Arial', size: 12, bold: true };
+    sheet.getRow(1).height = 22;
+
+    const header = sheet.getRow(2);
+    columns.forEach((column, i) => {
+      header.getCell(i + 1).value = column.header;
+      sheet.getColumn(i + 1).width = column.width;
+    });
+    header.height = 24;
+
+    changes.forEach((change, i) => {
+      sheet.getRow(i + 3).values = [
+        i + 1,
+        change.shiftDateText,
+        change.typeLabel,
+        change.fromName,
+        change.toName,
+        change.absenceLabel,
+        change.reason,
+        change.requestedBy,
+        change.requestedAtText,
+        change.approvedBy,
+        change.approvedAtText,
+      ];
+    });
+    if (!changes.length) {
+      sheet.mergeCells(3, 1, 3, columns.length);
+      sheet.getCell(3, 1).value = 'Tasdiqdan keyin o‘zgarish kiritilmagan.';
+    }
+
+    const lastRow = Math.max(3, changes.length + 2);
+    for (let row = 2; row <= lastRow; row += 1) {
+      for (let column = 1; column <= columns.length; column += 1) {
+        const cell = sheet.getCell(row, column);
+        cell.border = {
+          top: { style: 'thin' },
+          left: { style: 'thin' },
+          bottom: { style: 'thin' },
+          right: { style: 'thin' },
+        };
+        cell.alignment = {
+          vertical: 'middle',
+          horizontal: column === 1 ? 'center' : 'left',
+          wrapText: true,
+        };
+        cell.font = { name: 'Arial', size: 9, bold: row === 2 };
+      }
+    }
+    header.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFD9E1F2' },
+    };
   }
 
   private entryTypeExcelCode(entryType: SchedulePlanEntryType): string {
