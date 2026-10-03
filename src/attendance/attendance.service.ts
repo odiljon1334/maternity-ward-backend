@@ -321,7 +321,8 @@ export class AttendanceService {
     // Grafik bor xodimda terminal yuborgan aniq event turi saqlanadi.
     const resolvedType = !hasDeclaredPlan
       ? this.inferEventType(attendance, eventDate, shift)
-      : terminalEventType ?? this.inferEventType(attendance, eventDate, shift);
+      : (terminalEventType ??
+        this.inferEventType(attendance, eventDate, shift));
 
     // Diagnostika: terminal YUBORGAN xom vaqt va biz TUSHUNGAN vaqt yonma-yon.
     // Ikkalasi mos kelmasa (masalan 5 soat farq) — terminal soati yoki

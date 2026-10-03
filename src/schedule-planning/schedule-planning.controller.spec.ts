@@ -46,12 +46,7 @@ describe('SchedulePlanningController export', () => {
     const controller = new SchedulePlanningController(service);
     const response = { setHeader: jest.fn() } as unknown as Response;
 
-    await controller.exportPlan(
-      'plan-1',
-      null,
-      'selected-hospital',
-      response,
-    );
+    await controller.exportPlan('plan-1', null, 'selected-hospital', response);
 
     expect(service.exportPlanExcel).toHaveBeenCalledWith(
       'selected-hospital',

@@ -38,12 +38,73 @@ export type CompleteTelegramLeadInput = Omit<
   username?: string | null;
 };
 
+/**
+ * O'zbekiston raqamini bitta ko'rinishga keltiradi: "+998 90 123-45-67",
+ * "901234567", "998901234567" → "+998901234567". Boshqa formatlar o'zgarmaydi.
+ */
+export function normalizeUzPhone(raw: string): string {
+  const trimmed = raw.trim();
+  const digits = trimmed.replace(/\D/g, '');
+  if (digits.length === 9) return `+998${digits}`;
+  if (digits.length === 12 && digits.startsWith('998')) return `+${digits}`;
+  return trimmed;
+}
+
+/** Shu muddat ichida xuddi shu raqamdan kelgan ochiq lead takroriy hisoblanadi */
+const DUPLICATE_WINDOW_DAYS = 30;
+
 @Injectable()
 export class TrialLeadsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  capture(input: CaptureTrialLeadInput) {
-    return this.prisma.trialLead.create({ data: input });
+  /**
+   * Veb-forma leadini saqlaydi. Shu raqamdan oxirgi 30 kunda ochiq (yopilmagan)
+   * lead bo'lsa, yangisi yaratilmaydi — mavjudi yangi ma'lumot bilan to'ldiriladi
+   * va izohga takroriy so'rov qayd etiladi.
+   */
+  async capture(
+    input: CaptureTrialLeadInput,
+  ): Promise<{ lead: { id: string }; duplicate: boolean }> {
+    const phone = normalizeUzPhone(input.phone);
+    const since = new Date(
+      Date.now() - DUPLICATE_WINDOW_DAYS * 24 * 60 * 60 * 1000,
+    );
+    const existing = await this.prisma.trialLead.findFirst({
+      where: {
+        phone,
+        createdAt: { gte: since },
+        status: {
+          notIn: [TrialLeadStatus.CONVERTED, TrialLeadStatus.REJECTED],
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, note: true },
+    });
+
+    if (!existing) {
+      const lead = await this.prisma.trialLead.create({
+        data: { ...input, phone },
+      });
+      return { lead, duplicate: false };
+    }
+
+    const filled = Object.fromEntries(
+      Object.entries({ ...input, phone }).filter(
+        ([, value]) => value !== undefined && value !== null && value !== '',
+      ),
+    );
+    const stamp = new Date().toLocaleString('uz-UZ', {
+      timeZone: 'Asia/Tashkent',
+    });
+    const note = [existing.note, `Takroriy so'rov: ${stamp}`]
+      .filter(Boolean)
+      .join('\n')
+      .slice(-1000);
+    const lead = await this.prisma.trialLead.update({
+      where: { id: existing.id },
+      data: { ...filled, note },
+    });
+    return { lead, duplicate: true };
   }
 
   /** Birinchi Telegram xabaridayoq LEAD yaratadi, takroriy xabarda dublikat qilmaydi. */
@@ -114,6 +175,8 @@ export class TrialLeadsService {
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
     const search = query.search?.trim();
+    // "90 123 45 67" kabi bo'shliqli qidiruv saqlangan +998901234567 ga mos kelsin
+    const searchDigits = search?.replace(/\D/g, '') ?? '';
     const where: Prisma.TrialLeadWhereInput = {
       ...(query.source ? { source: query.source } : {}),
       ...(query.status ? { status: query.status } : {}),
@@ -123,6 +186,9 @@ export class TrialLeadsService {
               { institutionName: { contains: search, mode: 'insensitive' } },
               { contactName: { contains: search, mode: 'insensitive' } },
               { phone: { contains: search } },
+              ...(searchDigits.length >= 4
+                ? [{ phone: { contains: searchDigits } }]
+                : []),
             ],
           }
         : {}),

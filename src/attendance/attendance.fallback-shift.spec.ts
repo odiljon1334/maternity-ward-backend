@@ -217,7 +217,10 @@ describe('AttendanceService fallback shift selection', () => {
     const service = new AttendanceService(
       prisma as any,
       {} as any,
-      { broadcastAttendance: jest.fn(), broadcastLocationRemoved: jest.fn() } as any,
+      {
+        broadcastAttendance: jest.fn(),
+        broadcastLocationRemoved: jest.fn(),
+      } as any,
       {} as any,
       {} as any,
     );

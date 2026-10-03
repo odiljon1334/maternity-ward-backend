@@ -71,4 +71,10 @@ export class TrialRequestDto {
   @IsString()
   @MaxLength(300)
   pageUrl?: string;
+
+  /** Honeypot: odam ko'rmaydigan maydon — to'ldirilgan bo'lsa bu bot */
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  website?: string;
 }

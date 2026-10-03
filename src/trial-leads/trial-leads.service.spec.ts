@@ -1,6 +1,6 @@
 import { NotFoundException } from '@nestjs/common';
 import { TrialLeadSource, TrialLeadStatus } from '@prisma/client';
-import { TrialLeadsService } from './trial-leads.service';
+import { normalizeUzPhone, TrialLeadsService } from './trial-leads.service';
 
 function makeService() {
   const prisma: any = {
@@ -39,6 +39,39 @@ describe('TrialLeadsService', () => {
         phone: '+998901234567',
       }),
     });
+  });
+
+  it('telefon raqamini +998XXXXXXXXX ko‘rinishiga keltiradi', () => {
+    expect(normalizeUzPhone('+998 90 123-45-67')).toBe('+998901234567');
+    expect(normalizeUzPhone('901234567')).toBe('+998901234567');
+    expect(normalizeUzPhone('998901234567')).toBe('+998901234567');
+    expect(normalizeUzPhone('+7 999 000')).toBe('+7 999 000');
+  });
+
+  it('shu raqamdan ochiq lead bo‘lsa — yangisini yaratmay, mavjudini yangilaydi', async () => {
+    const { service, prisma } = makeService();
+    prisma.trialLead.findFirst.mockResolvedValueOnce({
+      id: 'lead-old',
+      note: null,
+    });
+
+    const result = await service.capture({
+      source: TrialLeadSource.WEB_FORM,
+      institutionName: 'Test klinika',
+      contactName: 'Ali Valiyev',
+      phone: '+998 90 123 45 67',
+      region: undefined,
+    });
+
+    expect(result.duplicate).toBe(true);
+    expect(prisma.trialLead.create).not.toHaveBeenCalled();
+    expect(prisma.trialLead.findFirst.mock.calls[0][0].where).toMatchObject({
+      phone: '+998901234567',
+    });
+    const update = prisma.trialLead.update.mock.calls[0][0];
+    expect(update.where).toEqual({ id: 'lead-old' });
+    expect(update.data).not.toHaveProperty('region');
+    expect(update.data.note).toContain('Takroriy');
   });
 
   it("qidiruv va filtrlarni bitta ro'yxat so'roviga birlashtiradi", async () => {

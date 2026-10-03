@@ -4,7 +4,10 @@ import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { SupportBotService } from '../support-bot/support-bot.service';
 import { TrialRequestDto } from './dto/trial-request.dto';
 import { TrialLeadSource } from '@prisma/client';
-import { TrialLeadsService } from '../trial-leads/trial-leads.service';
+import {
+  normalizeUzPhone,
+  TrialLeadsService,
+} from '../trial-leads/trial-leads.service';
 
 const ORG_TYPE_LABELS: Record<string, string> = {
   clinic: 'Klinika',
@@ -58,6 +61,11 @@ export class PublicController {
   @Throttle({ public: { ttl: 3_600_000, limit: 5 } })
   @Post('trial-request')
   async trialRequest(@Body() dto: TrialRequestDto, @Req() req: Request) {
+    if (dto.website?.trim()) {
+      // Bot: javob odatdagidek, lekin hech narsa saqlanmaydi va yuborilmaydi
+      this.logger.warn(`Trial-request honeypot ishladi: IP ${getIp(req)}`);
+      return { ok: true };
+    }
     const orgTypeLabel = dto.orgType
       ? ORG_TYPE_LABELS[dto.orgType] || dto.orgType
       : '—';
@@ -66,7 +74,7 @@ export class PublicController {
       timeZone: 'Asia/Tashkent',
     });
 
-    const extraLine = [
+    const extraLines = [
       dto.region ? `📍 Hudud: ${escapeHtml(dto.region)}` : null,
       `🏷️ Tashkilot turi: ${escapeHtml(orgTypeLabel)}`,
       dto.billingCycle
@@ -80,9 +88,10 @@ export class PublicController {
     ]
       .filter(Boolean)
       .join('\n');
+    let extraLine = extraLines;
 
     try {
-      await this.trialLeadsService.capture({
+      const { duplicate } = await this.trialLeadsService.capture({
         source: TrialLeadSource.WEB_FORM,
         institutionName: dto.hospitalName,
         contactName: dto.directorName,
@@ -97,6 +106,9 @@ export class PublicController {
         utmCampaign: dto.utmCampaign,
         pageUrl: dto.pageUrl,
       });
+      if (duplicate) {
+        extraLine = `🔁 Takroriy so'rov — mavjud lead yangilandi\n${extraLines}`;
+      }
     } catch (e) {
       // Telegram/PDF oqimini DB yozuvi xatosi sabab to'xtatmaymiz: ikkala
       // kanal bir-biriga fallback bo'lib, lead yo'qolish xavfini kamaytiradi.
@@ -109,7 +121,7 @@ export class PublicController {
       await this.supportBotService.notifyLeadFromWebForm(
         {
           fullName: dto.directorName,
-          phone: dto.phone,
+          phone: normalizeUzPhone(dto.phone),
           institutionName: dto.hospitalName,
           staffCount: dto.staffCount ?? null,
           plan: dto.plan ? (PLAN_MAP[dto.plan] ?? null) : null,
