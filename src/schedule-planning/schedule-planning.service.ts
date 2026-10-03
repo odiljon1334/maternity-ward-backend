@@ -571,8 +571,6 @@ export class SchedulePlanningService {
     approvalRow.getCell(1).value = 'Bo‘lim mudiri:';
     approvalRow.getCell(Math.max(5, totalColumn - 8)).value = 'Tasdiqlayman:';
     const approvalInfoRow = worksheet.getRow(rowNumber + 5);
-    approvalInfoRow.getCell(Math.max(5, totalColumn - 8)).value =
-      plan.approvedBy?.username ?? '';
     approvalInfoRow.getCell(Math.max(5, totalColumn - 3)).value =
       plan.approvedAt
         ? dayjs(plan.approvedAt).tz(TZ).format('DD.MM.YYYY HH:mm')
@@ -673,7 +671,10 @@ export class SchedulePlanningService {
     this.addChangesSheet(workbook, plan, changes);
     worksheet.autoFilter = {
       from: { row: 5, column: 1 },
-      to: { row: Math.max(5, rowNumber - 1), column: totalColumn },
+      // Kun ustunlari ataylab filterdan tashqarida: 4 birlik tor kataklarda
+      // dropdown tugmasi kun raqamini yopib qo'yadi. Xodimni qidirish/saralash
+      // uchun №, F.I.Sh. va Lavozim ustunlari yetarli.
+      to: { row: Math.max(5, rowNumber - 1), column: 3 },
     };
     worksheet.pageSetup.printTitlesRow = '1:5';
     worksheet.pageSetup.printArea = `A1:${worksheet.getColumn(totalColumn).letter}${rowNumber + 5}`;

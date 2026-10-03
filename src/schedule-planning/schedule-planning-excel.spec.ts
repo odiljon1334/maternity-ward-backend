@@ -90,6 +90,13 @@ describe('post schedule Excel export', () => {
     const totalColumn = 35; // A-C + October's 31 days + Jami
     const rowsByEmployee = new Map<string, ExcelJS.Row>();
 
+    expect(sheet.getCell('D5').value).toBe(1);
+    expect(sheet.getCell('E5').value).toBe(2);
+    expect(sheet.getCell('AH5').value).toBe(31);
+    // Kun ustunlarida filter tugmasi bo'lsa, 4 birlik tor ustunda kun raqami
+    // ko'rinmay qoladi. Filter faqat xodim ma'lumotlari ustunlarida bo'ladi.
+    expect(sheet.autoFilter).toBe('A5:C7');
+
     for (let rowNumber = 6; rowNumber <= sheet.rowCount; rowNumber += 1) {
       const row = sheet.getRow(rowNumber);
       const fullName = row.getCell(2).value;
@@ -103,6 +110,11 @@ describe('post schedule Excel export', () => {
     expect(gulbaxorRow?.number).not.toBe(oydinRow?.number);
     expect(gulbaxorRow?.getCell(totalColumn).value).toBe(72);
     expect(oydinRow?.getCell(totalColumn).value).toBe(36);
+
+    // Tizimdagi login imzo o'rnida chop etilmaydi. Bosh shifokor bu joyga
+    // F.I.Sh. va imzosini hujjat chiqarilgandan keyin qo'lda kiritadi.
+    expect(sheet.getCell('AA13').value).toBeNull();
+    expect(sheet.getCell('AF13').value).toBe('30.09.2026 10:00');
 
     const sumDayCells = (row: ExcelJS.Row) => {
       let total = 0;
