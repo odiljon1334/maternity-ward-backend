@@ -8,7 +8,9 @@ function makeController(captureError?: Error) {
   const trialLeads = {
     capture: captureError
       ? jest.fn().mockRejectedValue(captureError)
-      : jest.fn().mockResolvedValue({ id: 'lead-1' }),
+      : jest
+          .fn()
+          .mockResolvedValue({ lead: { id: 'lead-1' }, duplicate: false }),
   };
   return {
     controller: new PublicController(supportBot as any, trialLeads as any),
@@ -61,5 +63,28 @@ describe('PublicController.trialRequest', () => {
       ok: true,
     });
     expect(supportBot.notifyLeadFromWebForm).toHaveBeenCalledTimes(1);
+  });
+
+  it("honeypot to'ldirilsa — hech narsa saqlanmaydi va yuborilmaydi", async () => {
+    const { controller, supportBot, trialLeads } = makeController();
+
+    await expect(
+      controller.trialRequest({ ...dto, website: 'spam.example' }, req),
+    ).resolves.toEqual({ ok: true });
+    expect(trialLeads.capture).not.toHaveBeenCalled();
+    expect(supportBot.notifyLeadFromWebForm).not.toHaveBeenCalled();
+  });
+
+  it('takroriy lead Telegram xabarida belgilanadi', async () => {
+    const { controller, supportBot, trialLeads } = makeController();
+    trialLeads.capture.mockResolvedValueOnce({
+      lead: { id: 'lead-1' },
+      duplicate: true,
+    });
+
+    await controller.trialRequest(dto, req);
+    expect(supportBot.notifyLeadFromWebForm.mock.calls[0][1]).toContain(
+      'Takroriy',
+    );
   });
 });
