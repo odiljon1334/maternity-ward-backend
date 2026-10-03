@@ -75,10 +75,7 @@ describe('post schedule Excel export', () => {
           oydin: 36 * 60,
         },
         byDate: Object.fromEntries(
-          entries.map((entry) => [
-            Object.keys(entry.calendarMinutes)[0],
-            720,
-          ]),
+          entries.map((entry) => [Object.keys(entry.calendarMinutes)[0], 720]),
         ),
       },
     } as never);
