@@ -1,4 +1,12 @@
-import { IsOptional, IsString, IsEnum, IsInt, Min } from 'class-validator';
+import {
+  IsOptional,
+  IsString,
+  IsEnum,
+  IsIn,
+  IsInt,
+  Max,
+  Min,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 import { UserRole, UserStatus } from '@prisma/client';
 
@@ -15,6 +23,11 @@ export class QueryUsersDto {
   @IsEnum(UserStatus)
   status?: UserStatus;
 
+  /** 'true' — email tasdiqlanganlar, 'false' — tasdiqlanmagan yoki yo'q */
+  @IsOptional()
+  @IsIn(['true', 'false'])
+  emailVerified?: 'true' | 'false';
+
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -25,5 +38,6 @@ export class QueryUsersDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(500)
   limit?: number = 20;
 }

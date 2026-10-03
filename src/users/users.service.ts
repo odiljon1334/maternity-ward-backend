@@ -23,16 +23,19 @@ export class UsersService {
   constructor(private readonly prisma: PrismaService) {}
 
   async findAll(query: QueryUsersDto, hospitalId: string | null) {
-    const { search, role, status, page = 1, limit = 20 } = query;
+    const { search, role, status, emailVerified, page = 1, limit = 20 } = query;
     const skip = (page - 1) * limit;
 
     const where: any = {
       ...(hospitalId ? { hospitalId } : {}),
       ...(role && { role }),
       ...(status && { status }),
+      ...(emailVerified === 'true' && { emailVerifiedAt: { not: null } }),
+      ...(emailVerified === 'false' && { emailVerifiedAt: null }),
       ...(search && {
         OR: [
           { username: { contains: search, mode: 'insensitive' } },
+          { email: { contains: search, mode: 'insensitive' } },
           {
             employee: {
               fullName: { contains: search, mode: 'insensitive' },
@@ -54,6 +57,8 @@ export class UsersService {
           status: true,
           lastLoginAt: true,
           createdAt: true,
+          email: true,
+          emailVerifiedAt: true,
           hospitalId: true,
           hospital: { select: { id: true, name: true, code: true } },
           employee: {
