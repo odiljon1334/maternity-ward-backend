@@ -8,8 +8,11 @@ import { PrismaService } from '../../prisma/prisma.service';
  * davomati esa yozilaveradi, Telegram xabarlari yuborilmaydi.
  * Blok olib tashlansa hammasi darhol tiklanadi.
  */
-export const HOSPITAL_BLOCKED_LOGIN_MESSAGE =
-  'Muassasa bloklangan. Tizimga kirish vaqtincha yopilgan — administratorga murojaat qiling.';
+/** To'lov masalasi bo'yicha qo'ng'iroq raqami (ENV bilan almashtirish mumkin). */
+const BILLING_CONTACT_PHONE =
+  process.env.BILLING_CONTACT_PHONE?.trim() || '+998 95 577 54 54';
+
+export const HOSPITAL_BLOCKED_LOGIN_MESSAGE = `Muassasa bloklangan. Tizimga kirish vaqtincha yopilgan. To'lov masalasi bo'yicha qo'ng'iroq qiling: ${BILLING_CONTACT_PHONE}`;
 
 /**
  * Platforma darajasidagi rollar muassasa blokidan ta'sirlanmaydi: SUPER_ADMIN
