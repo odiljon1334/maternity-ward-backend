@@ -6,7 +6,10 @@ import {
   HospitalBlockedTelegramError,
   TelegramService,
 } from '../telegram/telegram.service';
-import { HOSPITAL_BLOCKED_LOGIN_MESSAGE } from './utils/hospital-access.util';
+import {
+  HOSPITAL_BLOCKED_LOGIN_MESSAGE,
+  hospitalBlockedException,
+} from './utils/hospital-access.util';
 import {
   isHospitalBillingBlocked,
   isHospitalBlocked,
@@ -89,6 +92,35 @@ describe('Muassasa bloki (admin)', () => {
       await expect(
         service.login({ username: 'superadmin', password: 'togri-parol' }),
       ).resolves.toMatchObject({ accessToken: 'jwt' });
+    });
+  });
+
+  describe('xato javobi (modal uchun)', () => {
+    it('code va aloqa ma’lumotlari mijozga yetib boradi', () => {
+      const { AllExceptionsFilter } = jest.requireActual(
+        './filters/http-exception.filter',
+      );
+      const json = jest.fn();
+      const host: any = {
+        switchToHttp: () => ({
+          getResponse: () => ({ status: () => ({ json }) }),
+          getRequest: () => ({ method: 'POST', url: '/api/v1/auth/login' }),
+        }),
+      };
+      new AllExceptionsFilter().catch(hospitalBlockedException(), host);
+      expect(json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          statusCode: 401,
+          code: 'HOSPITAL_BLOCKED',
+          message: HOSPITAL_BLOCKED_LOGIN_MESSAGE,
+          contact: {
+            telegram: 'staffpluse_support',
+            phone: '+998 95 577 54 54',
+          },
+        }),
+      );
+      expect(HOSPITAL_BLOCKED_LOGIN_MESSAGE).toContain('@staffpluse_support');
+      expect(HOSPITAL_BLOCKED_LOGIN_MESSAGE).toContain('+998 95 577 54 54');
     });
   });
 

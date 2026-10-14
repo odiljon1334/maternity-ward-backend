@@ -47,9 +47,23 @@ export class AllExceptionsFilter implements ExceptionFilter {
       );
     }
 
+    // Mijoz xatoni turiga qarab ko'rsatishi uchun (masalan HOSPITAL_BLOCKED —
+    // login sahifasida modal) `code` va `contact` uzatiladi.
+    const extra =
+      typeof message === 'object' && message !== null
+        ? {
+            ...(typeof (message as any).code === 'string' && {
+              code: (message as any).code,
+            }),
+            ...((message as any).contact && {
+              contact: (message as any).contact,
+            }),
+          }
+        : {};
     response.status(status).json({
       success: false,
       statusCode: status,
+      ...extra,
       message: typeof message === 'object' ? (message as any).message : message,
       timestamp: new Date().toISOString(),
       path: request.url,

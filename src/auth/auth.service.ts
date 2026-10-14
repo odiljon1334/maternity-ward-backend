@@ -22,7 +22,7 @@ import { ResetPasswordDto } from './dto/reset-password.dto';
 import { VerifyResetOtpDto } from './dto/verify-reset-otp.dto';
 import { UserRole } from '@prisma/client';
 import {
-  HOSPITAL_BLOCKED_LOGIN_MESSAGE,
+  hospitalBlockedException,
   isUserLockedByHospitalBlock,
 } from '../common/utils/hospital-access.util';
 import * as bcrypt from 'bcrypt';
@@ -220,7 +220,7 @@ export class AuthService {
         details: { username: user.username, reason: 'hospital_blocked' },
         ip,
       });
-      throw new UnauthorizedException(HOSPITAL_BLOCKED_LOGIN_MESSAGE);
+      throw hospitalBlockedException();
     }
 
     const payload = {

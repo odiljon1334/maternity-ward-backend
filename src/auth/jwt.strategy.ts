@@ -5,7 +5,7 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { computeEffectivePermissions, Permission } from '../common/permissions';
 import {
-  HOSPITAL_BLOCKED_LOGIN_MESSAGE,
+  hospitalBlockedException,
   isUserLockedByHospitalBlock,
 } from '../common/utils/hospital-access.util';
 
@@ -76,7 +76,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         user.hospital?.isBlocked ?? false,
       )
     ) {
-      throw new UnauthorizedException(HOSPITAL_BLOCKED_LOGIN_MESSAGE);
+      throw hospitalBlockedException();
     }
     const permissions: Permission[] = computeEffectivePermissions(
       user.role,
