@@ -84,7 +84,9 @@ describe('post schedule Excel export', () => {
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(buffer as any);
     const sheet = workbook.getWorksheet('Ish jadvali');
-    const totalColumn = 35; // A-C + October's 31 days + Jami
+    // A-C + oktyabrning 31 kuni + Kunduzgi/Kechki (kun, soat) + Jami
+    const statsColumn = 35;
+    const totalColumn = 39;
     const rowsByEmployee = new Map<string, ExcelJS.Row>();
 
     expect(sheet.getCell('D5').value).toBe(1);
@@ -107,15 +109,23 @@ describe('post schedule Excel export', () => {
     expect(gulbaxorRow?.number).not.toBe(oydinRow?.number);
     expect(gulbaxorRow?.getCell(totalColumn).value).toBe(72);
     expect(oydinRow?.getCell(totalColumn).value).toBe(36);
+    expect(sheet.getCell(5, statsColumn).value).toBe('Kunduzgi (kun)');
+    expect(sheet.getCell(5, totalColumn).value).toBe('Jami');
+    // 12 soatlik bir kunlik smena — kunduzgi: 6 kun / 72 soat, kechki yo'q.
+    expect(
+      [0, 1, 2, 3].map(
+        (offset) => gulbaxorRow?.getCell(statsColumn + offset).value,
+      ),
+    ).toEqual([6, 72, 0, 0]);
 
     // Tizimdagi login imzo o'rnida chop etilmaydi. Bosh shifokor bu joyga
     // F.I.Sh. va imzosini hujjat chiqarilgandan keyin qo'lda kiritadi.
     expect(sheet.getCell('AA13').value).toBeNull();
-    expect(sheet.getCell('AF13').value).toBe('30.09.2026 10:00');
+    expect(sheet.getCell('AJ13').value).toBe('30.09.2026 10:00');
 
     const sumDayCells = (row: ExcelJS.Row) => {
       let total = 0;
-      for (let column = 4; column < totalColumn; column += 1) {
+      for (let column = 4; column < statsColumn; column += 1) {
         const value = row.getCell(column).value;
         if (typeof value === 'number') total += value;
       }
@@ -174,7 +184,12 @@ describe('post schedule Excel export', () => {
     expect(sheet.getCell('B6').value).toBe('Odiljon Akramov');
     expect(sheet.getCell('D6').value).toBe(4);
     expect(sheet.getCell('E6').value).toBe(8);
-    expect(sheet.getCell('AH6').value).toBe(12);
+    // Sentyabr: 30 kun → AH..AK Kunduzgi/Kechki, AL — Jami.
+    expect(sheet.getCell('AH6').value).toBe(0);
+    expect(sheet.getCell('AI6').value).toBe(0);
+    expect(sheet.getCell('AJ6').value).toBe(1);
+    expect(sheet.getCell('AK6').value).toBe(12);
+    expect(sheet.getCell('AL6').value).toBe(12);
   });
 
   it('marks approved changes with dates and lists them on a second sheet', async () => {
@@ -251,5 +266,87 @@ describe('post schedule Excel export', () => {
     expect(changes.getCell('K3').value).toBe('03.09.2026 14:30');
     // Rad etilgan so'rov ro'yxatga kirmaydi.
     expect(changes.getCell('A4').value).toBeNull();
+  });
+
+  it('groups outside-post employees into their own section with totals', async () => {
+    const service = new SchedulePlanningService({} as never);
+    const entry = (
+      id: string,
+      employeeId: string,
+      fullName: string,
+      counts: boolean,
+      calendarMinutes: Record<string, number>,
+      type: 'DAYTIME' | 'NIGHTTIME',
+    ) => ({
+      id,
+      employeeId,
+      entryType: SchedulePlanEntryType.WORKING,
+      workDate: new Date(`${Object.keys(calendarMinutes)[0]}T00:00:00+05:00`),
+      employee: { fullName, position: { name: 'Hamshira' } },
+      shift: { type },
+      countsTowardPostCoverage: counts,
+      calendarMinutes,
+    });
+    jest.spyOn(service, 'getPlanDetails').mockResolvedValue({
+      id: 'plan-1',
+      year: 2026,
+      month: 10,
+      version: 1,
+      status: MonthlySchedulePlanStatus.DRAFT,
+      hospital: { id: 'h1', name: 'Klinika' },
+      post: { name: 'Post 1', department: { name: 'Bo‘lim' } },
+      entries: [
+        entry(
+          'p1',
+          'post-1',
+          'Post Xodimi',
+          true,
+          { '2026-10-01': 720 },
+          'DAYTIME',
+        ),
+        entry(
+          'o1',
+          'out-1',
+          'Tashqi Xodim',
+          false,
+          { '2026-10-02': 240, '2026-10-03': 480 },
+          'NIGHTTIME',
+        ),
+      ],
+      changeRequests: [],
+      summary: {
+        targetMinutes: 744 * 60,
+        postNormMinutes: 744 * 60,
+        postSlots: 1,
+        fullPostCount: 0,
+        missingMinutes: 732 * 60,
+        remainingMinutes: 732 * 60,
+        postCoverageRequired: true,
+        plannedMinutes: 12 * 60,
+        byDate: { '2026-10-01': 720 },
+      },
+    } as never);
+
+    const buffer = await service.exportPlanExcel('h1', 'plan-1');
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(buffer as any);
+    const sheet = workbook.getWorksheet('Ish jadvali');
+
+    expect(sheet.getCell('A6').value).toBe('POST XODIMLARI');
+    expect(sheet.getCell('B7').value).toBe('Post Xodimi');
+    expect(String(sheet.getCell('A8').value)).toContain(
+      'POSTDAN TASHQARI XODIMLAR',
+    );
+    expect(sheet.getCell('B9').value).toBe('Tashqi Xodim');
+    expect(sheet.getCell('A11').value).toBe('POST JAMI');
+    expect(sheet.getCell(11, 39).value).toBe(12);
+    expect(sheet.getCell('A12').value).toBe('POSTDAN TASHQARI JAMI');
+    // Kechki: 1 smena, 12 soat; Jami 12.
+    expect([35, 36, 37, 38, 39].map((c) => sheet.getCell(12, c).value)).toEqual(
+      [0, 0, 1, 12, 12],
+    );
+    expect(sheet.getCell('A13').value).toBe('POST NORMASI');
+    expect(sheet.getCell(13, 39).value).toBe(744);
+    expect(String(sheet.getCell('A14').value)).toContain('yana 732 soat');
   });
 });

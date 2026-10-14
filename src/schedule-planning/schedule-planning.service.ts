@@ -25,12 +25,15 @@ import { SaveSchedulePlanEntriesDto } from './dto/save-schedule-plan-entries.dto
 import { CreateScheduleChangeDto } from './dto/create-schedule-change.dto';
 import {
   assertNoEmployeeOverlaps,
+  calculateEmployeeShiftStats,
   calculateMonthlyCoverageTargets,
   calculateCoverageSummary,
+  calculatePostNormBreakdown,
   normalizePostCoveragePolicy,
   PostCoveragePolicy,
   splitIntervalByCalendarDate,
 } from './schedule-planning-calculator';
+import { localDateParts } from './schedule-planning-time';
 import { DateUtil } from '../common/utils/date.util';
 import { NotificationsService } from '../notifications/notifications.service';
 import {
@@ -48,6 +51,37 @@ dayjs.extend(timezone);
 
 const TZ = process.env.TIMEZONE || 'Asia/Tashkent';
 const CHANGE_REQUEST_WINDOW_DAYS = 31;
+
+/**
+ * Grafik javobidagi xodim ma'lumoti — faqat jadval uchun kerakli maydonlar.
+ * To'liq Employee (maosh, telefon, GPS, Telegram...) har katakda takrorlanib
+ * javobning ~60% ini egallardi va keraksiz shaxsiy ma'lumotni ochardi.
+ */
+const PLAN_EMPLOYEE_SELECT = {
+  id: true,
+  fullName: true,
+  userId: true,
+  departmentId: true,
+  positionId: true,
+  position: { select: { id: true, name: true } },
+} satisfies Prisma.EmployeeSelect;
+
+/** Kunduzgi/kechki hisob va jadval uchun smenadan kerakli maydonlar. */
+const PLAN_SHIFT_SELECT = {
+  id: true,
+  name: true,
+  type: true,
+  startTime: true,
+  endTime: true,
+  isOvernight: true,
+} satisfies Prisma.ShiftTemplateSelect;
+
+const PLAN_CHANGE_EMPLOYEE_SELECT = {
+  id: true,
+  fullName: true,
+  userId: true,
+  departmentId: true,
+} satisfies Prisma.EmployeeSelect;
 
 type PlanEntryWithWorkDate = {
   employeeId: string;
@@ -383,16 +417,26 @@ export class SchedulePlanningService {
         approvedBy: { select: { id: true, username: true } },
         entries: {
           include: {
-            employee: { include: { department: true, position: true } },
-            shift: true,
+            employee: { select: PLAN_EMPLOYEE_SELECT },
+            shift: { select: PLAN_SHIFT_SELECT },
           },
           orderBy: [{ employee: { fullName: 'asc' } }, { workDate: 'asc' }],
         },
         changeRequests: {
           include: {
-            primaryEntry: { include: { employee: true, shift: true } },
-            counterpartEntry: { include: { employee: true, shift: true } },
-            replacementEmployee: true,
+            primaryEntry: {
+              include: {
+                employee: { select: PLAN_CHANGE_EMPLOYEE_SELECT },
+                shift: true,
+              },
+            },
+            counterpartEntry: {
+              include: {
+                employee: { select: PLAN_CHANGE_EMPLOYEE_SELECT },
+                shift: true,
+              },
+            },
+            replacementEmployee: { select: PLAN_CHANGE_EMPLOYEE_SELECT },
             requestedBy: { select: { id: true, username: true } },
             acceptedBy: { select: { id: true, username: true } },
             approvedBy: { select: { id: true, username: true } },
@@ -410,25 +454,25 @@ export class SchedulePlanningService {
       plan.month,
       plan.entries,
     );
-    const summary = this.buildPlanSummary({ ...plan, entries });
-    return {
+    const entriesWithMinutes = entries.map((entry) => ({
+      ...entry,
+      calendarMinutes:
+        entry.entryType === SchedulePlanEntryType.WORKING &&
+        entry.startsAt &&
+        entry.endsAt
+          ? splitIntervalByCalendarDate(
+              entry.startsAt,
+              entry.endsAt,
+              plan.year,
+              plan.month,
+            )
+          : {},
+    }));
+    const summary = this.buildPlanSummary({
       ...plan,
-      entries: entries.map((entry) => ({
-        ...entry,
-        calendarMinutes:
-          entry.entryType === SchedulePlanEntryType.WORKING &&
-          entry.startsAt &&
-          entry.endsAt
-            ? splitIntervalByCalendarDate(
-                entry.startsAt,
-                entry.endsAt,
-                plan.year,
-                plan.month,
-              )
-            : {},
-      })),
-      summary,
-    };
+      entries: entriesWithMinutes,
+    });
+    return { ...plan, entries: entriesWithMinutes, summary };
   }
 
   async exportPlanExcel(hospitalId: string, planId: string): Promise<Buffer> {
@@ -454,10 +498,22 @@ export class SchedulePlanningService {
       },
       views: [{ state: 'frozen', xSplit: 3, ySplit: 5 }],
     });
+    const hours = (minutes: number) => Number((minutes / 60).toFixed(2));
     const daysInMonth = new Date(
       Date.UTC(plan.year, plan.month, 0),
     ).getUTCDate();
-    const totalColumn = 4 + daysInMonth;
+    // Kun ustunlaridan keyin: Kunduzgi (kun, soat), Kechki (kun, soat), Jami.
+    const statsColumn = 4 + daysInMonth;
+    const STATS_HEADERS = [
+      'Kunduzgi (kun)',
+      'Kunduzgi (soat)',
+      'Kechki (kun)',
+      'Kechki (soat)',
+    ];
+    const totalColumn = statsColumn + STATS_HEADERS.length;
+    const summary = plan.summary ?? {};
+    const postNormMinutes = summary.postNormMinutes ?? summary.targetMinutes;
+    const postSlots = Math.max(1, summary.postSlots ?? 1);
 
     worksheet.mergeCells(1, 1, 1, totalColumn);
     worksheet.getCell(1, 1).value = plan.hospital?.name ?? 'Muassasa';
@@ -468,7 +524,7 @@ export class SchedulePlanningService {
     worksheet.getCell(3, 1).value = `ISH JADVALI — ${plan.post.name}`;
     worksheet.mergeCells(4, 1, 4, totalColumn);
     worksheet.getCell(4, 1).value =
-      `Holat: ${plan.status} | Versiya: ${plan.version} | Post normasi: ${plan.summary.targetMinutes / 60} soat | Yuklab olingan: ${dayjs().tz(TZ).format('DD.MM.YYYY HH:mm')}`;
+      `Holat: ${plan.status} | Versiya: ${plan.version} | Post normasi: ${hours(postNormMinutes)} soat${postSlots > 1 ? ` × ${postSlots} post` : ''} | Yuklab olingan: ${dayjs().tz(TZ).format('DD.MM.YYYY HH:mm')}`;
 
     for (let row = 1; row <= 4; row += 1) {
       const cell = worksheet.getCell(row, 1);
@@ -486,101 +542,226 @@ export class SchedulePlanningService {
     for (let day = 1; day <= daysInMonth; day += 1) {
       headerRow.getCell(day + 3).value = day;
     }
+    STATS_HEADERS.forEach((label, index) => {
+      headerRow.getCell(statsColumn + index).value = label;
+    });
     headerRow.getCell(totalColumn).value = 'Jami';
-    headerRow.height = 26;
+    headerRow.height = 30;
 
-    const employeeRows = new Map<
-      string,
-      {
-        employee: any;
-        values: Map<number, number | string>;
-        totalMinutes: number;
-        countsTowardPostCoverage: boolean;
-      }
-    >();
+    type EmployeeRow = {
+      employee: any;
+      values: Map<number, number | string>;
+      minutesByDay: Map<number, number>;
+      totalMinutes: number;
+      countsTowardPostCoverage: boolean;
+      flagFromOwnEntry: boolean;
+    };
+    const employeeRows = new Map<string, EmployeeRow>();
     for (const entry of plan.entries) {
       let employeeRow = employeeRows.get(entry.employeeId);
       if (!employeeRow) {
         employeeRow = {
           employee: entry.employee,
           values: new Map(),
+          minutesByDay: new Map(),
           totalMinutes: 0,
           countsTowardPostCoverage: entry.countsTowardPostCoverage !== false,
+          flagFromOwnEntry: !entry.isCarryIn,
         };
         employeeRows.set(entry.employeeId, employeeRow);
+      } else if (!employeeRow.flagFromOwnEntry && !entry.isCarryIn) {
+        // Post/postdan tashqari belgisi shu oyning o'z katagidan olinadi,
+        // oldingi oydan o'tgan smenadan emas.
+        employeeRow.countsTowardPostCoverage =
+          entry.countsTowardPostCoverage !== false;
+        employeeRow.flagFromOwnEntry = true;
       }
       if (entry.entryType === SchedulePlanEntryType.WORKING) {
         for (const [date, minutes] of Object.entries(
           entry.calendarMinutes as Record<string, number>,
         )) {
           const day = Number(date.slice(-2));
-          const current = employeeRow.values.get(day);
-          const currentMinutes = typeof current === 'number' ? current * 60 : 0;
-          employeeRow.values.set(day, (currentMinutes + minutes) / 60);
+          const dayMinutes = (employeeRow.minutesByDay.get(day) ?? 0) + minutes;
+          employeeRow.minutesByDay.set(day, dayMinutes);
+          employeeRow.values.set(day, dayMinutes / 60);
           employeeRow.totalMinutes += minutes;
         }
       } else {
-        const localDate = dayjs(entry.workDate).tz(TZ);
-        if (
-          localDate.year() === plan.year &&
-          localDate.month() + 1 === plan.month
-        ) {
+        const localDate = localDateParts(entry.workDate);
+        if (localDate.year === plan.year && localDate.month === plan.month) {
           employeeRow.values.set(
-            localDate.date(),
+            localDate.day,
             this.entryTypeExcelCode(entry.entryType),
           );
         }
       }
     }
 
+    const shiftStats = calculateEmployeeShiftStats(
+      plan.entries,
+      plan.year,
+      plan.month,
+    );
+    const emptyStats = {
+      dayShifts: 0,
+      dayMinutes: 0,
+      nightShifts: 0,
+      nightMinutes: 0,
+      totalMinutes: 0,
+    };
+    const statsCells = (stats: typeof emptyStats) => [
+      stats.dayShifts,
+      hours(stats.dayMinutes),
+      stats.nightShifts,
+      hours(stats.nightMinutes),
+    ];
+    const addStats = (target: typeof emptyStats, stats: typeof emptyStats) => {
+      target.dayShifts += stats.dayShifts;
+      target.dayMinutes += stats.dayMinutes;
+      target.nightShifts += stats.nightShifts;
+      target.nightMinutes += stats.nightMinutes;
+      target.totalMinutes += stats.totalMinutes;
+    };
+
+    const postEmployees = [...employeeRows].filter(
+      ([, item]) => item.countsTowardPostCoverage,
+    );
+    const outsideEmployees = [...employeeRows].filter(
+      ([, item]) => !item.countsTowardPostCoverage,
+    );
+    const withSections = outsideEmployees.length > 0;
+
     let rowNumber = 6;
     let index = 1;
     const rowByEmployee = new Map<string, number>();
-    for (const [employeeId, item] of employeeRows) {
-      rowByEmployee.set(employeeId, rowNumber);
-      const row = worksheet.getRow(rowNumber);
-      row.getCell(1).value = index;
-      row.getCell(2).value = item.employee.fullName;
-      row.getCell(3).value =
-        `${item.employee.position?.name ?? ''}${item.countsTowardPostCoverage ? ' — Post xodimi' : ' — Postdan tashqari'}`;
-      for (let day = 1; day <= daysInMonth; day += 1) {
-        row.getCell(day + 3).value = item.values.get(day) ?? '';
-      }
-      row.getCell(totalColumn).value = item.totalMinutes / 60;
-      row.height = 21;
+    const sectionRows: number[] = [];
+    const sectionHeader = (title: string) => {
+      worksheet.mergeCells(rowNumber, 1, rowNumber, totalColumn);
+      worksheet.getCell(rowNumber, 1).value = title;
+      sectionRows.push(rowNumber);
       rowNumber += 1;
-      index += 1;
-    }
+    };
+    const writeEmployees = (
+      list: Array<[string, EmployeeRow]>,
+      totals: typeof emptyStats,
+      byDay: Map<number, number>,
+    ) => {
+      for (const [employeeId, item] of list) {
+        rowByEmployee.set(employeeId, rowNumber);
+        const row = worksheet.getRow(rowNumber);
+        row.getCell(1).value = index;
+        row.getCell(2).value = item.employee.fullName;
+        row.getCell(3).value = item.employee.position?.name ?? '';
+        for (let day = 1; day <= daysInMonth; day += 1) {
+          row.getCell(day + 3).value = item.values.get(day) ?? '';
+          byDay.set(
+            day,
+            (byDay.get(day) ?? 0) + (item.minutesByDay.get(day) ?? 0),
+          );
+        }
+        const stats = shiftStats[employeeId] ?? emptyStats;
+        statsCells(stats).forEach((value, offset) => {
+          row.getCell(statsColumn + offset).value = value;
+        });
+        addStats(totals, stats);
+        row.getCell(totalColumn).value = hours(item.totalMinutes);
+        row.height = 21;
+        rowNumber += 1;
+        index += 1;
+      }
+    };
 
-    const postTotalRow = worksheet.getRow(rowNumber + 1);
+    const postTotals = { ...emptyStats };
+    const outsideTotals = { ...emptyStats };
+    const outsideByDay = new Map<number, number>();
+    if (withSections && postEmployees.length) {
+      sectionHeader('POST XODIMLARI');
+    }
+    writeEmployees(postEmployees, postTotals, new Map());
+    if (withSections) {
+      sectionHeader('POSTDAN TASHQARI XODIMLAR — post normasiga kirmaydi');
+      writeEmployees(outsideEmployees, outsideTotals, outsideByDay);
+    }
+    const lastEmployeeRow = rowNumber - 1;
+
+    let cursor = rowNumber + 1;
+    const postTotalRow = worksheet.getRow(cursor);
     postTotalRow.getCell(1).value = 'POST JAMI';
-    worksheet.mergeCells(rowNumber + 1, 1, rowNumber + 1, 3);
+    worksheet.mergeCells(cursor, 1, cursor, 3);
     for (let day = 1; day <= daysInMonth; day += 1) {
       const date = `${plan.year}-${String(plan.month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-      postTotalRow.getCell(day + 3).value =
-        (plan.summary.byDate[date] ?? 0) / 60;
+      postTotalRow.getCell(day + 3).value = hours(summary.byDate?.[date] ?? 0);
     }
-    postTotalRow.getCell(totalColumn).value = plan.summary.plannedMinutes / 60;
+    statsCells(postTotals).forEach((value, offset) => {
+      postTotalRow.getCell(statsColumn + offset).value = value;
+    });
+    postTotalRow.getCell(totalColumn).value = hours(summary.plannedMinutes);
+    const boldRows = [cursor];
+    cursor += 1;
 
-    const targetRow = worksheet.getRow(rowNumber + 2);
-    targetRow.getCell(1).value = 'POST NORMASI';
-    worksheet.mergeCells(rowNumber + 2, 1, rowNumber + 2, totalColumn - 1);
-    targetRow.getCell(totalColumn).value = plan.summary.targetMinutes / 60;
+    if (withSections) {
+      const outsideRow = worksheet.getRow(cursor);
+      outsideRow.getCell(1).value = 'POSTDAN TASHQARI JAMI';
+      worksheet.mergeCells(cursor, 1, cursor, 3);
+      for (let day = 1; day <= daysInMonth; day += 1) {
+        outsideRow.getCell(day + 3).value = hours(outsideByDay.get(day) ?? 0);
+      }
+      statsCells(outsideTotals).forEach((value, offset) => {
+        outsideRow.getCell(statsColumn + offset).value = value;
+      });
+      outsideRow.getCell(totalColumn).value = hours(outsideTotals.totalMinutes);
+      boldRows.push(cursor);
+      cursor += 1;
+    }
 
-    const approvalRow = worksheet.getRow(rowNumber + 4);
+    const targetRowNumber = cursor;
+    const targetRow = worksheet.getRow(cursor);
+    targetRow.getCell(1).value =
+      postSlots > 1
+        ? `POST NORMASI — ${postSlots} post × ${hours(postNormMinutes)} soat`
+        : 'POST NORMASI';
+    worksheet.mergeCells(cursor, 1, cursor, totalColumn - 1);
+    targetRow.getCell(totalColumn).value = hours(summary.targetMinutes);
+    boldRows.push(cursor);
+    const lastTableRow = cursor;
+    cursor += 1;
+
+    // Ortib qolgan soatlar haqida eslatma. Dastur xodimni o'zi postdan
+    // tashqari qilmaydi — foydalanuvchiga nima qilish kerakligini aytadi.
+    if (summary.postCoverageRequired && summary.remainingMinutes > 0) {
+      worksheet.mergeCells(cursor, 1, cursor, totalColumn);
+      const note = worksheet.getCell(cursor, 1);
+      note.value = summary.fullPostCount
+        ? `${summary.fullPostCount} ta post to‘liq (${hours(summary.fullPostCount * postNormMinutes)} soat), ${hours(summary.remainderMinutes)} soat ortib qoldi: oxirgi postni ${hours(postNormMinutes)} soatga to‘ldiring (yana ${hours(summary.missingMinutes)} soat) yoki ortiqcha xodimni «Postdan tashqari» deb belgilang.`
+        : `Post normasigacha yana ${hours(summary.missingMinutes)} soat rejalashtirilishi kerak.`;
+      note.font = {
+        name: 'Arial',
+        size: 9,
+        bold: true,
+        color: { argb: 'FFC00000' },
+      };
+      cursor += 1;
+    }
+
+    const legendRowNumber = cursor;
+    const approvalRow = worksheet.getRow(cursor + 1);
     approvalRow.getCell(1).value = 'Bo‘lim mudiri:';
     approvalRow.getCell(Math.max(5, totalColumn - 8)).value = 'Tasdiqlayman:';
-    const approvalInfoRow = worksheet.getRow(rowNumber + 5);
+    const approvalInfoRow = worksheet.getRow(cursor + 2);
     approvalInfoRow.getCell(Math.max(5, totalColumn - 3)).value =
       plan.approvedAt
         ? dayjs(plan.approvedAt).tz(TZ).format('DD.MM.YYYY HH:mm')
         : '';
+    const lastPrintRow = cursor + 2;
 
     worksheet.getColumn(1).width = 5;
     worksheet.getColumn(2).width = 28;
     worksheet.getColumn(3).width = 18;
     for (let day = 1; day <= daysInMonth; day += 1) {
       worksheet.getColumn(day + 3).width = 4;
+    }
+    for (let offset = 0; offset < STATS_HEADERS.length; offset += 1) {
+      worksheet.getColumn(statsColumn + offset).width = 8;
     }
     worksheet.getColumn(totalColumn).width = 8;
 
@@ -590,16 +771,24 @@ export class SchedulePlanningService {
       bottom: { style: 'thin', color: { argb: 'FF000000' } },
       right: { style: 'thin', color: { argb: 'FF000000' } },
     };
-    for (let row = 5; row <= rowNumber + 2; row += 1) {
+    for (let row = 5; row <= lastTableRow; row += 1) {
       for (let column = 1; column <= totalColumn; column += 1) {
         const cell = worksheet.getCell(row, column);
         cell.border = border;
         cell.alignment = {
-          horizontal: column === 2 || column === 3 ? 'left' : 'center',
+          horizontal:
+            (column === 2 || column === 3) && !sectionRows.includes(row)
+              ? 'left'
+              : 'center',
           vertical: 'middle',
           wrapText: true,
         };
-        cell.font = { name: 'Arial', size: 9, bold: row === 5 };
+        cell.font = {
+          name: 'Arial',
+          size: 9,
+          bold:
+            row === 5 || sectionRows.includes(row) || boldRows.includes(row),
+        };
       }
     }
     headerRow.fill = {
@@ -607,13 +796,20 @@ export class SchedulePlanningService {
       pattern: 'solid',
       fgColor: { argb: 'FFD9E1F2' },
     };
+    for (const row of sectionRows) {
+      worksheet.getCell(row, 1).fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFEDEDED' },
+      };
+    }
     for (let day = 1; day <= daysInMonth; day += 1) {
-      const date = dayjs.tz(
-        `${plan.year}-${String(plan.month).padStart(2, '0')}-${String(day).padStart(2, '0')}`,
-        TZ,
-      );
-      if ([0, 6].includes(date.day())) {
-        for (let row = 5; row <= rowNumber + 1; row += 1) {
+      const weekday = new Date(
+        Date.UTC(plan.year, plan.month - 1, day),
+      ).getUTCDay();
+      if (weekday === 0 || weekday === 6) {
+        for (let row = 5; row < targetRowNumber; row += 1) {
+          if (sectionRows.includes(row)) continue;
           worksheet.getCell(row, day + 3).fill = {
             type: 'pattern',
             pattern: 'solid',
@@ -622,8 +818,17 @@ export class SchedulePlanningService {
         }
       }
     }
-    postTotalRow.font = { name: 'Arial', size: 9, bold: true };
-    targetRow.font = { name: 'Arial', size: 9, bold: true };
+    // Kunduzgi/kechki ustunlar ajralib turishi uchun och rang.
+    for (let row = 5; row < targetRowNumber; row += 1) {
+      if (sectionRows.includes(row)) continue;
+      for (let offset = 0; offset < STATS_HEADERS.length; offset += 1) {
+        worksheet.getCell(row, statsColumn + offset).fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: offset < 2 ? 'FFFFF2CC' : 'FFDDEBF7' },
+        };
+      }
+    }
 
     // Tasdiqlangan reja hujjat sifatida o'zgarmaydi; tasdiqdan keyingi
     // o'zgarishlar (almashish, o'rniga chiqish, ishga chiqmaslik) katakda
@@ -635,15 +840,11 @@ export class SchedulePlanningService {
       const seen = new Set<string>();
       for (const target of change.targets) {
         const row = rowByEmployee.get(target.employeeId);
-        const local = dayjs(target.workDate).tz(TZ);
-        if (
-          !row ||
-          local.year() !== plan.year ||
-          local.month() + 1 !== plan.month
-        ) {
+        const local = localDateParts(target.workDate);
+        if (!row || local.year !== plan.year || local.month !== plan.month) {
           continue;
         }
-        const key = `${row}:${local.date() + 3}`;
+        const key = `${row}:${local.day + 3}`;
         if (seen.has(key)) continue;
         seen.add(key);
         const notes = notesByCell.get(key) ?? [];
@@ -663,7 +864,7 @@ export class SchedulePlanningService {
       };
       cell.note = notes.join('\n');
     }
-    const legendRow = worksheet.getRow(rowNumber + 3);
+    const legendRow = worksheet.getRow(legendRowNumber);
     legendRow.getCell(1).value = changes.length
       ? `Sariq katak — tasdiqdan keyingi o‘zgarish (${changes.length} ta, oxirgisi ${changes[changes.length - 1].approvedAtText}). Batafsil: «O‘zgarishlar» varag‘i.`
       : 'Tasdiqdan keyin o‘zgarish kiritilmagan.';
@@ -674,10 +875,10 @@ export class SchedulePlanningService {
       // Kun ustunlari ataylab filterdan tashqarida: 4 birlik tor kataklarda
       // dropdown tugmasi kun raqamini yopib qo'yadi. Xodimni qidirish/saralash
       // uchun №, F.I.Sh. va Lavozim ustunlari yetarli.
-      to: { row: Math.max(5, rowNumber - 1), column: 3 },
+      to: { row: Math.max(5, lastEmployeeRow), column: 3 },
     };
     worksheet.pageSetup.printTitlesRow = '1:5';
-    worksheet.pageSetup.printArea = `A1:${worksheet.getColumn(totalColumn).letter}${rowNumber + 5}`;
+    worksheet.pageSetup.printArea = `A1:${worksheet.getColumn(totalColumn).letter}${lastPrintRow}`;
 
     const output = await workbook.xlsx.writeBuffer();
     return Buffer.from(output);
@@ -746,13 +947,13 @@ export class SchedulePlanningService {
       TZ,
     );
     const monthEnd = monthStart.add(1, 'month');
+    // YYYY-MM-DD satrlari leksikografik tartibda sana tartibiga teng.
+    const firstAllowedDay = monthStart.subtract(1, 'day').format('YYYY-MM-DD');
+    const firstForbiddenDay = monthEnd.format('YYYY-MM-DD');
     const normalized = dto.entries.map((entry) => {
       const workDate = DateUtil.startOfDay(entry.workDate);
-      const workDay = dayjs(workDate).tz(TZ);
-      if (
-        workDay.isBefore(monthStart.subtract(1, 'day'), 'day') ||
-        !workDay.isBefore(monthEnd, 'day')
-      ) {
+      const workDay = localDateParts(workDate).iso;
+      if (workDay < firstAllowedDay || workDay >= firstForbiddenDay) {
         throw new BadRequestException(
           'Grafik sanasi tanlangan oy yoki oy boshidagi tungi smenaga mos emas',
         );
@@ -776,10 +977,7 @@ export class SchedulePlanningService {
         if (!validShiftIds.has(entry.shiftId)) {
           throw new BadRequestException('Smena topilmadi');
         }
-        if (
-          dayjs(startsAt).tz(TZ).format('YYYY-MM-DD') !==
-          workDay.format('YYYY-MM-DD')
-        ) {
+        if (localDateParts(startsAt).iso !== workDay) {
           throw new BadRequestException(
             'Smena boshlanish sanasi grafik sanasiga mos emas',
           );
@@ -842,7 +1040,7 @@ export class SchedulePlanningService {
 
     const uniqueDayKeys = new Set<string>();
     for (const entry of effectiveEntries) {
-      const key = `${entry.employeeId}:${dayjs(entry.workDate).tz(TZ).format('YYYY-MM-DD')}`;
+      const key = `${entry.employeeId}:${localDateParts(entry.workDate).iso}`;
       if (uniqueDayKeys.has(key)) {
         throw new BadRequestException(
           'Bir xodimga bir kunda bittadan ortiq grafik katagi berilmaydi',
@@ -914,7 +1112,7 @@ export class SchedulePlanningService {
         const otherDayKeys = new Set(
           otherEntries.map(
             (entry) =>
-              `${entry.employeeId}:${dayjs(entry.workDate).tz(TZ).format('YYYY-MM-DD')}`,
+              `${entry.employeeId}:${localDateParts(entry.workDate).iso}`,
           ),
         );
         if ([...uniqueDayKeys].some((key) => otherDayKeys.has(key))) {
@@ -954,7 +1152,7 @@ export class SchedulePlanningService {
     }>,
   ) {
     const dayKey = (employeeId: string, workDate: Date) =>
-      `${employeeId}:${dayjs(workDate).tz(TZ).format('YYYY-MM-DD')}`;
+      `${employeeId}:${localDateParts(workDate).iso}`;
     const existing = await tx.monthlyScheduleEntry.findMany({
       where: { planId },
       select: {
@@ -1106,10 +1304,8 @@ export class SchedulePlanningService {
         // Oldingi oyning oxirida boshlangan carry-in smena o'sha oy grafigi
         // tomonidan nashr qilinadi; bu oy faqat Excel/qamrovda uning qismini oladi.
         const monthEntries = plan.entries.filter((entry) => {
-          const workDay = dayjs(entry.workDate).tz(TZ);
-          return (
-            workDay.year() === plan.year && workDay.month() + 1 === plan.month
-          );
+          const workDay = localDateParts(entry.workDate);
+          return workDay.year === plan.year && workDay.month === plan.month;
         });
         const existing = monthEntries.length
           ? await tx.schedule.findMany({
@@ -2064,8 +2260,8 @@ export class SchedulePlanningService {
             endsAt: { gt: monthStart.toDate() },
           },
           include: {
-            employee: { include: { department: true, position: true } },
-            shift: true,
+            employee: { select: PLAN_EMPLOYEE_SELECT },
+            shift: { select: PLAN_SHIFT_SELECT },
           },
         },
       },
@@ -2075,15 +2271,18 @@ export class SchedulePlanningService {
       isCarryIn: true as const,
       isCanonicalCarryIn: true as const,
     }));
+    const monthStartDay = monthStart.format('YYYY-MM-DD');
+    const isBeforeMonth = (workDate: Date) =>
+      localDateParts(workDate).iso < monthStartDay;
     const currentMonthEntries = entries.filter(
-      (entry) => !dayjs(entry.workDate).tz(TZ).isBefore(monthStart, 'day'),
+      (entry) => !isBeforeMonth(entry.workDate),
     );
 
     if (carryIn.length) return [...carryIn, ...currentMonthEntries];
 
     return entries.map((entry) => ({
       ...entry,
-      ...(dayjs(entry.workDate).tz(TZ).isBefore(monthStart, 'day') && {
+      ...(isBeforeMonth(entry.workDate) && {
         isCarryIn: true,
       }),
     }));
@@ -2126,6 +2325,7 @@ export class SchedulePlanningService {
       endsAt: Date | null;
       countsTowardPostCoverage?: boolean;
       isCarryIn?: boolean;
+      shift?: { type?: string | null } | null;
     }>;
   }) {
     const coverageTargets = calculateMonthlyCoverageTargets(
@@ -2133,12 +2333,20 @@ export class SchedulePlanningService {
       plan.month,
       this.planCoveragePolicy(plan),
     );
-    const summary = calculateCoverageSummary(
+    const coverage = calculateCoverageSummary(
       plan.entries.filter((entry) => entry.countsTowardPostCoverage !== false),
       plan.year,
       plan.month,
       coverageTargets.targetMinutes,
     );
+    // Bitta post normasi (744/720 soat). Xodimlar ko'p bo'lsa reja bir
+    // necha postga teng bo'ladi; maqsad — eng yaqin to'liq postlar soni.
+    const postNorm = calculatePostNormBreakdown(
+      coverage.plannedMinutes,
+      coverageTargets.targetMinutes,
+    );
+    const slots = Math.max(1, postNorm.postSlots);
+    const targetMinutes = coverageTargets.targetMinutes * slots;
     const daysInMonth = new Date(
       Date.UTC(plan.year, plan.month, 0),
     ).getUTCDate();
@@ -2146,12 +2354,21 @@ export class SchedulePlanningService {
       const date = `${plan.year}-${String(plan.month).padStart(2, '0')}-${String(index + 1).padStart(2, '0')}`;
       return {
         date,
-        plannedMinutes: summary.byDate[date] ?? 0,
-        targetMinutes: coverageTargets.byDate[date] ?? 0,
+        plannedMinutes: coverage.byDate[date] ?? 0,
+        targetMinutes: (coverageTargets.byDate[date] ?? 0) * slots,
       };
     });
     return {
-      ...summary,
+      ...coverage,
+      targetMinutes,
+      remainingMinutes: Math.max(0, targetMinutes - coverage.plannedMinutes),
+      excessMinutes: Math.max(0, coverage.plannedMinutes - targetMinutes),
+      ...postNorm,
+      employeeStats: calculateEmployeeShiftStats(
+        plan.entries,
+        plan.year,
+        plan.month,
+      ),
       postCoverageRequired: this.requiresPostCoverageNorm(plan.entries),
       days,
     };
@@ -2181,10 +2398,36 @@ export class SchedulePlanningService {
     const summary = this.buildPlanSummary(plan);
     if (!summary.postCoverageRequired) return;
     if (summary.remainingMinutes || summary.excessMinutes) {
-      throw new BadRequestException(
-        `Postning oylik normasi to‘liq taqsimlanmagan: ${summary.plannedMinutes / 60}/${summary.targetMinutes / 60} soat`,
-      );
+      throw new BadRequestException(this.postNormGapMessage(summary));
     }
+  }
+
+  /**
+   * Foydalanuvchiga nima qilish kerakligini aniq aytadi. Ortib qolgan
+   * soatlarni dastur o'zi «postdan tashqari» qilmaydi — qaror foydalanuvchida.
+   */
+  private postNormGapMessage(summary: {
+    plannedMinutes: number;
+    targetMinutes: number;
+    postNormMinutes: number;
+    fullPostCount: number;
+    remainderMinutes: number;
+    missingMinutes: number;
+    postSlots: number;
+  }) {
+    const hours = (minutes: number) => Number((minutes / 60).toFixed(2));
+    const norm = hours(summary.postNormMinutes);
+    const head = `Postning oylik normasi to‘liq taqsimlanmagan: ${hours(summary.plannedMinutes)}/${hours(summary.targetMinutes)} soat`;
+    if (!summary.fullPostCount) {
+      return `${head}. Bitta post ${norm} soat — yana ${hours(summary.missingMinutes)} soat rejalashtiring.`;
+    }
+    return (
+      `${head} (${summary.postSlots} post × ${norm} soat). ` +
+      `${summary.fullPostCount} ta post to‘liq (${hours(summary.fullPostCount * summary.postNormMinutes)} soat), ` +
+      `${hours(summary.remainderMinutes)} soat ortib qoldi. ` +
+      `Oxirgi postni ${norm} soatga to‘ldiring (yana ${hours(summary.missingMinutes)} soat) ` +
+      `yoki ortiqcha xodimni «Postdan tashqari» deb belgilang.`
+    );
   }
 
   private mapEntryTypeToScheduleStatus(

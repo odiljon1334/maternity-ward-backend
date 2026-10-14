@@ -179,6 +179,108 @@ describe('SchedulePlanningService — production xavfsizligi', () => {
       );
     });
 
+    // 00:00–24:00 blok: bitta xodim 31 kun × 24 soat = 744 soat (bitta post).
+    const fullDay = (employeeId: string, day: number, hours = 24) => ({
+      id: `${employeeId}-${day}`,
+      employeeId,
+      shiftId: 'shift-1',
+      entryType: SchedulePlanEntryType.WORKING,
+      countsTowardPostCoverage: true,
+      workDate: new Date(Date.UTC(2026, 9, day - 1, 19)),
+      startsAt: new Date(Date.UTC(2026, 9, day - 1, 19)),
+      endsAt: new Date(Date.UTC(2026, 9, day - 1, 19 + hours)),
+      note: null,
+    });
+    const fullPost = (employeeId: string) =>
+      Array.from({ length: 31 }, (_, index) => fullDay(employeeId, index + 1));
+
+    it('xodim ko‘p bo‘lsa 3 × 744 = 2232 soatlik reja yuboriladi', async () => {
+      const { prisma, service } = setup();
+      jest
+        .spyOn(service as any, 'getPlanForWorkflow')
+        .mockResolvedValue(
+          draftWith([
+            ...fullPost('e-1'),
+            ...fullPost('e-2'),
+            ...fullPost('e-3'),
+          ]),
+        );
+
+      await service.submitPlan('hospital-1', 'plan-1');
+
+      expect(prisma.monthlySchedulePlan.updateMany).toHaveBeenCalled();
+      const summary = (service as any).buildPlanSummary(
+        draftWith([...fullPost('e-1'), ...fullPost('e-2'), ...fullPost('e-3')]),
+      );
+      expect(summary).toMatchObject({
+        postNormMinutes: 744 * 60,
+        fullPostCount: 3,
+        remainderMinutes: 0,
+        missingMinutes: 0,
+        postSlots: 3,
+        targetMinutes: 2232 * 60,
+        plannedMinutes: 2232 * 60,
+        remainingMinutes: 0,
+        excessMinutes: 0,
+      });
+      expect(summary.days[0].targetMinutes).toBe(3 * 1440);
+    });
+
+    it('2440 soat: 208 soat ortib qolsa yuborilmaydi va nima qilish aytiladi', async () => {
+      const { prisma, service } = setup();
+      // 3 to'liq post + 8 kun × 24 soat + 16 soat = 208 soat ortiqcha.
+      const extra = [
+        ...Array.from({ length: 8 }, (_, index) => fullDay('e-4', index + 1)),
+        fullDay('e-4', 9, 16),
+      ];
+      const entries = [
+        ...fullPost('e-1'),
+        ...fullPost('e-2'),
+        ...fullPost('e-3'),
+        ...extra,
+      ];
+      jest
+        .spyOn(service as any, 'getPlanForWorkflow')
+        .mockResolvedValue(draftWith(entries));
+
+      const error = await service
+        .submitPlan('hospital-1', 'plan-1')
+        .catch((caught) => caught);
+      expect(error.message).toContain('2440/2976 soat (4 post × 744 soat)');
+      expect(error.message).toContain('3 ta post to‘liq (2232 soat)');
+      expect(error.message).toContain('208 soat ortib qoldi');
+      expect(error.message).toContain('yana 536 soat');
+      expect(error.message).toContain('«Postdan tashqari»');
+      // Dastur hech kimni o'zi postdan tashqari qilmaydi va holatni o'zgartirmaydi.
+      expect(prisma.monthlySchedulePlan.updateMany).not.toHaveBeenCalled();
+      expect(prisma.monthlyScheduleEntry.update).not.toHaveBeenCalled();
+      expect(entries.every((entry) => entry.countsTowardPostCoverage)).toBe(
+        true,
+      );
+    });
+
+    it('ortiqcha xodimni foydalanuvchi postdan tashqari belgilasa yuboriladi', async () => {
+      const { prisma, service } = setup();
+      const extra = Array.from({ length: 9 }, (_, index) => ({
+        ...fullDay('e-4', index + 1),
+        countsTowardPostCoverage: false,
+      }));
+      jest
+        .spyOn(service as any, 'getPlanForWorkflow')
+        .mockResolvedValue(
+          draftWith([
+            ...fullPost('e-1'),
+            ...fullPost('e-2'),
+            ...fullPost('e-3'),
+            ...extra,
+          ]),
+        );
+
+      await service.submitPlan('hospital-1', 'plan-1');
+
+      expect(prisma.monthlySchedulePlan.updateMany).toHaveBeenCalled();
+    });
+
     it('xulosada postCoverageRequired belgisi qaytadi', () => {
       const { service } = setup();
       const outsideOnly = (service as any).buildPlanSummary(
