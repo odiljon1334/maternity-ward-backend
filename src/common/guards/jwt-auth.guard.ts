@@ -81,7 +81,7 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
     if (await isHospitalBlocked(this.prisma, user.hospitalId)) {
       throw new ForbiddenException({
         statusCode: 403,
-        code: 'HOSPITAL_BLOCKED',
+        code: 'HOSPITAL_READ_ONLY',
         message:
           "Muassasa bloklangan — faqat ko'rish rejimi. Davom etish uchun to'lovni amalga oshiring.",
       });

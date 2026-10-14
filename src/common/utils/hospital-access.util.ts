@@ -1,3 +1,4 @@
+import { UnauthorizedException } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 
@@ -8,8 +9,31 @@ import { PrismaService } from '../../prisma/prisma.service';
  * davomati esa yozilaveradi, Telegram xabarlari yuborilmaydi.
  * Blok olib tashlansa hammasi darhol tiklanadi.
  */
-export const HOSPITAL_BLOCKED_LOGIN_MESSAGE =
-  'Muassasa bloklangan. Tizimga kirish vaqtincha yopilgan — administratorga murojaat qiling.';
+/** Bloklangan muassasa bog'lanadigan aloqa (ENV bilan almashtirish mumkin). */
+export const HOSPITAL_BLOCKED_CONTACT = {
+  telegram:
+    process.env.SUPPORT_TELEGRAM_USERNAME?.trim().replace(/^@/, '') ||
+    'staffpluse_support',
+  phone: process.env.BILLING_CONTACT_PHONE?.trim() || '+998 95 577 54 54',
+};
+
+export const HOSPITAL_BLOCKED_CODE = 'HOSPITAL_BLOCKED';
+
+export const HOSPITAL_BLOCKED_LOGIN_MESSAGE = `Muassasa bloklangan, tizimga kirish yopilgan. Telegram: @${HOSPITAL_BLOCKED_CONTACT.telegram} yoki tel: ${HOSPITAL_BLOCKED_CONTACT.phone} orqali bog'laning.`;
+
+/**
+ * Login va sessiya rad etilganda qaytariladigan xato. `code` va `contact`
+ * orqali web login sahifasi modal oyna ochadi; mobil ilova `message`ni
+ * o'zicha ko'rsatadi.
+ */
+export function hospitalBlockedException() {
+  return new UnauthorizedException({
+    statusCode: 401,
+    code: HOSPITAL_BLOCKED_CODE,
+    message: HOSPITAL_BLOCKED_LOGIN_MESSAGE,
+    contact: HOSPITAL_BLOCKED_CONTACT,
+  });
+}
 
 /**
  * Platforma darajasidagi rollar muassasa blokidan ta'sirlanmaydi: SUPER_ADMIN
