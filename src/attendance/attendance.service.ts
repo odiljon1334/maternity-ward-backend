@@ -30,7 +30,10 @@ import {
 } from '../attendance-notices/notice-excuse.util';
 import { PushService } from '../push/push.service';
 import { DateUtil } from '../common/utils/date.util';
-import { isHospitalBlocked } from '../common/utils/payment.util';
+import {
+  isHospitalBillingBlocked,
+  isHospitalBlocked,
+} from '../common/utils/payment.util';
 import { calcNetWorkMin } from '../common/utils/shift.util';
 import { formatDistance } from '../common/utils/geo.util';
 import { buildGeoCenters, matchGeoCenter } from '../work-sites/geofence.util';
@@ -277,10 +280,13 @@ export class AttendanceService {
       }
     }
 
-    // 2. Kasalxona blok tekshiruvi
-    if (await isHospitalBlocked(this.prisma, employee.hospitalId)) {
+    // 2. To'lov bloki tekshiruvi. Admin bloki (Hospital.isBlocked) bu yerda
+    // ATAYLAB hisobga olinmaydi: muassasa bloklanganda ham xodimlarning
+    // terminal orqali kelib-ketishi yozilaveradi (faqat kirish va Telegram
+    // yopiladi). Blok ochilganda tarixda bo'shliq qolmaydi.
+    if (await isHospitalBillingBlocked(this.prisma, employee.hospitalId)) {
       this.logger.warn(
-        `Kasalxona ${employee.hospitalId} BLOCKED — ${employee.fullName} uchun davomat yozilmadi`,
+        `Kasalxona ${employee.hospitalId} to'lov bo'yicha bloklangan — ${employee.fullName} uchun davomat yozilmadi`,
       );
       return null;
     }

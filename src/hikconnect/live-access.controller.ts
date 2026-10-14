@@ -73,7 +73,11 @@ export class LiveAccessController {
     }
     if (user.role === UserRole.ASSISTANT_ADMIN) {
       const assigned = await this.prisma.hospitalAssistant.findFirst({
-        where: { userId: user.sub, hospitalId: camera.hospitalId },
+        where: {
+          userId: user.sub,
+          hospitalId: camera.hospitalId,
+          hospital: { isBlocked: false },
+        },
         select: { hospitalId: true },
       });
       if (assigned) return;

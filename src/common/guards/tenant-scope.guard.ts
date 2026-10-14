@@ -28,7 +28,7 @@ export class TenantScopeGuard implements CanActivate {
     if (!user || user.role !== UserRole.ASSISTANT_ADMIN) return true;
 
     const assignments = await this.prisma.hospitalAssistant.findMany({
-      where: { userId: user.sub },
+      where: { userId: user.sub, hospital: { isBlocked: false } },
       select: { hospitalId: true },
     });
     const allowedIds = assignments.map((assignment) => assignment.hospitalId);

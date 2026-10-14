@@ -57,7 +57,11 @@ export function privateSelfiesMiddleware(
       else if (rec.employee.userId === user.id) allowed = true;
       else if (user.role === UserRole.ASSISTANT_ADMIN) {
         allowed = !!(await prisma.hospitalAssistant.findFirst({
-          where: { userId: user.id, hospitalId: hid },
+          where: {
+            userId: user.id,
+            hospitalId: hid,
+            hospital: { isBlocked: false },
+          },
           select: { hospitalId: true },
         }));
       } else if (MANAGER_ROLES.has(user.role)) {

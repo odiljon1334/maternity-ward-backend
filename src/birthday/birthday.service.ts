@@ -3,6 +3,7 @@ import { CronLock } from '../common/utils/cron-lock';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { TelegramService } from '../telegram/telegram.service';
+import { NOT_BLOCKED_HOSPITAL_SUBSCRIPTION } from '../common/utils/hospital-access.util';
 
 @Injectable()
 export class BirthdayService {
@@ -64,7 +65,11 @@ export class BirthdayService {
 
       // 2. Direktorga xabar — hospitalId bo'yicha subscription topamiz
       const subs = await this.prisma.telegramSubscription.findMany({
-        where: { hospitalId: emp.hospitalId, isActive: true },
+        where: {
+          ...NOT_BLOCKED_HOSPITAL_SUBSCRIPTION,
+          hospitalId: emp.hospitalId,
+          isActive: true,
+        },
       });
 
       if (!subs.length) continue;
