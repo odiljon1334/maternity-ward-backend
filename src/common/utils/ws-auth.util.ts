@@ -2,6 +2,7 @@ import type { IncomingMessage } from 'http';
 import { JwtService } from '@nestjs/jwt';
 import { UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { isUserLockedByHospitalBlock } from './hospital-access.util';
 
 export interface SocketUser {
   id: string;
@@ -55,9 +56,19 @@ export async function verifySocketUser(
       status: true,
       hospitalId: true,
       credentialsChangedAt: true,
+      hospital: { select: { isBlocked: true } },
     },
   });
   if (!user || user.status !== 'ACTIVE') return null;
+  if (
+    await isUserLockedByHospitalBlock(
+      prisma,
+      user,
+      user.hospital?.isBlocked ?? false,
+    )
+  ) {
+    return null;
+  }
   if (
     user.credentialsChangedAt &&
     (!payload.iat ||

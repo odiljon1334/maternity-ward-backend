@@ -7,6 +7,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as https from 'https';
 import { formatMinutes } from '../common/utils/payment.util';
+import { NOT_BLOCKED_HOSPITAL_SUBSCRIPTION } from '../common/utils/hospital-access.util';
 import { getStaffPricing } from '../common/utils/pricing.util';
 import { SubscriptionBillingService } from '../payments/subscription-billing.service';
 import { coverageLabel } from '../payments/billing.util';
@@ -183,6 +184,32 @@ function todayDetailKeyboard() {
   ]);
 }
 
+/** Chatga yangi xabar chiqaradigan Telegram API metodlari */
+const OUTGOING_TELEGRAM_METHODS: ReadonlySet<string> = new Set([
+  'sendMessage',
+  'sendPhoto',
+  'sendDocument',
+  'sendVideo',
+  'sendAudio',
+  'sendVoice',
+  'sendAnimation',
+  'sendMediaGroup',
+  'sendLocation',
+  'sendContact',
+  'sendInvoice',
+  'copyMessage',
+  'copyMessages',
+  'forwardMessage',
+  'forwardMessages',
+]);
+
+export class HospitalBlockedTelegramError extends Error {
+  readonly code = 'HOSPITAL_BLOCKED';
+  constructor() {
+    super('Muassasa bloklangan — Telegram xabari yuborilmadi');
+  }
+}
+
 @Injectable()
 export class TelegramService implements OnModuleInit {
   private readonly logger = new Logger(TelegramService.name);
@@ -213,6 +240,7 @@ export class TelegramService implements OnModuleInit {
     }
 
     this.bot = new Telegraf(token);
+    this.silenceBlockedHospitalChats();
     // To'lov tokeni formati: <provayder_id>:TEST|LIVE:<...> (BotFather → Payments)
     const payToken = this.config.get<string>('TELEGRAM_PAYMENT_TOKEN');
     if (payToken) {
@@ -256,6 +284,67 @@ export class TelegramService implements OnModuleInit {
     );
 
     this.logger.log('Telegram bot started (webhook mode)');
+  }
+
+  /**
+   * Bloklangan muassasaga Telegram xabari ketmaydi.
+   *
+   * Barcha chiquvchi xabarlar (bildirishnoma, hisobot, eslatma, bot
+   * javoblari) `telegram.callApi` orqali o'tadi — shu yerda bitta nuqtada
+   * tekshiriladi, shuning uchun yangi qo'shilgan xabar turi ham blokni
+   * chetlab o'tmaydi. Chat faqat bloklangan muassasa(lar)ga bog'langan
+   * bo'lsa jim qoladi; hech qayerga bog'lanmagan chat (ulanish jarayoni)
+   * va ochiq muassasa chati odatdagidek ishlaydi.
+   */
+  private silenceBlockedHospitalChats() {
+    const telegram = this.bot.telegram;
+    const callApi = telegram.callApi.bind(telegram) as (
+      method: string,
+      payload: any,
+      options?: any,
+    ) => Promise<any>;
+    (telegram as any).callApi = async (
+      method: string,
+      payload: any,
+      options?: any,
+    ) => {
+      const chatId = payload?.chat_id;
+      if (
+        chatId !== undefined &&
+        chatId !== null &&
+        OUTGOING_TELEGRAM_METHODS.has(method) &&
+        (await this.isChatOnlyInBlockedHospitals(String(chatId)))
+      ) {
+        this.logger.debug?.(
+          `Muassasa bloklangan — Telegram xabari yuborilmadi (${method}, chat=${chatId})`,
+        );
+        // 403 emas: aks holda obuna/eslatmalar "bot bloklangan" deb
+        // o'chirib yuborilardi va blok ochilganda xabarlar tiklanmasdi.
+        throw new HospitalBlockedTelegramError();
+      }
+      return callApi(method, payload, options);
+    };
+  }
+
+  /** Chat bog'langan barcha muassasalar bloklanganmi (bog'lanmagan bo'lsa — yo'q). */
+  private async isChatOnlyInBlockedHospitals(chatId: string): Promise<boolean> {
+    const [subscriptions, employees] = await Promise.all([
+      this.prisma.telegramSubscription.findMany({
+        where: {
+          ...NOT_BLOCKED_HOSPITAL_SUBSCRIPTION,
+          chatId,
+          isActive: true,
+          hospitalId: { not: null },
+        },
+        select: { hospital: { select: { isBlocked: true } } },
+      }),
+      this.prisma.employee.findMany({
+        where: { telegramChatId: chatId },
+        select: { hospital: { select: { isBlocked: true } } },
+      }),
+    ]);
+    const links = [...subscriptions, ...employees];
+    return links.length > 0 && links.every((link) => link.hospital?.isBlocked);
   }
 
   /**
@@ -1061,7 +1150,11 @@ export class TelegramService implements OnModuleInit {
   ): Promise<void> {
     if (!this.bot) return;
     const subs = await this.prisma.telegramSubscription.findMany({
-      where: { isActive: true, hospitalId },
+      where: {
+        ...NOT_BLOCKED_HOSPITAL_SUBSCRIPTION,
+        isActive: true,
+        hospitalId,
+      },
       select: { chatId: true },
     });
     const kb = Markup.inlineKeyboard([
@@ -1320,6 +1413,7 @@ export class TelegramService implements OnModuleInit {
     // Faqat shu kasalxonaga ulangan subscriberlar — null hospitalId'ga yubormaymiz
     const subscribers = await this.prisma.telegramSubscription.findMany({
       where: {
+        ...NOT_BLOCKED_HOSPITAL_SUBSCRIPTION,
         isActive: true,
         hospitalId: employee.hospitalId,
       },
@@ -1434,7 +1528,11 @@ export class TelegramService implements OnModuleInit {
     if (!this.bot) return;
 
     const subscribers = await this.prisma.telegramSubscription.findMany({
-      where: { isActive: true, hospitalId: employee.hospitalId },
+      where: {
+        ...NOT_BLOCKED_HOSPITAL_SUBSCRIPTION,
+        isActive: true,
+        hospitalId: employee.hospitalId,
+      },
     });
     if (!subscribers.length) return;
 
@@ -1600,7 +1698,7 @@ export class TelegramService implements OnModuleInit {
   async broadcast(message: string) {
     if (!this.bot) return;
     const subscribers = await this.prisma.telegramSubscription.findMany({
-      where: { isActive: true },
+      where: { ...NOT_BLOCKED_HOSPITAL_SUBSCRIPTION, isActive: true },
     });
     for (const sub of subscribers) {
       try {
@@ -1625,7 +1723,11 @@ export class TelegramService implements OnModuleInit {
     // Faqat shu shifoxonaga ulangan chatlar — ulanmagan (hospitalId=null)
     // chatlarga shifoxona ma'lumoti yuborilmaydi.
     const subscribers = await this.prisma.telegramSubscription.findMany({
-      where: { isActive: true, hospitalId },
+      where: {
+        ...NOT_BLOCKED_HOSPITAL_SUBSCRIPTION,
+        isActive: true,
+        hospitalId,
+      },
     });
     for (const sub of subscribers) {
       try {
@@ -1992,7 +2094,11 @@ export class TelegramService implements OnModuleInit {
     if (!this.bot) return;
 
     const subscribers = await this.prisma.telegramSubscription.findMany({
-      where: { isActive: true, hospitalId: employee.hospitalId },
+      where: {
+        ...NOT_BLOCKED_HOSPITAL_SUBSCRIPTION,
+        isActive: true,
+        hospitalId: employee.hospitalId,
+      },
     });
     if (!subscribers.length) return;
 
@@ -2052,7 +2158,11 @@ export class TelegramService implements OnModuleInit {
   ): Promise<void> {
     if (!this.bot) return;
     const subscribers = await this.prisma.telegramSubscription.findMany({
-      where: { isActive: true, hospitalId: employee.hospitalId },
+      where: {
+        ...NOT_BLOCKED_HOSPITAL_SUBSCRIPTION,
+        isActive: true,
+        hospitalId: employee.hospitalId,
+      },
     });
     if (!subscribers.length) return;
 
@@ -2106,7 +2216,12 @@ export class TelegramService implements OnModuleInit {
     if (!this.bot) return;
 
     const subscribers = await this.prisma.telegramSubscription.findMany({
-      where: { isActive: true, hospitalId: hospital.id, role: 'DIRECTOR' },
+      where: {
+        ...NOT_BLOCKED_HOSPITAL_SUBSCRIPTION,
+        isActive: true,
+        hospitalId: hospital.id,
+        role: 'DIRECTOR',
+      },
     });
     if (!subscribers.length) return;
 
@@ -2176,7 +2291,11 @@ export class TelegramService implements OnModuleInit {
     if (action === 'CREATED') {
       // Direktorga xabar — PENDING so'rov keldi
       const subscribers = await this.prisma.telegramSubscription.findMany({
-        where: { isActive: true, hospitalId: leave.hospitalId },
+        where: {
+          ...NOT_BLOCKED_HOSPITAL_SUBSCRIPTION,
+          isActive: true,
+          hospitalId: leave.hospitalId,
+        },
       });
       if (!subscribers.length) return;
 
@@ -2242,7 +2361,11 @@ export class TelegramService implements OnModuleInit {
     if (!this.bot) return;
 
     const subscribers = await this.prisma.telegramSubscription.findMany({
-      where: { isActive: true, hospitalId },
+      where: {
+        ...NOT_BLOCKED_HOSPITAL_SUBSCRIPTION,
+        isActive: true,
+        hospitalId,
+      },
     });
     if (!subscribers.length) return;
 
@@ -2270,6 +2393,7 @@ export class TelegramService implements OnModuleInit {
 
     const subscribers = await this.prisma.telegramSubscription.findMany({
       where: {
+        ...NOT_BLOCKED_HOSPITAL_SUBSCRIPTION,
         isActive: true,
         hospitalId,
         role: 'DIRECTOR',

@@ -164,7 +164,11 @@ export class AudioGateway implements OnGatewayConnection, OnGatewayDisconnect {
     if (user.role === UserRole.SUPER_ADMIN) return true;
     if (user.role === UserRole.ASSISTANT_ADMIN) {
       const link = await this.prisma.hospitalAssistant.findFirst({
-        where: { userId: user.id, hospitalId: cameraHospitalId },
+        where: {
+          userId: user.id,
+          hospitalId: cameraHospitalId,
+          hospital: { isBlocked: false },
+        },
         select: { hospitalId: true },
       });
       return !!link;

@@ -31,8 +31,9 @@ export class HospitalsService {
     userId: string,
   ): Promise<string[] | null> {
     if (role !== 'ASSISTANT_ADMIN') return null;
+    // Bloklangan muassasa yordamchi adminga ham ko'rinmaydi.
     const rows = await this.prisma.hospitalAssistant.findMany({
-      where: { userId },
+      where: { userId, hospital: { isBlocked: false } },
       select: { hospitalId: true },
     });
     if (rows.length === 0) return [];

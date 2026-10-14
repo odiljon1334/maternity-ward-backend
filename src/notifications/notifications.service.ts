@@ -6,6 +6,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { TelegramService } from '../telegram/telegram.service';
 import { NotificationType, UserRole } from '@prisma/client';
+import { NOT_BLOCKED_HOSPITAL_SUBSCRIPTION } from '../common/utils/hospital-access.util';
 
 export interface NotificationScope {
   userId: string;
@@ -87,7 +88,7 @@ export class NotificationsService {
 
     if (scope.role === UserRole.ASSISTANT_ADMIN) {
       const assignments = await this.prisma.hospitalAssistant.findMany({
-        where: { userId: scope.userId },
+        where: { userId: scope.userId, hospital: { isBlocked: false } },
         select: { hospitalId: true },
       });
       const allowedIds = new Set(
@@ -162,7 +163,11 @@ export class NotificationsService {
           })
         : [],
       this.prisma.telegramSubscription.findMany({
-        where: { hospitalId, isActive: true },
+        where: {
+          ...NOT_BLOCKED_HOSPITAL_SUBSCRIPTION,
+          hospitalId,
+          isActive: true,
+        },
         select: { chatId: true },
       }),
     ]);
@@ -221,7 +226,7 @@ export class NotificationsService {
 
     if (actor.role === UserRole.ASSISTANT_ADMIN) {
       const assignments = await this.prisma.hospitalAssistant.findMany({
-        where: { userId: actor.userId },
+        where: { userId: actor.userId, hospital: { isBlocked: false } },
         select: { hospitalId: true },
       });
       const allowedIds = assignments.map((assignment) => assignment.hospitalId);
@@ -243,12 +248,17 @@ export class NotificationsService {
 
     if (hospitalIds === 'all') {
       subs = await this.prisma.telegramSubscription.findMany({
-        where: { isActive: true, hospitalId: { not: null } },
+        where: {
+          ...NOT_BLOCKED_HOSPITAL_SUBSCRIPTION,
+          isActive: true,
+          hospitalId: { not: null },
+        },
         select: { chatId: true, hospitalId: true },
       });
     } else {
       subs = await this.prisma.telegramSubscription.findMany({
         where: {
+          ...NOT_BLOCKED_HOSPITAL_SUBSCRIPTION,
           isActive: true,
           hospitalId: { in: hospitalIds },
         },

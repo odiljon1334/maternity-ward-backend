@@ -43,6 +43,8 @@ describe('NotificationsService assistant tenant scope', () => {
 
     expect(prisma.telegramSubscription.findMany).toHaveBeenCalledWith({
       where: {
+        // Bloklangan muassasa obunalariga Telegram yuborilmaydi
+        NOT: { hospital: { isBlocked: true } },
         isActive: true,
         hospitalId: { in: ['hospital-1', 'hospital-2'] },
       },

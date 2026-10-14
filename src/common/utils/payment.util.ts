@@ -63,18 +63,43 @@ export async function isHospitalBlocked(
   });
   if (!hospital) return false;
   if (hospital.isBlocked) return true;
+  return billingAutoBlock(prisma, hospitalId, hospital.createdAt, now);
+}
+
+/**
+ * Faqat to'lov bo'yicha avtomatik blok (admin blokini hisobga olmaydi).
+ *
+ * Terminal davomati uchun: admin bloki kirish va Telegramni yopadi, lekin
+ * xodimlarning kelib-ketishi yozilaverishi kerak. To'lov bloki esa avvalgidek
+ * davomat yozishni to'xtatadi.
+ */
+export async function isHospitalBillingBlocked(
+  prisma: PrismaService,
+  hospitalId: string | null | undefined,
+  now: Date = new Date(),
+): Promise<boolean> {
+  if (!hospitalId || process.env.BILLING_AUTO_BLOCK !== 'true') return false;
+  const hospital = await prisma.hospital.findUnique({
+    where: { id: hospitalId },
+    select: { createdAt: true },
+  });
+  if (!hospital) return false;
+  return billingAutoBlock(prisma, hospitalId, hospital.createdAt, now);
+}
+
+async function billingAutoBlock(
+  prisma: PrismaService,
+  hospitalId: string,
+  createdAt: Date,
+  now: Date,
+): Promise<boolean> {
   if (process.env.BILLING_AUTO_BLOCK !== 'true') return false;
 
   const cached = blockCache.get(hospitalId);
   if (cached && now.getTime() - cached.at < BLOCK_CACHE_TTL_MS)
     return cached.value;
 
-  const value = await computeAutoBlock(
-    prisma,
-    hospitalId,
-    hospital.createdAt,
-    now,
-  );
+  const value = await computeAutoBlock(prisma, hospitalId, createdAt, now);
   blockCache.set(hospitalId, { value, at: now.getTime() });
   return value;
 }

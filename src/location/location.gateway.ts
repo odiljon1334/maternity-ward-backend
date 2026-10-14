@@ -74,7 +74,7 @@ export class LocationGateway
     if (user.role === UserRole.ASSISTANT_ADMIN) {
       // JWT'da muassasa yo'q — biriktirilgan muassasalar room'lariga
       const links = await this.prisma.hospitalAssistant.findMany({
-        where: { userId: user.id },
+        where: { userId: user.id, hospital: { isBlocked: false } },
         select: { hospitalId: true },
       });
       const rooms = links.map((l) => `hospital:${l.hospitalId}`);

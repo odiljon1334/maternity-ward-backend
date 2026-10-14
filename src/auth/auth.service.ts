@@ -21,6 +21,10 @@ import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { VerifyResetOtpDto } from './dto/verify-reset-otp.dto';
 import { UserRole } from '@prisma/client';
+import {
+  HOSPITAL_BLOCKED_LOGIN_MESSAGE,
+  isUserLockedByHospitalBlock,
+} from '../common/utils/hospital-access.util';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
 
@@ -147,6 +151,7 @@ export class AuthService {
             gpsLat: true,
             gpsLng: true,
             gpsRadius: true,
+            isBlocked: true,
           },
         },
         employee: {
@@ -195,6 +200,27 @@ export class AuthService {
         ip,
       });
       throw new UnauthorizedException('Hisob bloklangan');
+    }
+
+    // Muassasa admin tomonidan bloklangan — uning hech bir foydalanuvchisi
+    // (direktor va adminlar ham) kira olmaydi. Faqat to'g'ri parolga aytiladi.
+    if (
+      await isUserLockedByHospitalBlock(
+        this.prisma,
+        user,
+        user.hospital?.isBlocked ?? false,
+      )
+    ) {
+      this.auditLog.log({
+        userId: user.id,
+        hospitalId: user.hospitalId ?? undefined,
+        action: 'LOGIN_FAILED',
+        entity: 'User',
+        entityId: user.id,
+        details: { username: user.username, reason: 'hospital_blocked' },
+        ip,
+      });
+      throw new UnauthorizedException(HOSPITAL_BLOCKED_LOGIN_MESSAGE);
     }
 
     const payload = {

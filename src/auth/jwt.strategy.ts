@@ -4,6 +4,10 @@ import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { computeEffectivePermissions, Permission } from '../common/permissions';
+import {
+  HOSPITAL_BLOCKED_LOGIN_MESSAGE,
+  isUserLockedByHospitalBlock,
+} from '../common/utils/hospital-access.util';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -43,6 +47,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         username: true,
         hospitalId: true,
         credentialsChangedAt: true,
+        hospital: { select: { isBlocked: true } },
         // Granular ruxsatlar (FAZA 5, 7-bosqich) — bir xil so'rovda,
         // qo'shimcha DB chaqiruvisiz olinadi (deyarli har doim bo'sh massiv).
         permissionOverrides: {
@@ -61,6 +66,17 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       throw new UnauthorizedException(
         'Sessiya parol o‘zgargani uchun tugatilgan',
       );
+    }
+    // Muassasa bloklangan bo'lsa mavjud sessiyalar ham shu so'rovdayoq
+    // tugaydi (401) — brauzer va mobil ilova login sahifasiga qaytadi.
+    if (
+      await isUserLockedByHospitalBlock(
+        this.prisma,
+        user,
+        user.hospital?.isBlocked ?? false,
+      )
+    ) {
+      throw new UnauthorizedException(HOSPITAL_BLOCKED_LOGIN_MESSAGE);
     }
     const permissions: Permission[] = computeEffectivePermissions(
       user.role,
