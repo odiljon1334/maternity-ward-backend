@@ -41,6 +41,7 @@ import { SupportBotModule } from './support-bot/support-bot.module';
 import { TrialLeadsModule } from './trial-leads/trial-leads.module';
 import { CompensationModule } from './compensation/compensation.module';
 import { SchedulePlanningModule } from './schedule-planning/schedule-planning.module';
+import { OperationalCenterModule } from './operational-center/operational-center.module';
 
 @Module({
   imports: [
@@ -99,6 +100,7 @@ import { SchedulePlanningModule } from './schedule-planning/schedule-planning.mo
     DidoxModule,
     CompensationModule,
     SchedulePlanningModule,
+    OperationalCenterModule,
   ],
   providers: [],
 })
