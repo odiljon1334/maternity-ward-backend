@@ -12,7 +12,11 @@ import {
 } from '@nestjs/common';
 import { Request } from 'express';
 import { Response } from 'express';
-import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
+import { ThrottlerGuard } from '@nestjs/throttler';
+import {
+  AuthAttemptThrottle,
+  AuthenticatedUserThrottle,
+} from '../common/throttle/auth-throttle';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
@@ -42,9 +46,8 @@ function getIp(req: Request): string {
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
-  /** Brute-force himoya: 15 daqiqada max 10 urinish */
-  @UseGuards(ThrottlerGuard)
-  @Throttle({ login: { ttl: 900_000, limit: 10 } })
+  /** Brute-force himoya: har bir login uchun 15 daqiqada 10 urinish (IP + login) */
+  @AuthAttemptThrottle()
   @Post('login')
   async login(
     @Body() dto: LoginDto,
@@ -62,8 +65,7 @@ export class AuthController {
    * qaytariladi va qurilmaning xavfsiz xotirasida (SecureStore) saqlanadi.
    * Hozircha faqat xodimlar uchun (ilova — check-in va ish vaqtidagi GPS).
    */
-  @UseGuards(ThrottlerGuard)
-  @Throttle({ login: { ttl: 900_000, limit: 10 } })
+  @AuthAttemptThrottle()
   @Post('mobile/login')
   async mobileLogin(@Body() dto: LoginDto, @Req() req: Request) {
     const result = await this.authService.login(dto, getIp(req));
@@ -77,7 +79,7 @@ export class AuthController {
 
   /** Mobil: muddati tugamagan token bilan yangisini olish (sliding sessiya) */
   @UseGuards(JwtAuthGuard, ThrottlerGuard)
-  @Throttle({ login: { ttl: 900_000, limit: 30 } })
+  @AuthenticatedUserThrottle(30)
   @Post('mobile/refresh')
   mobileRefresh(
     @CurrentUser('sub') userId: string,
@@ -88,7 +90,7 @@ export class AuthController {
 
   /** Mobil: parolni almashtirish — javobda shu qurilma uchun yangi token */
   @UseGuards(JwtAuthGuard, ThrottlerGuard)
-  @Throttle({ login: { ttl: 900_000, limit: 10 } })
+  @AuthenticatedUserThrottle(10)
   @Post('mobile/change-password')
   mobileChangePassword(
     @CurrentUser('sub') userId: string,
@@ -226,7 +228,7 @@ export class AuthController {
   }
 
   @UseGuards(JwtAuthGuard, ThrottlerGuard)
-  @Throttle({ login: { ttl: 900_000, limit: 5 } })
+  @AuthenticatedUserThrottle(5)
   @Post('email/resend-otp')
   resendEmailOtp(@CurrentUser('sub') userId: string) {
     return this.authService.resendEmailOtp(userId);
@@ -246,24 +248,21 @@ export class AuthController {
   // ─────────────────────────────────────────────────────────
 
   /** Brute-force himoya: 15 daqiqada max 5 urinish */
-  @UseGuards(ThrottlerGuard)
-  @Throttle({ login: { ttl: 900_000, limit: 5 } })
+  @AuthAttemptThrottle(5)
   @Post('forgot-password')
   forgotPassword(@Body() dto: ForgotPasswordDto) {
     return this.authService.forgotPassword(dto);
   }
 
   /** Email havolasidagi token bilan yangi parol qo'yish */
-  @UseGuards(ThrottlerGuard)
-  @Throttle({ login: { ttl: 900_000, limit: 10 } })
+  @AuthAttemptThrottle()
   @Post('reset-password')
   resetPassword(@Body() dto: ResetPasswordDto) {
     return this.authService.resetPassword(dto);
   }
 
   /** Telegram/SMS orqali kelgan OTP kod bilan yangi parol qo'yish */
-  @UseGuards(ThrottlerGuard)
-  @Throttle({ login: { ttl: 900_000, limit: 10 } })
+  @AuthAttemptThrottle()
   @Post('reset-password/otp')
   verifyResetOtp(@Body() dto: VerifyResetOtpDto) {
     return this.authService.verifyResetOtp(dto);

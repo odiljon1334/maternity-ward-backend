@@ -1,6 +1,6 @@
 import { Body, Controller, Logger, Post, Req, UseGuards } from '@nestjs/common';
 import { Request } from 'express';
-import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
+import { SkipThrottle, Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { SupportBotService } from '../support-bot/support-bot.service';
 import { TrialRequestDto } from './dto/trial-request.dto';
 import { TrialLeadSource } from '@prisma/client';
@@ -59,6 +59,7 @@ export class PublicController {
 
   @UseGuards(ThrottlerGuard)
   @Throttle({ public: { ttl: 3_600_000, limit: 5 } })
+  @SkipThrottle({ login: true, loginIp: true })
   @Post('trial-request')
   async trialRequest(@Body() dto: TrialRequestDto, @Req() req: Request) {
     if (dto.website?.trim()) {

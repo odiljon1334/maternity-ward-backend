@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { SentryModule } from '@sentry/nestjs/setup';
 import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { THROTTLERS } from './common/throttle/auth-throttle';
 import { ScheduleModule } from '@nestjs/schedule';
 
 import { PrismaModule } from './prisma/prisma.module';
@@ -52,10 +53,9 @@ import { SchedulePlanningModule } from './schedule-planning/schedule-planning.mo
 
     // Rate limiting — faqat login endpoint uchun (auth.controller.ts da @UseGuards)
     // Barcha boshqa endpointlar JWT bilan himoyalangan + Nginx rate limit bor
-    ThrottlerModule.forRoot([
-      { name: 'login', ttl: 900_000, limit: 10 }, // 10 urinish / 15 daqiqa
-      { name: 'public', ttl: 3_600_000, limit: 5 }, // ochiq (marketing) endpointlar — 5 so'rov / soat / IP
-    ]),
+    // Har bir route faqat o'ziga tegishli cheklovni ishlatadi, qolganlarini
+    // SkipThrottle bilan o'tkazadi (common/throttle/auth-throttle.ts).
+    ThrottlerModule.forRoot(THROTTLERS),
 
     // Cron scheduler
     ScheduleModule.forRoot(),
