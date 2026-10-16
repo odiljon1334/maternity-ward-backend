@@ -143,7 +143,7 @@ export class PayrollController {
   }
 
   @Post('save/:employeeId')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN)
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
   save(
     @Param('employeeId') employeeId: string,
     @Body()
@@ -156,7 +156,7 @@ export class PayrollController {
     },
     @CurrentUser('hospitalId') hospitalId: string | null,
   ) {
-    // XAVFSIZLIK (3-paket): ADMIN faqat o'z muassasasi xodimining maoshini
+    // XAVFSIZLIK (3-paket): ADMIN/DIRECTOR faqat o'z muassasasi xodimining maoshini
     // saqlaydi (ilgari istalgan xodim ID'si qabul qilinardi)
     return this.service.createOrUpdate(
       employeeId,

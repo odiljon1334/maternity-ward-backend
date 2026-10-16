@@ -337,7 +337,8 @@ model User {
   email           String?   @unique
   emailVerifiedAt DateTime?
 
-  // SUPER_ADMIN uchun null, boshqalari uchun majburiy
+  // Platforma rollari (SUPER_ADMIN/MINISTRY/ASSISTANT_ADMIN) uchun null;
+  // tenant rollari (ADMIN/DIRECTOR/DEPARTMENT_HEAD/EMPLOYEE) uchun majburiy
   hospitalId String?
   hospital   Hospital? @relation(fields: [hospitalId], references: [id])
 

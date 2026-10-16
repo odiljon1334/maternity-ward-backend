@@ -386,7 +386,12 @@ export class EmployeesController {
 
   @Post('bulk-delete')
   @RequirePermission('employees.edit')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ASSISTANT_ADMIN, UserRole.ADMIN)
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+  )
   async bulkDelete(
     @Body('ids') ids: string[],
     @CurrentUser('sub') userId: string,
@@ -438,7 +443,12 @@ export class EmployeesController {
 
   @Delete(':id')
   @RequirePermission('employees.edit')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ASSISTANT_ADMIN, UserRole.ADMIN)
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+  )
   async remove(
     @Param('id') id: string,
     @CurrentUser('sub') userId: string,

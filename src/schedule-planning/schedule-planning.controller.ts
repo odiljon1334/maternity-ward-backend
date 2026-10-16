@@ -35,13 +35,14 @@ const READ_ROLES = [
   UserRole.DEPARTMENT_HEAD,
 ];
 
-// Rejani kadrlar bo'yicha mas'ul xodim tayyorlaydi. Hozirgi rol modelida
-// muassasa ADMIN'i kadr inspektori vazifasini bajaradi; direktor qoralamani
-// tahrirlamaydi, faqat yuborilgan rejaga qaror beradi.
+// ADMIN odatda kadr inspektori sifatida rejani tayyorlaydi. DIRECTOR esa
+// muassasa rahbari bo'lgani uchun qoralamani yaratish/tahrirlash bilan birga
+// yuborilgan rejaga yakuniy qaror ham bera oladi.
 const PLAN_EDITOR_ROLES = [
   UserRole.SUPER_ADMIN,
   UserRole.ASSISTANT_ADMIN,
   UserRole.ADMIN,
+  UserRole.DIRECTOR,
 ];
 
 const PLAN_APPROVER_ROLES = [UserRole.SUPER_ADMIN, UserRole.DIRECTOR];

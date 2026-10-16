@@ -170,12 +170,12 @@ export class AttendanceController {
   }
 
   @Post('mark-absent')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN)
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
   markAbsent(
     @CurrentUser('hospitalId') jwtHospitalId: string | null,
     @Query('targetHospitalId') targetHospitalId?: string,
   ) {
-    // ADMIN — faqat o'z muassasasi; SUPER_ADMIN — tanlangan muassasa
+    // ADMIN/DIRECTOR — faqat o'z muassasasi; SUPER_ADMIN — tanlangan muassasa
     // (tanlanmasa — hammasi, cron bilan bir xil)
     return this.service.markAbsentForToday(
       jwtHospitalId || targetHospitalId || null,

@@ -186,10 +186,9 @@ export class AuthController {
   }
 
   /**
-   * Yangi global foydalanuvchi yaratish.
-   * Faqat SUPER_ADMIN qila oladi.
-   * Rol: MINISTRY (kuzatuvchi) yoki ASSISTANT_ADMIN (yordamchi).
-   * Default: ASSISTANT_ADMIN
+   * Yangi foydalanuvchi yaratish — faqat yagona SUPER_ADMIN bajaradi.
+   * SUPER_ADMIN rolini yaratib bo'lmaydi; tenant rollari muassasa bilan,
+   * EMPLOYEE/DEPARTMENT_HEAD esa mavjud xodim kartasi bilan bog'lanadi.
    */
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)

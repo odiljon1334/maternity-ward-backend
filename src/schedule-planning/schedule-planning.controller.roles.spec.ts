@@ -10,13 +10,15 @@ function rolesFor(method: keyof SchedulePlanningController): UserRole[] {
 }
 
 describe('SchedulePlanningController workflow roles', () => {
-  it('qoralamani Kadr inspektori rollari tahrirlaydi, direktor esa tahrirlamaydi', () => {
+  it('qoralamani Kadr inspektori va direktor tahrirlay oladi', () => {
     expect(rolesFor('saveEntries')).toEqual([
       UserRole.SUPER_ADMIN,
       UserRole.ASSISTANT_ADMIN,
       UserRole.ADMIN,
+      UserRole.DIRECTOR,
     ]);
-    expect(rolesFor('submitPlan')).not.toContain(UserRole.DIRECTOR);
+    expect(rolesFor('submitPlan')).toContain(UserRole.DIRECTOR);
+    expect(rolesFor('createDraftPlan')).toContain(UserRole.DIRECTOR);
   });
 
   it('yuborilgan rejaga faqat rahbar rollari qaror beradi', () => {

@@ -315,26 +315,124 @@ export class AuthService {
     });
     if (exists) throw new ConflictException('Bu username band');
 
-    const passwordHash = await bcrypt.hash(dto.password, 12);
-    const role = dto.role ?? UserRole.ASSISTANT_ADMIN;
+    const role: UserRole = dto.role ?? UserRole.ASSISTANT_ADMIN;
+    const tenantRoles = new Set<UserRole>([
+      UserRole.ADMIN,
+      UserRole.DIRECTOR,
+      UserRole.DEPARTMENT_HEAD,
+      UserRole.EMPLOYEE,
+    ]);
+    const employeeRequiredRoles = new Set<UserRole>([
+      UserRole.DEPARTMENT_HEAD,
+      UserRole.EMPLOYEE,
+    ]);
 
-    const user = await this.prisma.user.create({
-      data: { username: dto.username, passwordHash, role },
-      select: {
-        id: true,
-        username: true,
-        role: true,
-        status: true,
-        createdAt: true,
-      },
+    if (String(role) === UserRole.SUPER_ADMIN) {
+      throw new ForbiddenException(
+        "SUPER_ADMIN yagona hisob bo'ladi va bu sahifadan yaratilmaydi",
+      );
+    }
+
+    const isTenantRole = tenantRoles.has(role as UserRole);
+    if (isTenantRole && !dto.hospitalId) {
+      throw new BadRequestException('Bu rol uchun muassasa tanlash shart');
+    }
+    if (!isTenantRole && (dto.hospitalId || dto.employeeId)) {
+      throw new BadRequestException(
+        'Platforma roli muassasa yoki xodimga biriktirilmaydi',
+      );
+    }
+    if (employeeRequiredRoles.has(role as UserRole) && !dto.employeeId) {
+      throw new BadRequestException(
+        "Xodim va bo'lim boshlig'i roli mavjud xodimga biriktirilishi shart",
+      );
+    }
+
+    if (dto.hospitalId) {
+      const hospital = await this.prisma.hospital.findUnique({
+        where: { id: dto.hospitalId },
+        select: { id: true },
+      });
+      if (!hospital) throw new NotFoundException('Muassasa topilmadi');
+    }
+
+    let employee: { id: string; userId: string | null } | null = null;
+    if (dto.employeeId) {
+      employee = await this.prisma.employee.findFirst({
+        where: { id: dto.employeeId, hospitalId: dto.hospitalId },
+        select: { id: true, userId: true },
+      });
+      if (!employee) {
+        throw new NotFoundException(
+          'Tanlangan xodim ushbu muassasaga tegishli emas',
+        );
+      }
+      if (employee.userId) {
+        throw new ConflictException(
+          'Tanlangan xodimda allaqachon login hisobi mavjud',
+        );
+      }
+    }
+
+    const passwordHash = await bcrypt.hash(dto.password, 12);
+
+    const user = await this.prisma.$transaction(async (tx) => {
+      if (role === UserRole.DIRECTOR && dto.hospitalId) {
+        // Har bir muassasada bitta amaldagi direktor: yangi direktor
+        // tayinlanganda avvalgisining hisobi o'chmaydi, EMPLOYEE ga tushadi.
+        await tx.user.updateMany({
+          where: {
+            hospitalId: dto.hospitalId,
+            role: UserRole.DIRECTOR,
+          },
+          data: { role: UserRole.EMPLOYEE },
+        });
+      }
+
+      const created = await tx.user.create({
+        data: {
+          username: dto.username,
+          passwordHash,
+          role,
+          hospitalId: isTenantRole ? dto.hospitalId : null,
+        },
+        select: {
+          id: true,
+          username: true,
+          role: true,
+          status: true,
+          hospitalId: true,
+          createdAt: true,
+        },
+      });
+
+      if (employee) {
+        const attached = await tx.employee.updateMany({
+          where: { id: employee.id, userId: null },
+          data: { userId: created.id },
+        });
+        if (attached.count !== 1) {
+          throw new ConflictException(
+            'Tanlangan xodimga boshqa login hisobi biriktirib bo‘lindi',
+          );
+        }
+      }
+
+      return created;
     });
 
     this.auditLog.log({
       userId: createdByUserId,
+      hospitalId: user.hospitalId ?? undefined,
       action: 'REGISTER',
       entity: 'User',
       entityId: user.id,
-      details: { username: user.username, role: user.role },
+      details: {
+        username: user.username,
+        role: user.role,
+        hospitalId: user.hospitalId,
+        employeeId: employee?.id ?? null,
+      },
     });
 
     return user;
