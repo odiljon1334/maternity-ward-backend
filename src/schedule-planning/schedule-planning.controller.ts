@@ -35,12 +35,16 @@ const READ_ROLES = [
   UserRole.DEPARTMENT_HEAD,
 ];
 
-const WRITE_ROLES = [
+// Rejani kadrlar bo'yicha mas'ul xodim tayyorlaydi. Hozirgi rol modelida
+// muassasa ADMIN'i kadr inspektori vazifasini bajaradi; direktor qoralamani
+// tahrirlamaydi, faqat yuborilgan rejaga qaror beradi.
+const PLAN_EDITOR_ROLES = [
   UserRole.SUPER_ADMIN,
   UserRole.ASSISTANT_ADMIN,
   UserRole.ADMIN,
-  UserRole.DIRECTOR,
 ];
+
+const PLAN_APPROVER_ROLES = [UserRole.SUPER_ADMIN, UserRole.DIRECTOR];
 
 const CHANGE_REQUEST_ROLES = [...READ_ROLES, UserRole.EMPLOYEE];
 
@@ -76,7 +80,7 @@ export class SchedulePlanningController {
   }
 
   @Post('posts')
-  @Roles(...WRITE_ROLES)
+  @Roles(...PLAN_EDITOR_ROLES)
   createPost(
     @CurrentUser('hospitalId') hospitalId: string | null,
     @Query('targetHospitalId') targetHospitalId: string | undefined,
@@ -89,7 +93,7 @@ export class SchedulePlanningController {
   }
 
   @Patch('posts/:id')
-  @Roles(...WRITE_ROLES)
+  @Roles(...PLAN_EDITOR_ROLES)
   updatePost(
     @Param('id') id: string,
     @CurrentUser('hospitalId') hospitalId: string | null,
@@ -104,7 +108,7 @@ export class SchedulePlanningController {
   }
 
   @Patch('posts/:id/status')
-  @Roles(...WRITE_ROLES)
+  @Roles(...PLAN_EDITOR_ROLES)
   setPostStatus(
     @Param('id') id: string,
     @CurrentUser('hospitalId') hospitalId: string | null,
@@ -122,7 +126,7 @@ export class SchedulePlanningController {
   }
 
   @Delete('posts/:id')
-  @Roles(...WRITE_ROLES)
+  @Roles(...PLAN_EDITOR_ROLES)
   removePost(
     @Param('id') id: string,
     @CurrentUser('hospitalId') hospitalId: string | null,
@@ -154,7 +158,7 @@ export class SchedulePlanningController {
   }
 
   @Post('plans')
-  @Roles(...WRITE_ROLES)
+  @Roles(...PLAN_EDITOR_ROLES)
   createDraftPlan(
     @CurrentUser('hospitalId') hospitalId: string | null,
     @CurrentUser('sub') userId: string,
@@ -182,7 +186,7 @@ export class SchedulePlanningController {
   }
 
   @Put('plans/:id/entries')
-  @Roles(...WRITE_ROLES)
+  @Roles(...PLAN_EDITOR_ROLES)
   saveEntries(
     @Param('id') id: string,
     @CurrentUser('hospitalId') hospitalId: string | null,
@@ -221,7 +225,7 @@ export class SchedulePlanningController {
   }
 
   @Post('plans/:id/submit')
-  @Roles(...WRITE_ROLES)
+  @Roles(...PLAN_EDITOR_ROLES)
   submitPlan(
     @Param('id') id: string,
     @CurrentUser('hospitalId') hospitalId: string | null,
@@ -234,7 +238,7 @@ export class SchedulePlanningController {
   }
 
   @Post('plans/:id/approve')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  @Roles(...PLAN_APPROVER_ROLES)
   approvePlan(
     @Param('id') id: string,
     @CurrentUser('hospitalId') hospitalId: string | null,
@@ -249,7 +253,7 @@ export class SchedulePlanningController {
   }
 
   @Post('plans/:id/reject')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  @Roles(...PLAN_APPROVER_ROLES)
   rejectPlan(
     @Param('id') id: string,
     @CurrentUser('hospitalId') hospitalId: string | null,
@@ -268,7 +272,7 @@ export class SchedulePlanningController {
   }
 
   @Post('plans/:id/reopen')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  @Roles(...PLAN_APPROVER_ROLES)
   reopenApprovedPlan(
     @Param('id') id: string,
     @CurrentUser('hospitalId') hospitalId: string | null,
@@ -378,7 +382,7 @@ export class SchedulePlanningController {
   }
 
   @Patch('changes/:id/approve')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  @Roles(...PLAN_APPROVER_ROLES)
   approveChangeRequest(
     @Param('id') id: string,
     @CurrentUser('hospitalId') hospitalId: string | null,
@@ -393,7 +397,7 @@ export class SchedulePlanningController {
   }
 
   @Patch('changes/:id/reject')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DIRECTOR)
+  @Roles(...PLAN_APPROVER_ROLES)
   rejectChangeRequest(
     @Param('id') id: string,
     @CurrentUser('hospitalId') hospitalId: string | null,

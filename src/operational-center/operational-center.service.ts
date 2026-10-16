@@ -364,7 +364,7 @@ export class OperationalCenterService {
           ],
           action: {
             label: 'Post reja yaratish',
-            href: '/dashboard/schedules?view=postlar',
+            href: this.postPlanHref(post, now),
           },
         });
         continue;
@@ -388,7 +388,7 @@ export class OperationalCenterService {
           ],
           action: {
             label: 'Post rejani ochish',
-            href: '/dashboard/schedules?view=postlar',
+            href: this.postPlanHref(post, now, plan.id),
           },
         });
         continue;
@@ -414,15 +414,28 @@ export class OperationalCenterService {
             plan.status === MonthlySchedulePlanStatus.DRAFT
               ? 'Post reja hali qoralama holatida'
               : 'Post reja rahbar tasdig‘ini kutmoqda',
-          description: `Versiya ${plan.version}. Rejalashtirilgan: ${this.hours(summary?.plannedMinutes)}; post normasi: ${this.hours(summary?.targetMinutes)}.`,
+          description:
+            plan.status === MonthlySchedulePlanStatus.DRAFT
+              ? `Versiya ${plan.version}. Kadr inspektori rejani tayyorlab, rahbar tasdig‘iga yuborishi kerak.`
+              : `Versiya ${plan.version}. Reja rahbarning tasdiqlash yoki rad etish qarorini kutmoqda.`,
           evidence: [
             { label: 'Holat', value: plan.status },
             { label: 'Qolgan', value: this.hours(remaining) },
             { label: 'Oshgan', value: this.hours(excess) },
+            {
+              label: 'Keyingi amal',
+              value:
+                plan.status === MonthlySchedulePlanStatus.DRAFT
+                  ? 'Kadr inspektori yuboradi'
+                  : 'Rahbar qaror beradi',
+            },
           ],
           action: {
-            label: 'Post rejani ochish',
-            href: '/dashboard/schedules?view=postlar',
+            label:
+              plan.status === MonthlySchedulePlanStatus.DRAFT
+                ? 'Qoralamani ochish'
+                : 'Tasdiqlash uchun ochish',
+            href: this.postPlanHref(post, now, plan.id),
           },
         });
       } else if (remaining || excess) {
@@ -446,7 +459,7 @@ export class OperationalCenterService {
           ],
           action: {
             label: 'Post rejani ochish',
-            href: '/dashboard/schedules?view=postlar',
+            href: this.postPlanHref(post, now, plan.id),
           },
         });
       } else if (pendingChanges) {
@@ -466,7 +479,7 @@ export class OperationalCenterService {
           ],
           action: {
             label: 'So‘rovlarni ko‘rish',
-            href: '/dashboard/schedules?view=postlar',
+            href: this.postPlanHref(post, now, plan.id),
           },
         });
       } else {
@@ -649,5 +662,21 @@ export class OperationalCenterService {
   private hours(minutes: unknown) {
     const value = Number(minutes ?? 0) / 60;
     return `${Number.isInteger(value) ? value : value.toFixed(1)} soat`;
+  }
+
+  private postPlanHref(
+    post: { id: string; departmentId: string },
+    month: dayjs.Dayjs,
+    planId?: string,
+  ) {
+    const query = new URLSearchParams({
+      view: 'postlar',
+      departmentId: post.departmentId,
+      postId: post.id,
+      year: String(month.year()),
+      month: String(month.month() + 1),
+    });
+    if (planId) query.set('planId', planId);
+    return `/dashboard/schedules?${query.toString()}`;
   }
 }

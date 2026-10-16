@@ -140,4 +140,55 @@ describe('OperationalCenterService', () => {
     expect(result.modes.FLEXIBLE.items).toEqual([]);
     expect(result.modes.FLEXIBLE.metrics.monitored).toBe(0);
   });
+
+  it('post reja havolasida aynan bo‘lim, post va reja tanlovini uzatadi', async () => {
+    const prisma = basePrisma();
+    prisma.hospital.findFirst.mockResolvedValue({
+      id: 'hospital-1',
+      name: 'Test muassasa',
+      schedulePlanningMode: SchedulePlanningMode.POST_COVERAGE,
+    });
+    prisma.schedulePost.findMany.mockResolvedValue([
+      {
+        id: 'post-1',
+        departmentId: 'department-1',
+        name: 'Ona va bola posti',
+        department: { id: 'department-1', name: 'Ona va bola' },
+      },
+    ]);
+    prisma.monthlySchedulePlan.findMany.mockResolvedValue([
+      {
+        id: 'plan-1',
+        postId: 'post-1',
+        version: 1,
+        status: 'DRAFT',
+      },
+    ]);
+    const schedulePlanning = {
+      getPlanDetails: jest.fn().mockResolvedValue({
+        summary: {
+          plannedMinutes: 0,
+          targetMinutes: 44_640,
+          remainingMinutes: 44_640,
+          excessMinutes: 0,
+        },
+        changeRequests: [],
+      }),
+    };
+
+    const service = new OperationalCenterService(
+      prisma as any,
+      schedulePlanning as any,
+    );
+    const result = await service.getOverview('hospital-1');
+    const item = result.modes.POST_COVERAGE.items[0];
+    const url = new URL(item.action.href, 'https://staffplus.local');
+
+    expect(url.pathname).toBe('/dashboard/schedules');
+    expect(url.searchParams.get('view')).toBe('postlar');
+    expect(url.searchParams.get('departmentId')).toBe('department-1');
+    expect(url.searchParams.get('postId')).toBe('post-1');
+    expect(url.searchParams.get('planId')).toBe('plan-1');
+    expect(item.action.label).toBe('Qoralamani ochish');
+  });
 });
