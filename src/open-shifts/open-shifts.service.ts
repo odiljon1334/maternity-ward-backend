@@ -21,6 +21,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { DateUtil } from '../common/utils/date.util';
 import { TelegramService } from '../telegram/telegram.service';
 import { esc } from '../telegram/employee-messages';
+import { SchedulePlanningService } from '../schedule-planning/schedule-planning.service';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -59,7 +60,8 @@ export interface CreateOpenShiftInput {
   departmentId: string;
   /** YYYY-MM-DD */
   date: string;
-  shiftId: string;
+  /** Post rejali muassasada e'tiborga olinmaydi — smena rejadan olinadi */
+  shiftId?: string;
   absentEmployeeId?: string | null;
   note?: string | null;
   employeeIds: string[];
@@ -97,8 +99,10 @@ const DETAIL_INCLUDE = {
  * (FILLED) va smena xodimning grafigiga yoziladi. Rad etilsa smena yana
  * ochiq bo'ladi, boshqalar olishi mumkin.
  *
- * Faqat oddiy grafikli muassasalar: post rejali muassasada grafik post
- * rejadan nashr qilinadi va o'zgarish reja orqali o'tishi shart.
+ * Post rejali muassasada (tug'ruqxona) bo'sh smena kimningdir tasdiqlangan
+ * post rejadagi smenasi: "kim o'rniga" majburiy, smena rejadan olinadi va
+ * tasdiqlash tasdiqlangan "o'rnini bosish" (SUBSTITUTION) orqali yoziladi —
+ * post reja hujjati o'zgarmaydi, Excel'dagi "O'zgarishlar" varag'ida ko'rinadi.
  */
 @Injectable()
 export class OpenShiftsService implements OnModuleInit {
@@ -107,6 +111,7 @@ export class OpenShiftsService implements OnModuleInit {
   constructor(
     private readonly prisma: PrismaService,
     private readonly telegram: TelegramService,
+    private readonly schedulePlanning: SchedulePlanningService,
   ) {}
 
   onModuleInit() {
@@ -141,19 +146,76 @@ export class OpenShiftsService implements OnModuleInit {
     return `${dayjs(date).tz(TZ).format('DD.MM.YYYY')}, ${shift.startTime}–${shift.endTime} · ${departmentName}`;
   }
 
-  private async requireStandardHospital(hospitalId: string) {
+  private requireShiftId(shiftId: string | null | undefined): string {
+    if (!shiftId) throw new BadRequestException('Smenani tanlang');
+    return shiftId;
+  }
+
+  /** Muassasa va uning grafik rejimi (post reja yoki oddiy grafik) */
+  private async loadHospital(hospitalId: string) {
     if (!hospitalId) throw new BadRequestException('Muassasa tanlanmagan');
     const hospital = await this.prisma.hospital.findUnique({
       where: { id: hospitalId },
       select: { id: true, schedulePlanningMode: true },
     });
     if (!hospital) throw new NotFoundException('Muassasa topilmadi');
-    if (hospital.schedulePlanningMode === SchedulePlanningMode.POST_COVERAGE) {
+    return {
+      ...hospital,
+      postCoverage:
+        hospital.schedulePlanningMode === SchedulePlanningMode.POST_COVERAGE,
+    };
+  }
+
+  /**
+   * Post rejali muassasa: kelmagan xodimning shu kungi tasdiqlangan post
+   * rejadagi smenasi. Bo'sh smena aynan shu smena bo'ladi.
+   */
+  private async requirePostEntry(
+    hospitalId: string,
+    departmentId: string,
+    absentEmployeeId: string | null | undefined,
+    date: Date,
+  ) {
+    if (!absentEmployeeId) {
       throw new BadRequestException(
-        'Post rejali muassasada bo‘sh smena post reja orqali almashtiriladi — birja hozircha oddiy grafik uchun',
+        'Post rejali muassasada bo‘sh smena kimning o‘rniga ekanini tanlang',
       );
     }
-    return hospital;
+    const absent = await this.prisma.employee.findFirst({
+      where: { id: absentEmployeeId, hospitalId },
+      select: { departmentId: true },
+    });
+    if (!absent) throw new NotFoundException('Xodim topilmadi');
+    if (absent.departmentId !== departmentId) {
+      throw new BadRequestException(
+        'O‘rniga chiqiladigan xodim tanlangan bo‘limda emas',
+      );
+    }
+    const entry = await this.schedulePlanning.findApprovedWorkingEntry(
+      hospitalId,
+      absentEmployeeId,
+      date,
+    );
+    if (!entry?.shiftId) {
+      throw new BadRequestException(
+        'Xodimning shu kun uchun tasdiqlangan post rejada ish smenasi yo‘q',
+      );
+    }
+    const alreadyMoved = await this.prisma.scheduleChangeRequest.findFirst({
+      where: {
+        hospitalId,
+        status: 'APPROVED',
+        type: { in: ['SUBSTITUTION', 'SWAP'] },
+        OR: [{ primaryEntryId: entry.id }, { counterpartEntryId: entry.id }],
+      },
+      select: { id: true },
+    });
+    if (alreadyMoved) {
+      throw new BadRequestException(
+        'Bu smena allaqachon boshqa xodimga o‘tkazilgan',
+      );
+    }
+    return entry;
   }
 
   /** Sana: bugundan WINDOW_DAYS gacha; bugungi smena tugamagan bo'lishi kerak. */
@@ -326,12 +388,20 @@ export class OpenShiftsService implements OnModuleInit {
     hospitalId: string,
     input: Omit<CreateOpenShiftInput, 'employeeIds' | 'note'>,
   ) {
-    await this.requireStandardHospital(hospitalId);
+    const hospital = await this.loadHospital(hospitalId);
     const date = OpenShiftsService.dateOf(input.date);
+    const entry = hospital.postCoverage
+      ? await this.requirePostEntry(
+          hospitalId,
+          input.departmentId,
+          input.absentEmployeeId,
+          date,
+        )
+      : null;
     const { department, shift } = await this.loadShiftAndDepartment(
       hospitalId,
       input.departmentId,
-      input.shiftId,
+      this.requireShiftId(entry?.shiftId ?? input.shiftId),
     );
     this.assertOpenWindow(date, shift);
     const candidates = await this.evaluateCandidates(
@@ -341,7 +411,13 @@ export class OpenShiftsService implements OnModuleInit {
       shift,
       input.absentEmployeeId,
     );
-    return { department, shift, date: input.date, candidates };
+    return {
+      department,
+      shift,
+      date: input.date,
+      postCoverage: hospital.postCoverage,
+      candidates,
+    };
   }
 
   async create(
@@ -349,12 +425,21 @@ export class OpenShiftsService implements OnModuleInit {
     userId: string | null,
     input: CreateOpenShiftInput,
   ) {
-    await this.requireStandardHospital(hospitalId);
+    const hospital = await this.loadHospital(hospitalId);
     const date = OpenShiftsService.dateOf(input.date);
+    // Post rejali muassasada smena kelmagan xodimning rejadagi smenasi
+    const entry = hospital.postCoverage
+      ? await this.requirePostEntry(
+          hospitalId,
+          input.departmentId,
+          input.absentEmployeeId,
+          date,
+        )
+      : null;
     const { department, shift } = await this.loadShiftAndDepartment(
       hospitalId,
       input.departmentId,
-      input.shiftId,
+      this.requireShiftId(entry?.shiftId ?? input.shiftId),
     );
     this.assertOpenWindow(date, shift);
 
@@ -617,6 +702,20 @@ export class OpenShiftsService implements OnModuleInit {
       );
     }
 
+    const hospital = await this.loadHospital(reviewer.hospitalId);
+    const postEntry = hospital.postCoverage
+      ? await this.requirePostEntry(
+          reviewer.hospitalId,
+          openShift.departmentId,
+          openShift.absentEmployeeId,
+          openShift.date,
+        )
+      : null;
+    const requestedById = openShift.createdById ?? reviewer.userId;
+    if (postEntry && !requestedById) {
+      throw new BadRequestException('Tasdiqlash uchun web panel orqali kiring');
+    }
+
     const scheduleNote = openShift.absentEmployee
       ? `Bo'sh smena: ${openShift.absentEmployee.fullName} o'rniga`
       : "Bo'sh smena birjasi";
@@ -627,6 +726,18 @@ export class OpenShiftsService implements OnModuleInit {
       });
       if (!r.count)
         throw new ConflictException('Bu smena allaqachon ko‘rib chiqilgan');
+      if (postEntry) {
+        // Post reja: tasdiqlangan "o'rnini bosish" — grafik shu orqali yoziladi
+        await this.schedulePlanning.substituteFromOpenShift(tx, {
+          hospitalId: reviewer.hospitalId,
+          entryId: postEntry.id,
+          replacementEmployeeId: claimer.id,
+          requestedById: requestedById!,
+          approvedById: reviewer.userId,
+          reason: `Bo'sh smena birjasi: ${claimer.fullName}${openShift.absentEmployee ? ` — ${openShift.absentEmployee.fullName} o'rniga` : ''}`,
+        });
+        return;
+      }
       await tx.schedule.upsert({
         where: {
           employeeId_date: { employeeId: claimer.id, date: openShift.date },
