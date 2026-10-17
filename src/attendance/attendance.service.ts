@@ -1135,11 +1135,6 @@ export class AttendanceService {
   // PRIVATE: WEEKEND HELPER
   // ──────────────────────────────────────────────────────────────────────────────
 
-  private isWeekend(date: Date): boolean {
-    const day = dayjs(date).tz(TZ).day(); // 0=Yakshanba, 6=Shanba
-    return day === 0 || day === 6;
-  }
-
   // ──────────────────────────────────────────────────────────────────────────────
   // PRIVATE: Grafik statusi → Davomat statusi
   // ──────────────────────────────────────────────────────────────────────────────
@@ -1376,11 +1371,10 @@ export class AttendanceService {
       hospitalId,
       now,
     );
-    const marked = todayResult.marked + yesterdayResult.marked;
-    if (todayResult.skipped) {
-      return { marked, skipped: true, reason: 'weekend' };
-    }
-    return { marked, skipped: false };
+    return {
+      marked: todayResult.marked + yesterdayResult.marked,
+      skipped: false,
+    };
   }
 
   private async markAbsentForDate(
@@ -1390,18 +1384,15 @@ export class AttendanceService {
   ) {
     const scope = hospitalId ? { employee: { hospitalId } } : {};
 
-    // Dam olish kunida ishlatmaymiz
-    if (this.isWeekend(workDate)) {
-      this.logger.log('markAbsentForToday: dam olish kuni — skip');
-      return { marked: 0, skipped: true };
-    }
-
+    // Shanba/yakshanba uchun alohida qoida yo'q — grafik yagona haqiqat
+    // manbai: grafigida ish kuni bo'lib kelmagan xodim "Kelmadi", grafigi
+    // qo'yilmagan xodimga hech narsa yozilmaydi (dam olish kuni).
     // Faqat grafigi WORKING bo'lgan xodimlar
     const scheduled = await this.prisma.schedule.findMany({
       where: { date: workDate, status: 'WORKING', ...scope },
       select: { id: true, employeeId: true, shiftId: true, shift: true },
     });
-    if (scheduled.length === 0) return { marked: 0, skipped: false };
+    if (scheduled.length === 0) return { marked: 0 };
 
     // Shu kun allaqachon davomat yozuvi bor xodimlar
     const existingRecords = await this.prisma.attendanceRecord.findMany({
@@ -1441,7 +1432,7 @@ export class AttendanceService {
       );
     }
 
-    return { marked: toCreate.length, skipped: false };
+    return { marked: toCreate.length };
   }
 
   async getWeeklyStats(

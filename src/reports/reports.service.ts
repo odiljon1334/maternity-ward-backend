@@ -200,7 +200,9 @@ export class ReportsService {
         const isWeekend = dow === 0 || dow === 6;
 
         const att = attMap.get(d);
-        if (isWeekend) {
+        // Grafik yagona manba: shanba/yakshanba ham ish kuni bo'lishi mumkin.
+        // Davomat yozuvi bo'lsa — holati ko'rsatiladi, bo'lmasa dam olish.
+        if (!att && isWeekend) {
           cell.value = '○';
           cell.fill = {
             type: 'pattern',
