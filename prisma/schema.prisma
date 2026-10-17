@@ -496,6 +496,11 @@ model Employee {
   photoUrl   String?
   baseSalary Decimal @db.Decimal(12, 2)
 
+  /// JSHSHIR (PINFL) — 14 raqamli shaxsiy identifikator, UzASBO bilan
+  /// bog'lash uchun. Ixtiyoriy. Shaxsiy ma'lumot: PrismaService'da global
+  /// yashirilgan, faqat kadrlar/rahbar so'rovlarida aniq so'raladi.
+  pinfl String?
+
   gpsLat    Float?
   gpsLng    Float?
   gpsRadius Int?   @default(100)
@@ -558,6 +563,7 @@ model Employee {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@unique([hospitalId, pinfl])
   @@index([hospitalId])
   @@index([hospitalId, firedAt])
 }

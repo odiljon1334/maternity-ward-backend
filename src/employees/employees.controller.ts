@@ -32,6 +32,7 @@ import { TenantScopeGuard } from '../common/guards/tenant-scope.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { RequirePermission } from '../common/decorators/require-permission.decorator';
 import { resolveHospitalId as resolveHospitalScope } from '../common/utils/hospital-scope.util';
+import { PINFL_READER_ROLES } from '../common/utils/pinfl.util';
 
 /** SUPER_ADMIN uchun: JWT'dagi hospitalId null bo'lsa, query'dan targetHospitalId oladi.
  *  Ikkalasi ham yo'q bo'lsa — '' qaytaradi (servislar `string` kutadi, findAll
@@ -229,6 +230,7 @@ export class EmployeesController {
     return this.service.findOne(
       id,
       resolveHospitalId(hospitalId, targetHospitalId),
+      { withPinfl: PINFL_READER_ROLES.has(role) },
     );
   }
 
