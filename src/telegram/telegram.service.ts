@@ -228,6 +228,10 @@ export class TelegramService implements OnModuleInit {
     EmployeeActionKind,
     EmployeeActionHandler
   >();
+  /** Xodim shaxsiy Telegramini ulaganda chaqiriladi (kutib turgan xabarlar) */
+  private personalLinkListeners: Array<
+    (employeeIds: string[]) => Promise<unknown>
+  > = [];
 
   // Bir raqam bir nechta muassasadagi ruxsatli xodimga mos kelsa — tanlov
   // kutilmoqda. Callback'da faqat INDEX yuboriladi, ID emas.
@@ -1037,6 +1041,8 @@ export class TelegramService implements OnModuleInit {
         contact.phone_number,
         chatId,
       );
+      const announceLinked = () =>
+        this.notifyPersonalLinked(personal.map((p) => p.employeeId));
 
       if (!candidates.length) {
         if (personal.length) {
@@ -1048,6 +1054,7 @@ export class TelegramService implements OnModuleInit {
             ...Markup.removeKeyboard(),
           });
           await ctx.reply('🏠 Menyu:', { ...employeeKeyboard(true) });
+          announceLinked();
           return;
         }
         // Hech qanday ism/muassasa/rol oshkor qilinmaydi.
@@ -1063,6 +1070,7 @@ export class TelegramService implements OnModuleInit {
 
       if (candidates.length === 1) {
         await this.completeLink(ctx, candidates[0]);
+        announceLinked();
         return;
       }
 
@@ -1081,6 +1089,7 @@ export class TelegramService implements OnModuleInit {
           ]),
         ),
       );
+      announceLinked();
     });
 
     bot.action(/^link_pick:(\d+)$/, async (ctx) => {
@@ -1173,6 +1182,27 @@ export class TelegramService implements OnModuleInit {
     );
     await ctx.reply(linkedText([res]), { parse_mode: 'HTML' });
     await ctx.reply('🏠 Menyu:', { ...employeeKeyboard(true) });
+    this.notifyPersonalLinked([res.employeeId]);
+  }
+
+  /**
+   * Xodim Telegramni ulagach yuboriladigan narsalar uchun (masalan, ulanishdan
+   * oldin e'lon qilingan bo'sh smena takliflari — ular faqat e'lon paytida
+   * yuboriladi va ilgari ulangan xodimga umuman yetib bormasdi).
+   */
+  onPersonalLinked(fn: (employeeIds: string[]) => Promise<unknown>) {
+    this.personalLinkListeners.push(fn);
+  }
+
+  private notifyPersonalLinked(employeeIds: string[]) {
+    if (!employeeIds.length) return;
+    for (const fn of this.personalLinkListeners) {
+      void fn(employeeIds).catch((e) =>
+        this.logger.warn(
+          `Ulanishdan keyingi xabarlar yuborilmadi: ${e?.message ?? e}`,
+        ),
+      );
+    }
   }
 
   registerEmployeeActionHandler(

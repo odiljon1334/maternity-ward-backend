@@ -127,6 +127,9 @@ export class OpenShiftsService implements OnModuleInit {
       'openshift',
       (id, verb, chatId) => this.respondFromTelegram(id, verb, chatId),
     );
+    this.telegram.onPersonalLinked?.((employeeIds) =>
+      this.sendPendingOffers(employeeIds),
+    );
   }
 
   // ── Yordamchilar ───────────────────────────────────────────────────────
@@ -554,11 +557,7 @@ export class OpenShiftsService implements OnModuleInit {
       },
     });
     if (!openShift) return;
-    const text =
-      `🆘 <b>Bo'sh smena taklifi</b>\n` +
-      `${esc(this.describe(openShift.date, openShift.shift, openShift.department.name))}\n` +
-      (openShift.note ? `📝 ${esc(openShift.note)}\n` : '') +
-      `\nBirinchi rozi bo'lgan xodim band qiladi, rahbar tasdiqlagach grafikka yoziladi.`;
+    const text = this.offerText(openShift);
 
     for (const offer of openShift.offers) {
       const chatId = offer.employee.telegramChatId;
@@ -575,6 +574,79 @@ export class OpenShiftsService implements OnModuleInit {
         });
       }
     }
+  }
+
+  private offerText(openShift: {
+    date: Date;
+    shift: ShiftLike;
+    department: { name: string };
+    note: string | null;
+  }) {
+    return (
+      `🆘 <b>Bo'sh smena taklifi</b>\n` +
+      `${esc(this.describe(openShift.date, openShift.shift, openShift.department.name))}\n` +
+      (openShift.note ? `📝 ${esc(openShift.note)}\n` : '') +
+      `\nBirinchi rozi bo'lgan xodim band qiladi, rahbar tasdiqlagach grafikka yoziladi.`
+    );
+  }
+
+  /**
+   * Telegramni endi ulagan xodimga hali ochiq, javob berilmagan va
+   * yuborilmagan takliflari. Takliflar faqat e'lon paytida yuboriladi —
+   * o'sha paytda Telegrami ulanmagan xodim ularni umuman olmasdi.
+   */
+  async sendPendingOffers(employeeIds: string[]) {
+    const offers = await this.prisma.openShiftOffer.findMany({
+      where: {
+        employeeId: { in: employeeIds },
+        notifiedAt: null,
+        response: null,
+        openShift: {
+          status: OpenShiftStatus.OPEN,
+          date: { gte: DateUtil.startOfDay(new Date()) },
+        },
+      },
+      select: {
+        id: true,
+        employee: { select: { telegramChatId: true } },
+        openShift: {
+          select: {
+            id: true,
+            date: true,
+            note: true,
+            shift: true,
+            department: { select: { name: true } },
+          },
+        },
+      },
+      orderBy: { openShift: { date: 'asc' } },
+    });
+    let sent = 0;
+    for (const offer of offers) {
+      const chatId = offer.employee.telegramChatId;
+      const { openShift } = offer;
+      if (!chatId) continue;
+      // Tugagan smena taklif qilinmaydi
+      if (
+        OpenShiftsService.interval(openShift.date, openShift.shift).end <=
+        new Date()
+      ) {
+        continue;
+      }
+      const ok = await this.telegram.sendOpenShiftOffer?.(
+        chatId,
+        this.offerText(openShift),
+        openShift.id,
+      );
+      if (ok) {
+        sent++;
+        await this.prisma.openShiftOffer.update({
+          where: { id: offer.id },
+          data: { notifiedAt: new Date() },
+        });
+      }
+    }
+    return { sent };
   }
 
   async list(hospitalId: string, status?: string) {

@@ -59,6 +59,7 @@ function setup(employees: any[] = [], mode = 'STANDARD') {
     },
     openShiftOffer: {
       findUnique: jest.fn(),
+      findMany: jest.fn(async () => []),
       update: jest.fn(async () => ({})),
       updateMany: jest.fn(async () => ({ count: 1 })),
     },
@@ -71,6 +72,7 @@ function setup(employees: any[] = [], mode = 'STANDARD') {
   const telegram: any = {
     sendDecisionRequest: jest.fn(async () => undefined),
     sendPersonal: jest.fn(async () => true),
+    sendOpenShiftOffer: jest.fn(async () => true),
   };
   const planning: any = {
     findApprovedWorkingEntry: jest.fn(async () => ({
@@ -261,6 +263,66 @@ describe('Bo‘sh smena birjasi', () => {
         BadRequestException,
       );
       expect(prisma.openShift.updateMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Telegramni keyin ulagan xodim', () => {
+    const offer = (id: string, chatId: string | null, date = day(1)) => ({
+      id,
+      employee: { telegramChatId: chatId },
+      openShift: {
+        id: `os-${id}`,
+        date,
+        note: null,
+        shift: DAY_SHIFT,
+        department: { name: 'Tug‘ruq bloki' },
+      },
+    });
+
+    it('ulanishdan oldin e’lon qilingan ochiq takliflar yuboriladi', async () => {
+      const { prisma, service, telegram } = setup();
+      prisma.openShiftOffer.findMany.mockResolvedValue([
+        offer('a', '777'),
+        offer('b', null),
+        // Kecha tugagan smena
+        offer('c', '777', day(-1)),
+      ]);
+
+      await expect(service.sendPendingOffers(['e1'])).resolves.toEqual({
+        sent: 1,
+      });
+
+      expect(prisma.openShiftOffer.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            employeeId: { in: ['e1'] },
+            notifiedAt: null,
+            response: null,
+            openShift: expect.objectContaining({ status: 'OPEN' }),
+          }),
+        }),
+      );
+      expect(telegram.sendOpenShiftOffer).toHaveBeenCalledTimes(1);
+      expect(telegram.sendOpenShiftOffer).toHaveBeenCalledWith(
+        '777',
+        expect.stringContaining("Bo'sh smena taklifi"),
+        'os-a',
+      );
+      expect(prisma.openShiftOffer.update).toHaveBeenCalledWith({
+        where: { id: 'a' },
+        data: { notifiedAt: expect.any(Date) },
+      });
+    });
+
+    it('ulanish xabari servisga ulangan', () => {
+      const { service, telegram } = setup();
+      telegram.onPersonalLinked = jest.fn();
+      telegram.registerDecisionHandler = jest.fn();
+      telegram.registerEmployeeActionHandler = jest.fn();
+      service.onModuleInit();
+      expect(telegram.onPersonalLinked).toHaveBeenCalledWith(
+        expect.any(Function),
+      );
     });
   });
 
