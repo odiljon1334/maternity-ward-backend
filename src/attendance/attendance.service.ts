@@ -30,6 +30,7 @@ import {
 } from '../attendance-notices/notice-excuse.util';
 import { PushService } from '../push/push.service';
 import { DateUtil } from '../common/utils/date.util';
+import { isAwaitingCheckIn } from '../common/utils/shift-timing.util';
 import {
   isHospitalBillingBlocked,
   isHospitalBlocked,
@@ -1242,9 +1243,15 @@ export class AttendanceService {
       },
     });
 
+    const now = new Date();
     const absentVirtual = scheduledMissing.map((sch) => {
       const isWorking = sch.status === 'WORKING';
-      const virtualStatus = this.scheduleStatusToAttendance(sch.status);
+      // Smenasi hali boshlanmagan xodim "Kelmadi" emas — "Rejada"
+      // (masalan kunduzi 20:00 dagi kechki smena xodimi).
+      const virtualStatus =
+        isWorking && isAwaitingCheckIn(workDate, sch.shift, now)
+          ? 'SCHEDULED'
+          : this.scheduleStatusToAttendance(sch.status);
 
       return {
         // Ishlamaydigan kunlar uchun ham barqaror, lekin farqlanadigan id
@@ -1356,35 +1363,61 @@ export class AttendanceService {
    * muassasalar xodimlari "kelmadi" bo'lardi.
    */
   async markAbsentForToday(hospitalId?: string | null) {
-    const workDate = DateUtil.startOfDay(new Date());
+    const now = new Date();
+    const today = DateUtil.startOfDay(now);
+    const yesterday = DateUtil.startOfDay(dayjs(today).subtract(1, 'day'));
+
+    // Bugungi smenalardan faqat boshlanib, kechikish vaqti o'tganlari
+    // belgilanadi. 22:00 yoki 02:00 dagi smena 21:00 da "Kelmadi" bo'lib
+    // qolmaydi — u ertangi ishga tushishda kechagi kun sifatida yopiladi.
+    const todayResult = await this.markAbsentForDate(today, hospitalId, now);
+    const yesterdayResult = await this.markAbsentForDate(
+      yesterday,
+      hospitalId,
+      now,
+    );
+    const marked = todayResult.marked + yesterdayResult.marked;
+    if (todayResult.skipped) {
+      return { marked, skipped: true, reason: 'weekend' };
+    }
+    return { marked, skipped: false };
+  }
+
+  private async markAbsentForDate(
+    workDate: Date,
+    hospitalId: string | null | undefined,
+    now: Date,
+  ) {
     const scope = hospitalId ? { employee: { hospitalId } } : {};
 
     // Dam olish kunida ishlatmaymiz
     if (this.isWeekend(workDate)) {
       this.logger.log('markAbsentForToday: dam olish kuni — skip');
-      return { marked: 0, skipped: true, reason: 'weekend' };
+      return { marked: 0, skipped: true };
     }
 
     // Faqat grafigi WORKING bo'lgan xodimlar
-    const scheduledToday = await this.prisma.schedule.findMany({
+    const scheduled = await this.prisma.schedule.findMany({
       where: { date: workDate, status: 'WORKING', ...scope },
       select: { id: true, employeeId: true, shiftId: true, shift: true },
     });
+    if (scheduled.length === 0) return { marked: 0, skipped: false };
 
-    if (scheduledToday.length === 0) {
-      return { marked: 0, skipped: false };
-    }
-
-    // Bugun allaqachon davomat yozuvi bor xodimlar
+    // Shu kun allaqachon davomat yozuvi bor xodimlar
     const existingRecords = await this.prisma.attendanceRecord.findMany({
       where: { workDate, ...scope },
       select: { employeeId: true },
     });
     const attendedSet = new Set(existingRecords.map((r) => r.employeeId));
 
-    // Grafigi bor, shift mavjud, lekin kelmagan xodimlar
-    const toCreate = scheduledToday
-      .filter((sch) => !attendedSet.has(sch.employeeId) && sch.shift)
+    // Grafigi bor, smenasi boshlangan, lekin kelmagan xodimlar
+    const toCreate = scheduled
+      .filter(
+        (sch) =>
+          !attendedSet.has(sch.employeeId) &&
+          sch.shift &&
+          !isAwaitingCheckIn(workDate, sch.shift, now),
+      )
       .map((sch) => ({
         employeeId: sch.employeeId,
         scheduleId: sch.id,
@@ -1404,7 +1437,7 @@ export class AttendanceService {
         skipDuplicates: true,
       });
       this.logger.log(
-        `markAbsentForToday: ${toCreate.length} xodim ABSENT belgilandi`,
+        `markAbsentForToday: ${dayjs(workDate).tz(TZ).format('YYYY-MM-DD')} — ${toCreate.length} xodim ABSENT belgilandi`,
       );
     }
 
