@@ -16,6 +16,7 @@ import { DateUtil } from '../common/utils/date.util';
 import { calcAutoLunch } from '../common/utils/shift.util';
 import { Prisma, ShiftType, ScheduleStatus } from '@prisma/client';
 import { buildUzbekSearchVariants } from '../common/utils/uzbek-search.util';
+import { isLeaveWrittenSchedule } from '../leave/leave.service';
 import dayjs from 'dayjs';
 import type { Dayjs } from 'dayjs';
 import utc from 'dayjs/plugin/utc';
@@ -27,6 +28,12 @@ dayjs.extend(timezone);
 dayjs.extend(isoWeek);
 
 const TZ = process.env.TIMEZONE || 'Asia/Tashkent';
+
+/** Oldingi oydan nusxa olinganda ko'chadigan holatlar: faqat ish/dam naqshi */
+const ROLLOVER_STATUSES: ScheduleStatus[] = [
+  ScheduleStatus.WORKING,
+  ScheduleStatus.DAY_OFF,
+];
 
 type MonthlyScheduleFilter = 'all' | 'with' | 'without';
 
@@ -774,11 +781,22 @@ export class SchedulesService {
   // ROLLOVER: copy schedules to next month
   // ──────────────────────────────────────────
   /**
-   * fromMonth/Year dagi grafiklarni toMonth/Year ga ko'chiradi.
-   * toMonth da allaqachon grafigi bor xodimlar o'tkazib yuboriladi.
-   * Har bir kun uchun: toMonth dagi hafta-nomer + hafta-kuni bo'yicha
-   * fromMonth dan mos yozuv topiladi — shu smena/status ishlatiladi.
-   * (2-2, 1-1, FIXED, va boshqa patternlar to'g'ri saqlanadi)
+   * fromMonth/Year dagi grafiklarni toMonth/Year ga ko'chiradi — FAQAT
+   * foydalanuvchi "Oldingi oydan nusxa olish" tugmasini bosganda (avtomatik
+   * ko'chirish olib tashlangan).
+   *
+   * - Faqat ish va dam olish kunlari naqshi ko'chadi. Ta'til, kasallik,
+   *   tug'ruq ta'tili, malaka oshirish, bayram va boshqa yo'qliklar
+   *   ko'chmaydi: ular yangi oyda ham bo'lsa, faqat tasdiqlangan ta'til
+   *   so'rovidan yoziladi. Aks holda ishlanmagan kunlar "haqli ta'til" bo'lib
+   *   qolardi.
+   * - Har bir kun uchun toMonth dagi hafta-nomer + hafta-kuni bo'yicha
+   *   fromMonth dan mos yozuv olinadi; u ta'til bo'lgan bo'lsa — shu hafta
+   *   kunining boshqa haftalardagi odatiy holati.
+   * - toMonth da grafigi bor xodimlar o'tkazib yuboriladi (faqat ta'til
+   *   yozuvlari bo'lsa — qolgan kunlar to'ldiriladi, ta'til saqlanadi).
+   * - Post rejali muassasalarda ishlamaydi: u yerda har oy yangi post reja.
+   * - Ishdan bo'shagan xodimlar ko'chirilmaydi.
    */
   async rolloverMonth(
     fromMonth: number,
@@ -787,16 +805,34 @@ export class SchedulesService {
     toYear: number,
     hospitalId?: string | null,
   ) {
+    if (hospitalId) {
+      const hospital = await this.prisma.hospital.findUnique({
+        where: { id: hospitalId },
+        select: { schedulePlanningMode: true },
+      });
+      if (hospital?.schedulePlanningMode === 'POST_COVERAGE') {
+        throw new BadRequestException(
+          'Post rejali muassasada grafik har oy post rejadan yangidan tuziladi — oldingi oydan nusxa olinmaydi',
+        );
+      }
+    }
+
     const fromStart = DateUtil.startOfMonth(fromYear, fromMonth);
     const fromEnd = DateUtil.endOfMonth(fromYear, fromMonth);
     const toStart = DateUtil.startOfMonth(toYear, toMonth);
     const toEnd = DateUtil.endOfMonth(toYear, toMonth);
+    const employeeScope = {
+      firedAt: null,
+      hospital: { schedulePlanningMode: 'STANDARD' as const },
+      ...(hospitalId && { hospitalId }),
+    };
 
-    // fromMonth da grafigi bor xodimlar
+    // fromMonth da ish/dam olish naqshi bor xodimlar
     const withSchedule = await this.prisma.schedule.findMany({
       where: {
         date: { gte: fromStart, lte: fromEnd },
-        ...(hospitalId && { employee: { hospitalId } }),
+        status: { in: ROLLOVER_STATUSES },
+        employee: employeeScope,
       },
       select: { employeeId: true },
       distinct: ['employeeId'],
@@ -804,16 +840,19 @@ export class SchedulesService {
     const employeeIds = withSchedule.map((s) => s.employeeId);
     if (!employeeIds.length) return { rolled: 0, skipped: 0, total: 0 };
 
-    // toMonth da allaqachon grafigi borlarni exclude qilish
-    const alreadyHas = await this.prisma.schedule.findMany({
+    // toMonth da allaqachon grafigi borlar (faqat ta'til yozuvlari hisobga olinmaydi)
+    const existingTo = await this.prisma.schedule.findMany({
       where: {
         date: { gte: toStart, lte: toEnd },
         employeeId: { in: employeeIds },
       },
-      select: { employeeId: true },
-      distinct: ['employeeId'],
+      select: { employeeId: true, status: true, note: true },
     });
-    const alreadyHasIds = new Set(alreadyHas.map((s) => s.employeeId));
+    const alreadyHasIds = new Set(
+      existingTo
+        .filter((row) => !isLeaveWrittenSchedule(row))
+        .map((row) => row.employeeId),
+    );
     const toProcessIds = employeeIds.filter((id) => !alreadyHasIds.has(id));
 
     if (!toProcessIds.length) {
@@ -825,30 +864,29 @@ export class SchedulesService {
       };
     }
 
-    // fromMonth barcha grafiklarini olish
     const fromSchedules = await this.prisma.schedule.findMany({
       where: {
         date: { gte: fromStart, lte: fromEnd },
         employeeId: { in: toProcessIds },
+        status: { in: ROLLOVER_STATUSES },
       },
     });
 
     // employeeId → Map<"hafta_weekday" → { shiftId, status }>
     const empMap = new Map<
       string,
-      Map<string, { shiftId: string; status: ScheduleStatus }>
+      Map<string, { shiftId: string | null; status: ScheduleStatus }>
     >();
     for (const s of fromSchedules) {
       const d = dayjs.tz(s.date, TZ);
-      const week = Math.floor((d.date() - 1) / 7); // 0-4
-      const dow = d.day(); // 0=Yak..6=Sha
-      const key = `${week}_${dow}`;
+      const key = `${Math.floor((d.date() - 1) / 7)}_${d.day()}`;
       if (!empMap.has(s.employeeId)) empMap.set(s.employeeId, new Map());
       empMap
         .get(s.employeeId)!
         .set(key, { shiftId: s.shiftId, status: s.status });
     }
 
+    const rows: Prisma.ScheduleCreateManyInput[] = [];
     let rolled = 0;
     for (const empId of toProcessIds) {
       const dayMap = empMap.get(empId);
@@ -858,32 +896,23 @@ export class SchedulesService {
         .tz(`${toYear}-${String(toMonth).padStart(2, '0')}-01`, TZ)
         .startOf('month');
       const end = cur.endOf('month');
-
       while (cur.isBefore(end) || cur.isSame(end, 'day')) {
         const week = Math.floor((cur.date() - 1) / 7);
         const dow = cur.day();
-
-        // Shu hafta + weekday bor-yo'qligini tekshirish;
-        // yo'q bo'lsa oldingi haftalardan izlash (toMonth fromMonth dan uzunroq bo'lishi mumkin)
+        // Shu hafta kunining eng yaqin haftadagi odatiy holati (o'sha kuni
+        // ta'til bo'lgan yoki oy uzunroq bo'lsa)
         let entry = dayMap.get(`${week}_${dow}`);
-        if (!entry) {
-          for (let w = week - 1; w >= 0; w--) {
-            entry = dayMap.get(`${w}_${dow}`);
-            if (entry) break;
-          }
+        for (let distance = 1; !entry && distance <= 5; distance++) {
+          entry =
+            dayMap.get(`${week - distance}_${dow}`) ??
+            dayMap.get(`${week + distance}_${dow}`);
         }
-
         if (entry) {
-          const dateStart = DateUtil.startOfDay(cur.toDate());
-          await this.prisma.schedule.upsert({
-            where: { employeeId_date: { employeeId: empId, date: dateStart } },
-            update: { shiftId: entry.shiftId, status: entry.status },
-            create: {
-              employeeId: empId,
-              date: dateStart,
-              shiftId: entry.shiftId,
-              status: entry.status,
-            },
+          rows.push({
+            employeeId: empId,
+            date: DateUtil.startOfDay(cur.toDate()),
+            shiftId: entry.shiftId,
+            status: entry.status,
           });
         }
         cur = cur.add(1, 'day');
@@ -891,11 +920,19 @@ export class SchedulesService {
       rolled++;
     }
 
+    // Mavjud kunlar (tasdiqlangan ta'til) ustidan yozilmaydi
+    if (rows.length) {
+      await this.prisma.schedule.createMany({
+        data: rows,
+        skipDuplicates: true,
+      });
+    }
+
     return {
       rolled,
       skipped: alreadyHasIds.size,
       total: employeeIds.length,
-      message: `${rolled} ta xodim grafigi ${toMonth}/${toYear} oyiga ko'chirildi`,
+      message: `${rolled} ta xodim grafigi ${toMonth}/${toYear} oyiga ko'chirildi (ta'til va kasallik kunlari ko'chirilmadi)`,
     };
   }
 

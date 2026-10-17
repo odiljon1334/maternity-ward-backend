@@ -6,6 +6,12 @@ import { TelegramService } from '../telegram/telegram.service';
 import { SchedulesService } from '../schedules/schedules.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { DateUtil } from '../common/utils/date.util';
+import {
+  REMINDER_DAYS_BEFORE,
+  collectMissingSchedules,
+  daysUntilNextMonth,
+  missingScheduleMessage,
+} from '../schedules/schedule-reminders';
 import { LeaveService } from '../leave/leave.service';
 import { PushService } from '../push/push.service';
 import { PaymentsService, currentPeriod } from '../payments/payments.service';
@@ -877,35 +883,89 @@ export class CronService {
   }
 
   /**
-   * Har oyning 1-kuni 00:05 da — oldingi oyning grafigini yangi oyga avtomatik ko'chiradi.
-   * Allaqachon grafigi bor xodimlar o'tkazib yuboriladi.
+   * Keyingi oy grafigi kiritilmaganlar haqida ogohlantirish — oy tugashidan
+   * 3 va 2 kun oldin, soat 10:00 da.
+   *
+   * ⚠️ Ilgari shu yerda har oyning 1-kuni o'tgan oy grafigi avtomatik
+   * ko'chirilardi: ta'til/kasallik kunlari ham yangi oyga o'tib, ishlamagan
+   * kunlar uchun "haqli ta'til" hisoblanardi, post rejali muassasalarda esa
+   * eski post grafigi yangi rejaga aralashib ketardi. Endi har oy grafik
+   * yangidan kiritiladi; kiritilmasa xodim grafiksiz qoladi.
    */
-  @Cron('5 0 1 * *', { timeZone: TZ })
-  @CronLock('cron.monthlyScheduleRollover', 30 * 60_000)
-  async monthlyScheduleRollover() {
-    const now = dayjs.tz(new Date(), TZ);
-    const toMonth = now.month() + 1;
-    const toYear = now.year();
-    const fromDate = now.subtract(1, 'month');
-    const fromMonth = fromDate.month() + 1;
-    const fromYear = fromDate.year();
+  @Cron('0 10 * * *', { timeZone: TZ })
+  @CronLock('cron.missingScheduleReminder', 30 * 60_000)
+  async missingScheduleReminder(now: Date = new Date()) {
+    const daysLeft = daysUntilNextMonth(now);
+    if (!REMINDER_DAYS_BEFORE.includes(daysLeft)) return { sent: 0 };
 
-    this.logger.log(
-      `Schedule rollover start: ${fromMonth}/${fromYear} → ${toMonth}/${toYear}`,
-    );
+    const next = dayjs.tz(now, TZ).add(1, 'month');
+    const year = next.year();
+    const month = next.month() + 1;
+    let sent = 0;
     try {
-      // hospitalId = null → barcha kasalxonalar uchun
-      const result = await this.schedulesService.rolloverMonth(
-        fromMonth,
-        fromYear,
-        toMonth,
-        toYear,
-        null,
+      const summaries = await collectMissingSchedules(this.prisma, year, month);
+      for (const summary of summaries) {
+        const message = missingScheduleMessage(summary, year, month, daysLeft);
+        const recipients = await this.scheduleReminderRecipients(
+          summary.hospitalId,
+        );
+        if (recipients.length) {
+          await this.prisma.notification.createMany({
+            data: recipients.map((userId) => ({
+              type: 'ALERT' as const,
+              title: message.title,
+              message: message.text,
+              userId,
+              metadata: { kind: 'schedule-missing', year, month },
+            })),
+          });
+          await Promise.allSettled(
+            recipients.map((userId) =>
+              this.pushService.sendToUser(userId, {
+                title: message.title,
+                body: message.text,
+                url: '/dashboard/schedules',
+                tag: `schedule-missing-${year}-${month}`,
+              }),
+            ),
+          );
+        }
+        await this.telegramService
+          .broadcastToHospital(summary.hospitalId, message.html)
+          .catch(() => {});
+        sent++;
+      }
+      this.logger.log(
+        `missingScheduleReminder: ${month}/${year} — ${sent} ta muassasaga ogohlantirish`,
       );
-      this.logger.log(`Rollover done: ${JSON.stringify(result)}`);
     } catch (err) {
-      this.logger.error('monthlyScheduleRollover failed:', err);
+      this.logger.error('missingScheduleReminder failed:', err);
     }
+    return { sent };
+  }
+
+  /** Kadr inspektori (ADMIN), direktor va muassasaga biriktirilgan yordamchi adminlar */
+  private async scheduleReminderRecipients(hospitalId: string) {
+    const [users, assistants] = await Promise.all([
+      this.prisma.user.findMany({
+        where: {
+          hospitalId,
+          status: 'ACTIVE',
+          role: { in: ['ADMIN', 'DIRECTOR'] },
+        },
+        select: { id: true },
+      }),
+      this.prisma.hospitalAssistant.findMany({
+        where: { hospitalId, user: { status: 'ACTIVE' } },
+        select: { userId: true },
+      }),
+    ]);
+    return [
+      ...new Set([
+        ...users.map((user) => user.id),
+        ...assistants.map((link) => link.userId),
+      ]),
+    ];
   }
 
   /**
