@@ -366,6 +366,8 @@ export class SchedulesService {
         data.note = entry.note;
       }
       if (Object.keys(data).length === 0) continue; // o'zgarish yo'q — DB ga tegmaymiz
+      // Smena/holat qo'lda o'zgarsa, birjadagi kech tasdiq vaqti endi amal qilmaydi
+      if ('shiftId' in data || 'status' in data) data.expectedStartAt = null;
 
       if (existing.sourcePlanId) {
         throw new BadRequestException(
@@ -753,6 +755,7 @@ export class SchedulesService {
       shiftId?: string | null;
       status?: ScheduleStatus;
       note?: string | null;
+      expectedStartAt?: null;
     } = {};
     if (data?.shiftId !== undefined) {
       if (data.shiftId === null || data.shiftId === '') {
@@ -773,6 +776,10 @@ export class SchedulesService {
     }
     if (!Object.keys(patch).length) {
       throw new BadRequestException("O'zgartirish uchun maydon yuborilmadi");
+    }
+    // Smena/holat qo'lda o'zgarsa, birjadagi kech tasdiq vaqti endi amal qilmaydi
+    if (patch.shiftId !== undefined || patch.status !== undefined) {
+      patch.expectedStartAt = null;
     }
     return this.prisma.schedule.update({ where: { id }, data: patch });
   }
@@ -1220,7 +1227,11 @@ export class SchedulesService {
         chunk.map((u) =>
           this.prisma.schedule.update({
             where: { id: u.id },
-            data: { shiftId: u.shiftId, status: u.status },
+            data: {
+              shiftId: u.shiftId,
+              status: u.status,
+              expectedStartAt: null,
+            },
           }),
         ),
       );

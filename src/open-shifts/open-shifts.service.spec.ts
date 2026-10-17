@@ -62,7 +62,10 @@ function setup(employees: any[] = [], mode = 'STANDARD') {
       update: jest.fn(async () => ({})),
       updateMany: jest.fn(async () => ({ count: 1 })),
     },
-    schedule: { upsert: jest.fn(async () => ({})) },
+    schedule: {
+      upsert: jest.fn(async () => ({})),
+      updateMany: jest.fn(async () => ({ count: 1 })),
+    },
   };
   prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
   const telegram: any = {
@@ -299,6 +302,60 @@ describe('Bo‘sh smena birjasi', () => {
       );
     });
 
+    describe('smena boshlangandan keyin tasdiqlansa — "kechikdi" emas', () => {
+      const at = (time: string) => dayjs.tz(`2026-10-20 ${time}`, TZ).toDate();
+      const date = dayjs.tz('2026-10-20', TZ).startOf('day').toDate();
+      afterEach(() => jest.useRealTimers());
+
+      it('kelish vaqti: tasdiq + 1 soat yo‘l, smena tugashidan oshmaydi', () => {
+        const late = (time: string) =>
+          OpenShiftsService.lateStartAt(date, DAY_SHIFT, at(time));
+        // Yo'lga vaqt yetarli — odatdagi 08:00
+        expect(late('06:00')).toBeNull();
+        expect(late('07:00')).toBeNull();
+        // Smenaga oz qolganda yoki boshlangandan keyin
+        expect(late('07:30')).toEqual(at('08:30'));
+        expect(late('10:00')).toEqual(at('11:00'));
+        expect(late('19:30')).toEqual(at('20:00'));
+      });
+
+      it('grafikka kech kelish vaqti yoziladi va xodimga aytiladi', async () => {
+        jest.useFakeTimers({ now: at('10:00') });
+        const { prisma, service, telegram } = setup([employee('e1')]);
+        prisma.openShift.findFirst.mockResolvedValue({ ...claimed, date });
+
+        await service.review('os1', 'APPROVED', {
+          userId: 'u1',
+          hospitalId: 'h1',
+        });
+
+        const call = prisma.schedule.upsert.mock.calls[0][0];
+        expect(call.update.expectedStartAt).toEqual(at('11:00'));
+        expect(call.create.expectedStartAt).toEqual(at('11:00'));
+        expect(telegram.sendPersonal).toHaveBeenCalledWith(
+          '42',
+          expect.stringContaining('soat 11:00 gacha yetib keling'),
+        );
+      });
+
+      it('oldindan tasdiqlansa odatdagi smena vaqti qoladi', async () => {
+        jest.useFakeTimers({ now: at('06:00') });
+        const { prisma, service, telegram } = setup([employee('e1')]);
+        prisma.openShift.findFirst.mockResolvedValue({ ...claimed, date });
+
+        await service.review('os1', 'APPROVED', {
+          userId: 'u1',
+          hospitalId: 'h1',
+        });
+
+        const call = prisma.schedule.upsert.mock.calls[0][0];
+        expect(call.update.expectedStartAt).toBeNull();
+        expect(telegram.sendPersonal.mock.calls[0][1]).not.toContain(
+          'yetib keling',
+        );
+      });
+    });
+
     it('rad etilsa smena yana ochiq, grafik o‘zgarmaydi', async () => {
       const { prisma, service } = setup([employee('e1')]);
       prisma.openShift.findFirst.mockResolvedValue(claimed);
@@ -409,6 +466,11 @@ describe('Bo‘sh smena birjasi', () => {
         }),
       );
       expect(prisma.schedule.upsert).not.toHaveBeenCalled();
+      // O'rinbosarning yangi grafigiga kech kelish vaqti (bu yerda — yo'q)
+      expect(prisma.schedule.updateMany).toHaveBeenCalledWith({
+        where: { employeeId: 'e1', date: day(1) },
+        data: { expectedStartAt: null },
+      });
     });
   });
 });

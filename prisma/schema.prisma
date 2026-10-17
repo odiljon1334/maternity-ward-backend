@@ -619,6 +619,9 @@ model Schedule {
   // Ta'til yozilishidan oldingi holat — ta'til qaytarilganda tiklanadi
   // (ilgari barcha kunlar, dam olish kunlari ham, WORKING bo'lib qolardi)
   preLeaveStatus ScheduleStatus?
+  // Smena boshlanib bo'lgandan keyin berilgan grafik (bo'sh smena birjasi):
+  // kechikish shu vaqtdan hisoblanadi. NULL — smena boshlanish vaqti.
+  expectedStartAt DateTime?
 
   // POST_COVERAGE rejasidan nashr qilingan grafiklar uchun audit manbasi.
   // Eski STANDARD grafiklarda bu maydonlar null bo'lib qoladi.

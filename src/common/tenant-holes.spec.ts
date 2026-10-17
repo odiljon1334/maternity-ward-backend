@@ -76,7 +76,8 @@ describe('Schedules — boshqa muassasa smenasi/xodimi', () => {
     );
     expect(prisma.schedule.update).toHaveBeenCalledWith({
       where: { id: 'sch-1' },
-      data: { status: 'WORKING', note: 'ok' },
+      // Holat qo'lda o'zgarsa birjadagi kech kelish vaqti ham tozalanadi
+      data: { status: 'WORKING', note: 'ok', expectedStartAt: null },
     });
   });
 

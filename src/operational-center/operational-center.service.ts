@@ -9,6 +9,7 @@ import dayjs from 'dayjs';
 import { PrismaService } from '../prisma/prisma.service';
 import { SchedulePlanningService } from '../schedule-planning/schedule-planning.service';
 import { DateUtil, TZ } from '../common/utils/date.util';
+import { shiftStartAt } from '../common/utils/shift-timing.util';
 
 type RiskLevel = 'CRITICAL' | 'WARNING' | 'SAFE';
 type OperationalMode = 'STANDARD' | 'POST_COVERAGE' | 'FLEXIBLE';
@@ -137,7 +138,11 @@ export class OperationalCenterService {
 
     const missing = schedules.filter((schedule) => {
       if (!schedule.shift || schedule.attendance?.checkIn) return false;
-      const expected = DateUtil.buildDateTime(today, schedule.shift.startTime);
+      const expected = shiftStartAt(
+        today,
+        schedule.shift,
+        schedule.expectedStartAt,
+      );
       return (
         now.toDate().getTime() >
         expected.getTime() + schedule.shift.graceMinutes * 60_000
@@ -157,7 +162,7 @@ export class OperationalCenterService {
 
     const items: OperationalRisk[] = missing.map((schedule) => {
       const shift = schedule.shift!;
-      const expected = DateUtil.buildDateTime(today, shift.startTime);
+      const expected = shiftStartAt(today, shift, schedule.expectedStartAt);
       const delay = Math.max(0, now.diff(dayjs(expected), 'minute'));
       const level: RiskLevel = delay >= 30 ? 'CRITICAL' : 'WARNING';
       return {

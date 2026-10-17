@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { DateUtil } from '../common/utils/date.util';
+import { shiftStartAt } from '../common/utils/shift-timing.util';
 
 // ─── RESPONSE TYPES ───────────────────────────────────────────────────────────
 
@@ -515,7 +516,7 @@ export class MinistryService {
       position: sch.employee.position.name,
       phone: sch.employee.phone,
       expectedCheckIn: sch.shift
-        ? DateUtil.buildDateTime(today, sch.shift.startTime)
+        ? shiftStartAt(today, sch.shift, sch.expectedStartAt)
         : null,
     }));
   }
