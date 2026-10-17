@@ -30,6 +30,7 @@ import { HealthModule } from './health/health.module';
 import { LeaveModule } from './leave/leave.module';
 import { AttendanceNoticesModule } from './attendance-notices/attendance-notices.module';
 import { ShiftSwapsModule } from './shift-swaps/shift-swaps.module';
+import { OpenShiftsModule } from './open-shifts/open-shifts.module';
 import { PushModule } from './push/push.module';
 import { BirthdayModule } from './birthday/birthday.module';
 import { HikvisionModule } from './hikvision/hikvision.module';
@@ -93,6 +94,7 @@ import { OperationalCenterModule } from './operational-center/operational-center
     LeaveModule,
     AttendanceNoticesModule,
     ShiftSwapsModule,
+    OpenShiftsModule,
     PushModule,
     BirthdayModule,
     LocationModule,

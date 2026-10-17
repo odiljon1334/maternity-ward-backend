@@ -261,6 +261,7 @@ model Hospital {
   leaveRequests          LeaveRequest[]
   attendanceNotices      AttendanceNotice[]
   shiftSwaps             ShiftSwapRequest[]
+  openShifts             OpenShift[]
   assistantAdmins        HospitalAssistant[]
   didoxCredential        HospitalDidoxCredential?
   payrollAdjustments     PayrollAdjustment[]
@@ -445,6 +446,7 @@ model Department {
 
   employees     Employee[]
   schedulePosts SchedulePost[]
+  openShifts    OpenShift[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -545,6 +547,9 @@ model Employee {
   attendanceNotices          AttendanceNotice[]
   swapsRequested             ShiftSwapRequest[]      @relation("SwapRequester")
   swapsTargeted              ShiftSwapRequest[]      @relation("SwapTarget")
+  openShiftsAbsent           OpenShift[]             @relation("OpenShiftAbsent")
+  openShiftsClaimed          OpenShift[]             @relation("OpenShiftClaimer")
+  openShiftOffers            OpenShiftOffer[]
   payrollAdjustments         PayrollAdjustment[]
   salaryAdvances             SalaryAdvance[]
   monthlyScheduleEntries     MonthlyScheduleEntry[]
@@ -582,6 +587,7 @@ model ShiftTemplate {
 
   schedules              Schedule[]
   monthlyScheduleEntries MonthlyScheduleEntry[]
+  openShifts             OpenShift[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1552,4 +1558,81 @@ model ShiftSwapRequest {
   @@index([hospitalId, status])
   @@index([requesterId])
   @@index([targetId])
+}
+
+// ─────────────────────────────────────────────
+// BO'SH SMENA BIRJASI (Operativ markaz)
+// ─────────────────────────────────────────────
+// Mudir bo'sh qolgan smenani shu bo'limdagi bo'sh xodimlarga taklif qiladi;
+// birinchi "Olaman" degan xodim band qiladi (CLAIMED), mudir tasdiqlagach
+// (FILLED) xodimning grafigiga yoziladi. Faqat oddiy grafikli muassasalar
+// (schedulePlanningMode = STANDARD) uchun.
+
+enum OpenShiftStatus {
+  OPEN
+  CLAIMED
+  FILLED
+  CANCELLED
+}
+
+enum OpenShiftOfferResponse {
+  ACCEPTED
+  DECLINED
+}
+
+model OpenShift {
+  id         String   @id @default(uuid())
+  hospitalId String
+  hospital   Hospital @relation(fields: [hospitalId], references: [id])
+
+  departmentId String
+  department   Department @relation(fields: [departmentId], references: [id])
+
+  /// Smena kuni (Schedule.date bilan bir xil — Toshkent yarim tuni)
+  date    DateTime
+  shiftId String
+  shift   ShiftTemplate @relation(fields: [shiftId], references: [id])
+
+  /// Kimning o'rniga (kelmagan yoki kasal xodim) — ixtiyoriy
+  absentEmployeeId String?
+  absentEmployee   Employee? @relation("OpenShiftAbsent", fields: [absentEmployeeId], references: [id], onDelete: SetNull)
+
+  status OpenShiftStatus @default(OPEN)
+  note   String?
+
+  createdById String?
+
+  claimedById String?
+  claimedBy   Employee? @relation("OpenShiftClaimer", fields: [claimedById], references: [id], onDelete: SetNull)
+  claimedAt   DateTime?
+
+  reviewedById String?
+  reviewedAt   DateTime?
+  reviewNote   String?
+
+  offers OpenShiftOffer[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([hospitalId, status])
+  @@index([hospitalId, date])
+}
+
+model OpenShiftOffer {
+  id          String    @id @default(uuid())
+  openShiftId String
+  openShift   OpenShift @relation(fields: [openShiftId], references: [id], onDelete: Cascade)
+  employeeId  String
+  employee    Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  /// Telegram xabari yetkazilgan vaqt (bog'lanmagan bo'lsa null — webda ko'radi)
+  notifiedAt  DateTime?
+  response    OpenShiftOfferResponse?
+  respondedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@unique([openShiftId, employeeId])
+  @@index([employeeId])
 }
