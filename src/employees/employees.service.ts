@@ -21,6 +21,7 @@ import archiver from 'archiver';
 import * as fs from 'fs';
 import * as path from 'path';
 import { processAndSavePhoto } from '../common/utils/image.util';
+import { normalizePinfl } from '../common/utils/pinfl.util';
 import { UserStatus, Prisma, UserRole } from '@prisma/client';
 
 // ─── Kirill → Lotin transliteratsiya ────────────────────────────────────────
@@ -217,12 +218,21 @@ export class EmployeesService {
     return emp?.departmentId ?? null;
   }
 
-  async findOne(id: string, hospitalId?: string) {
+  /**
+   * `withPinfl` — JSHSHIR faqat kadrlar/rahbariyat uchun qaytariladi
+   * (PrismaService'da u global yashirilgan).
+   */
+  async findOne(
+    id: string,
+    hospitalId?: string,
+    opts: { withPinfl?: boolean } = {},
+  ) {
     const where: any = { id };
     if (hospitalId) where.hospitalId = hospitalId;
 
     const emp = await this.prisma.employee.findFirst({
       where,
+      ...(opts.withPinfl && { omit: { pinfl: false } }),
       include: {
         department: true,
         position: true,
@@ -273,6 +283,7 @@ export class EmployeesService {
     ]);
     if (!dept) throw new NotFoundException("Bo'lim topilmadi");
     if (!pos) throw new NotFoundException('Lavozim topilmadi');
+    const pinfl = await this.assertPinflFree(dto.pinfl, hospitalId);
 
     return this.prisma.$transaction(async (tx) => {
       let userId: string | undefined;
@@ -311,6 +322,7 @@ export class EmployeesService {
           baseSalary: dto.baseSalary ?? 0,
           telegramChatId: dto.telegramChatId,
           hiredAt: dto.hiredAt ? new Date(dto.hiredAt) : undefined,
+          ...(pinfl && { pinfl }),
           hospitalId,
           userId,
         },
@@ -327,6 +339,11 @@ export class EmployeesService {
   ) {
     const current = await this.findOne(id, hospitalId);
     const { password, ...rest } = dto as any;
+    // undefined — o'zgartirilmaydi; '' yoki null — o'chiriladi
+    const pinfl =
+      rest.pinfl !== undefined
+        ? await this.assertPinflFree(rest.pinfl, hospitalId, id)
+        : undefined;
     // Forma mavjud username'ni har safar qayta yuboradi — faqat haqiqatan
     // o'zgargan bo'lsa login o'zgarishi hisoblanadi
     const username =
@@ -427,10 +444,43 @@ export class EmployeesService {
           ...(rest.birthDate !== undefined && {
             birthDate: rest.birthDate ? new Date(rest.birthDate) : null,
           }),
+          ...(pinfl !== undefined && { pinfl }),
         },
         include: { department: true, position: true },
       });
     });
+  }
+
+  /**
+   * JSHSHIR formatini tekshiradi va shu muassasada boshqa xodimda yo'qligini
+   * kafolatlaydi. Bo'sh qiymat — null (maydon ixtiyoriy).
+   */
+  private async assertPinflFree(
+    value: unknown,
+    hospitalId: string,
+    exceptEmployeeId?: string,
+  ): Promise<string | null> {
+    const normalized = normalizePinfl(value);
+    if (!normalized.ok) {
+      throw new BadRequestException(
+        "JSHSHIR 14 ta raqamdan iborat bo'lishi kerak",
+      );
+    }
+    if (!normalized.value) return null;
+    const taken = await this.prisma.employee.findFirst({
+      where: {
+        hospitalId,
+        pinfl: normalized.value,
+        ...(exceptEmployeeId && { id: { not: exceptEmployeeId } }),
+      },
+      select: { fullName: true },
+    });
+    if (taken) {
+      throw new ConflictException(
+        `Bu JSHSHIR muassasada boshqa xodimga biriktirilgan: ${taken.fullName}`,
+      );
+    }
+    return normalized.value;
   }
 
   // ─── 2. updatePhoto — terminal sync to'liq qayta yozildi ─────────────────────
@@ -1090,8 +1140,11 @@ export class EmployeesService {
     //    olinayotgan bo'lishi mumkin.
     const existingEmployees = await this.prisma.employee.findMany({
       where: { hospitalId, firedAt: null },
-      select: { fullName: true, phone: true },
+      select: { fullName: true, phone: true, pinfl: true },
     });
+    const seenPinfls = new Set(
+      existingEmployees.map((e) => e.pinfl).filter(Boolean) as string[],
+    );
     const seenNames = new Set(
       existingEmployees.map((e) => this.normalizeKey(e.fullName)),
     );
@@ -1153,6 +1206,10 @@ export class EmployeesService {
       ).trim();
       const positionName = (row.lavozim || row.position || '').trim();
       const phone = (row.telefon || row.phone || '').trim();
+      // JSHSHIR — ixtiyoriy ustun. Noto'g'ri bo'lsa xodim baribir qo'shiladi,
+      // JSHSHIR esa saqlanmaydi va bu haqda xabar beriladi.
+      const pinflInput = normalizePinfl(row.jshshir ?? row.pinfl);
+      let pinfl = pinflInput.ok ? pinflInput.value : null;
 
       if (!fullName) {
         errors.push(`Qator o'tkazib yuborildi: ism-familiya bo'sh`);
@@ -1183,6 +1240,17 @@ export class EmployeesService {
           ? await getOrCreatePos(positionName)
           : await getOrCreatePos('Belgilanmagan');
 
+        if (!pinflInput.ok) {
+          errors.push(
+            `${fullName}: JSHSHIR noto'g'ri (14 raqam bo'lishi kerak) — xodim JSHSHIR'siz qo'shildi`,
+          );
+        } else if (pinfl && seenPinfls.has(pinfl)) {
+          errors.push(
+            `${fullName}: JSHSHIR boshqa xodimda bor — xodim JSHSHIR'siz qo'shildi`,
+          );
+          pinfl = null;
+        }
+
         await this.prisma.employee.create({
           data: {
             fullName,
@@ -1196,6 +1264,7 @@ export class EmployeesService {
             positionId: posId,
             baseSalary: 0,
             hiredAt: new Date(),
+            ...(pinfl && { pinfl }),
             hospitalId,
           },
         });
@@ -1203,6 +1272,7 @@ export class EmployeesService {
         // Keyingi qatorlar shu xodimni dublikat deb bilishi uchun
         seenNames.add(nameKey);
         if (phoneKey) seenPhones.add(phoneKey);
+        if (pinfl) seenPinfls.add(pinfl);
 
         imported++;
       } catch (e) {
@@ -1368,10 +1438,11 @@ export class EmployeesService {
     // jinsi: ERKAK yoki AYOL
     // bolim_kodi — bo'lim kodi (masalan AKUSHERLIK), lavozim — lavozim nomi
     const rows = [
-      'ism_familiya,jinsi,bolim_kodi,lavozim,telefon',
-      'Aziza Karimova,AYOL,AKUSHERLIK,Akusher-ginekolog,+998901234567',
-      'Bobur Rahimov,ERKAK,OPERATSIYA,Hirurg,+998901111111',
-      'Malika Yusupova,AYOL,REANIMATSIYA,Hamshira,+998909999999',
+      'ism_familiya,jinsi,bolim_kodi,lavozim,telefon,jshshir',
+      // jshshir — ixtiyoriy (14 raqam), bo'sh qoldirish mumkin
+      'Aziza Karimova,AYOL,AKUSHERLIK,Akusher-ginekolog,+998901234567,',
+      'Bobur Rahimov,ERKAK,OPERATSIYA,Hirurg,+998901111111,',
+      'Malika Yusupova,AYOL,REANIMATSIYA,Hamshira,+998909999999,',
     ];
     return Buffer.from(BOM + rows.join('\r\n'), 'utf8');
   }

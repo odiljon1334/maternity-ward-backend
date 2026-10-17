@@ -26,6 +26,10 @@ export class PrismaService
 
   constructor() {
     super({
+      // Shaxsiy ma'lumot: xodimning JSHSHIR'i hech bir so'rovda avtomatik
+      // qaytmaydi (ro'yxatlar, davomat, mobil ilova...). Faqat kadrlar va
+      // rahbariyat uchun aniq `omit: { pinfl: false }` / `select` bilan olinadi.
+      omit: { employee: { pinfl: true } },
       log:
         process.env.NODE_ENV === 'production'
           ? [
