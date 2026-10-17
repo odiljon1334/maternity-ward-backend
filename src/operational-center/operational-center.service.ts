@@ -35,6 +35,13 @@ type OperationalRisk = {
   evidence: Array<{ label: string; value: string }>;
   candidates?: Candidate[];
   action: { label: string; href: string };
+  /** Bo'sh smena birjasiga chiqarish uchun tayyor ma'lumot (oddiy grafik) */
+  openShift?: {
+    departmentId: string;
+    shiftId: string;
+    date: string;
+    absentEmployeeId: string;
+  };
 };
 
 type ModeResult = {
@@ -171,6 +178,12 @@ export class OperationalCenterService {
         ],
         candidates: candidates.get(schedule.employeeId) ?? [],
         action: { label: 'Grafikni ochish', href: '/dashboard/schedules' },
+        openShift: {
+          departmentId: schedule.employee.departmentId,
+          shiftId: shift.id,
+          date: now.format('YYYY-MM-DD'),
+          absentEmployeeId: schedule.employeeId,
+        },
       };
     });
 

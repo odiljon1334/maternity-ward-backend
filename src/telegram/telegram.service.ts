@@ -29,7 +29,14 @@ import {
 
 const TZ = process.env.TIMEZONE || 'Asia/Tashkent';
 
-export type DecisionKind = 'notice' | 'swap';
+export type DecisionKind = 'notice' | 'swap' | 'openshift';
+/** Xodimning shaxsiy chatidagi tugma (masalan bo'sh smena: Olaman / Yo'q) */
+export type EmployeeActionKind = 'openshift';
+export type EmployeeActionHandler = (
+  id: string,
+  verb: 'take' | 'skip',
+  chatId: string,
+) => Promise<string>;
 export type DecisionHandler = (
   id: string,
   decision: 'APPROVED' | 'REJECTED',
@@ -217,6 +224,10 @@ export class TelegramService implements OnModuleInit {
   private botUsername: string | null = null;
   /** Rahbar tugmalari (tasdiqlash/rad etish) — so'rov turi bo'yicha servislar ro'yxatdan o'tkazadi */
   private decisionHandlers = new Map<DecisionKind, DecisionHandler>();
+  private employeeActionHandlers = new Map<
+    EmployeeActionKind,
+    EmployeeActionHandler
+  >();
 
   // Bir raqam bir nechta muassasadagi ruxsatli xodimga mos kelsa — tanlov
   // kutilmoqda. Callback'da faqat INDEX yuboriladi, ID emas.
@@ -881,21 +892,52 @@ export class TelegramService implements OnModuleInit {
     // ── "Kechikaman" xabari: rahbar tugmasi ───────────────────────────────
     // XAVFSIZLIK: tasdiqlash huquqi chat obunasidan (muassasa) olinadi;
     // xabar boshqa muassasaniki bo'lsa servis rad etadi.
-    bot.action(/^(notice|swap)_(ok|no):([0-9a-f-]{36})$/, async (ctx) => {
-      const [, kind, verb, id] = ctx.match as RegExpMatchArray;
-      const handler = this.decisionHandlers.get(kind as DecisionKind);
-      const sub = await this.getSubscriberByChatId(this.chatIdFromCtx(ctx));
-      if (!sub?.hospitalId || !handler) {
-        await ctx.answerCbQuery("Ruxsat yo'q");
+    bot.action(
+      /^(notice|swap|openshift)_(ok|no):([0-9a-f-]{36})$/,
+      async (ctx) => {
+        const [, kind, verb, id] = ctx.match as RegExpMatchArray;
+        const handler = this.decisionHandlers.get(kind as DecisionKind);
+        const sub = await this.getSubscriberByChatId(this.chatIdFromCtx(ctx));
+        if (!sub?.hospitalId || !handler) {
+          await ctx.answerCbQuery("Ruxsat yo'q");
+          return;
+        }
+        const result = await handler(
+          id,
+          verb === 'ok' ? 'APPROVED' : 'REJECTED',
+          {
+            hospitalId: sub.hospitalId,
+            employeeId: sub.employeeId ?? null,
+          },
+        );
+        await ctx.answerCbQuery(result.slice(0, 190));
+        const msg: any = (ctx.callbackQuery as any)?.message;
+        if (msg?.text) {
+          await ctx
+            .editMessageText(`${esc(msg.text)}\n\n<b>${esc(result)}</b>`, {
+              parse_mode: 'HTML',
+            })
+            .catch(() => {});
+        } else {
+          await ctx.editMessageReplyMarkup(undefined).catch(() => {});
+        }
+      },
+    );
+
+    // ── Xodimning shaxsiy tugmalari (bo'sh smena: Olaman / Yo'q) ──────────
+    // XAVFSIZLIK: kim bosgani chat ID orqali aniqlanadi; servis taklif aynan
+    // shu chatga bog'langan xodimga yuborilganini tekshiradi.
+    bot.action(/^oshift_(take|skip):([0-9a-f-]{36})$/, async (ctx) => {
+      const [, verb, id] = ctx.match as RegExpMatchArray;
+      const handler = this.employeeActionHandlers.get('openshift');
+      if (!handler) {
+        await ctx.answerCbQuery('Hozircha mavjud emas');
         return;
       }
       const result = await handler(
         id,
-        verb === 'ok' ? 'APPROVED' : 'REJECTED',
-        {
-          hospitalId: sub.hospitalId,
-          employeeId: sub.employeeId ?? null,
-        },
+        verb as 'take' | 'skip',
+        this.chatIdFromCtx(ctx),
       );
       await ctx.answerCbQuery(result.slice(0, 190));
       const msg: any = (ctx.callbackQuery as any)?.message;
@@ -1131,6 +1173,40 @@ export class TelegramService implements OnModuleInit {
     );
     await ctx.reply(linkedText([res]), { parse_mode: 'HTML' });
     await ctx.reply('🏠 Menyu:', { ...employeeKeyboard(true) });
+  }
+
+  registerEmployeeActionHandler(
+    kind: EmployeeActionKind,
+    fn: EmployeeActionHandler,
+  ) {
+    this.employeeActionHandlers.set(kind, fn);
+  }
+
+  /** Bo'sh smena taklifi — xodimning shaxsiy chatiga "Olaman / Yo'q" tugmalari bilan. */
+  async sendOpenShiftOffer(
+    chatId: string,
+    html: string,
+    openShiftId: string,
+  ): Promise<boolean> {
+    if (!this.bot) return false;
+    try {
+      await this.bot.telegram.sendMessage(chatId, html, {
+        parse_mode: 'HTML',
+        link_preview_options: { is_disabled: true },
+        ...Markup.inlineKeyboard([
+          [
+            Markup.button.callback('🙋 Olaman', `oshift_take:${openShiftId}`),
+            Markup.button.callback("Yo'q", `oshift_skip:${openShiftId}`),
+          ],
+        ]),
+      });
+      return true;
+    } catch (e: any) {
+      this.logger.warn(
+        `Bo'sh smena taklifi yuborilmadi (${chatId}): ${e?.message ?? e}`,
+      );
+      return false;
+    }
   }
 
   registerDecisionHandler(kind: DecisionKind, fn: DecisionHandler) {
