@@ -163,4 +163,35 @@ describe('Smenasi hali boshlanmagan xodim "Kelmadi" emas', () => {
       skipDuplicates: true,
     });
   });
+
+  it('shanba: grafikda ish kuni bo‘lib kelmagan xodim "Kelmadi", grafiksiz — hech narsa', async () => {
+    jest.useFakeTimers({ now: at('2026-10-17', '21:00') }); // shanba
+    const saturday = day('2026-10-17');
+    const { prisma, service } = setup([]);
+    prisma.schedule.findMany.mockImplementation(async ({ where }: any) =>
+      where.date.getTime() === saturday.getTime()
+        ? [{ id: 'w', employeeId: 'weekend-shift', shiftId: 'd', shift: DAY }]
+        : [],
+    );
+
+    const result = await service.markAbsentForToday();
+
+    expect(result).toEqual({ marked: 1, skipped: false });
+    expect(prisma.attendanceRecord.createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          employeeId: 'weekend-shift',
+          workDate: saturday,
+          status: 'ABSENT',
+        }),
+      ],
+      skipDuplicates: true,
+    });
+    // Faqat grafigi WORKING bo'lganlar so'raladi — grafiksiz xodimga yozuv yo'q
+    expect(prisma.schedule.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ status: 'WORKING' }),
+      }),
+    );
+  });
 });
