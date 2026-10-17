@@ -1359,6 +1359,7 @@ export class SchedulePlanningService {
                 sourcePlanId: plan.id,
                 sourceEntryId: entry.id,
                 scheduleChangeRequestId: null,
+                expectedStartAt: null,
               },
             });
             if (planned === ScheduleStatus.WORKING) {
@@ -1388,6 +1389,7 @@ export class SchedulePlanningService {
               sourcePlanId: plan.id,
               sourceEntryId: entry.id,
               scheduleChangeRequestId: null,
+              expectedStartAt: null,
             },
           });
         }
@@ -2654,11 +2656,13 @@ export class SchedulePlanningService {
         sourcePlanId: request.planId,
         sourceEntryId: request.primaryEntry.id,
         scheduleChangeRequestId: request.id,
+        expectedStartAt: null,
       },
       update: {
         shiftId: null,
         status: this.mapEntryTypeToScheduleStatus(absenceType),
         scheduleChangeRequestId: request.id,
+        expectedStartAt: null,
       },
     });
   }
@@ -2862,6 +2866,7 @@ export class SchedulePlanningService {
         sourcePlanId: request.planId,
         sourceEntryId: request.primaryEntry.id,
         scheduleChangeRequestId: request.id,
+        expectedStartAt: null,
       },
       update: {
         shiftId: request.primaryEntry.shiftId,
@@ -2869,6 +2874,7 @@ export class SchedulePlanningService {
         sourcePlanId: request.planId,
         sourceEntryId: request.primaryEntry.id,
         scheduleChangeRequestId: request.id,
+        expectedStartAt: null,
       },
     });
   }
@@ -2906,6 +2912,7 @@ export class SchedulePlanningService {
         data: {
           shiftId: counterpart.shiftId,
           scheduleChangeRequestId: request.id,
+          expectedStartAt: null,
         },
       });
       await tx.schedule.update({
@@ -2918,6 +2925,7 @@ export class SchedulePlanningService {
         data: {
           shiftId: primary.shiftId,
           scheduleChangeRequestId: request.id,
+          expectedStartAt: null,
         },
       });
       return;
@@ -2964,6 +2972,7 @@ export class SchedulePlanningService {
         shiftId: null,
         status: ScheduleStatus.DAY_OFF,
         scheduleChangeRequestId: request.id,
+        expectedStartAt: null,
       },
     });
     await tx.schedule.update({
@@ -2977,6 +2986,7 @@ export class SchedulePlanningService {
         shiftId: null,
         status: ScheduleStatus.DAY_OFF,
         scheduleChangeRequestId: request.id,
+        expectedStartAt: null,
       },
     });
     await tx.schedule.upsert({
@@ -2994,6 +3004,7 @@ export class SchedulePlanningService {
         sourcePlanId: request.planId,
         sourceEntryId: primary.id,
         scheduleChangeRequestId: request.id,
+        expectedStartAt: null,
       },
       update: {
         shiftId: primary.shiftId,
@@ -3001,6 +3012,7 @@ export class SchedulePlanningService {
         sourcePlanId: request.planId,
         sourceEntryId: primary.id,
         scheduleChangeRequestId: request.id,
+        expectedStartAt: null,
       },
     });
     await tx.schedule.upsert({
@@ -3018,6 +3030,7 @@ export class SchedulePlanningService {
         sourcePlanId: counterpart.planId,
         sourceEntryId: counterpart.id,
         scheduleChangeRequestId: request.id,
+        expectedStartAt: null,
       },
       update: {
         shiftId: counterpart.shiftId,
@@ -3025,6 +3038,7 @@ export class SchedulePlanningService {
         sourcePlanId: counterpart.planId,
         sourceEntryId: counterpart.id,
         scheduleChangeRequestId: request.id,
+        expectedStartAt: null,
       },
     });
   }

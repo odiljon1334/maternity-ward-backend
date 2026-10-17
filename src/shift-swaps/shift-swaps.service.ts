@@ -571,8 +571,13 @@ export class ShiftSwapsService implements OnModuleInit {
         tx.schedule.upsert({
           where: { employeeId_date: { employeeId, date } },
           update: shiftId
-            ? { status: 'WORKING', shiftId, note: n }
-            : { status: 'DAY_OFF', shiftId: null, note: n },
+            ? { status: 'WORKING', shiftId, note: n, expectedStartAt: null }
+            : {
+                status: 'DAY_OFF',
+                shiftId: null,
+                note: n,
+                expectedStartAt: null,
+              },
           create: shiftId
             ? { employeeId, date, status: 'WORKING', shiftId, note: n }
             : { employeeId, date, status: 'DAY_OFF', note: n },

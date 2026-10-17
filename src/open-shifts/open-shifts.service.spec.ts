@@ -59,15 +59,20 @@ function setup(employees: any[] = [], mode = 'STANDARD') {
     },
     openShiftOffer: {
       findUnique: jest.fn(),
+      findMany: jest.fn(async () => []),
       update: jest.fn(async () => ({})),
       updateMany: jest.fn(async () => ({ count: 1 })),
     },
-    schedule: { upsert: jest.fn(async () => ({})) },
+    schedule: {
+      upsert: jest.fn(async () => ({})),
+      updateMany: jest.fn(async () => ({ count: 1 })),
+    },
   };
   prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
   const telegram: any = {
     sendDecisionRequest: jest.fn(async () => undefined),
     sendPersonal: jest.fn(async () => true),
+    sendOpenShiftOffer: jest.fn(async () => true),
   };
   const planning: any = {
     findApprovedWorkingEntry: jest.fn(async () => ({
@@ -261,6 +266,66 @@ describe('Bo‘sh smena birjasi', () => {
     });
   });
 
+  describe('Telegramni keyin ulagan xodim', () => {
+    const offer = (id: string, chatId: string | null, date = day(1)) => ({
+      id,
+      employee: { telegramChatId: chatId },
+      openShift: {
+        id: `os-${id}`,
+        date,
+        note: null,
+        shift: DAY_SHIFT,
+        department: { name: 'Tug‘ruq bloki' },
+      },
+    });
+
+    it('ulanishdan oldin e’lon qilingan ochiq takliflar yuboriladi', async () => {
+      const { prisma, service, telegram } = setup();
+      prisma.openShiftOffer.findMany.mockResolvedValue([
+        offer('a', '777'),
+        offer('b', null),
+        // Kecha tugagan smena
+        offer('c', '777', day(-1)),
+      ]);
+
+      await expect(service.sendPendingOffers(['e1'])).resolves.toEqual({
+        sent: 1,
+      });
+
+      expect(prisma.openShiftOffer.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            employeeId: { in: ['e1'] },
+            notifiedAt: null,
+            response: null,
+            openShift: expect.objectContaining({ status: 'OPEN' }),
+          }),
+        }),
+      );
+      expect(telegram.sendOpenShiftOffer).toHaveBeenCalledTimes(1);
+      expect(telegram.sendOpenShiftOffer).toHaveBeenCalledWith(
+        '777',
+        expect.stringContaining("Bo'sh smena taklifi"),
+        'os-a',
+      );
+      expect(prisma.openShiftOffer.update).toHaveBeenCalledWith({
+        where: { id: 'a' },
+        data: { notifiedAt: expect.any(Date) },
+      });
+    });
+
+    it('ulanish xabari servisga ulangan', () => {
+      const { service, telegram } = setup();
+      telegram.onPersonalLinked = jest.fn();
+      telegram.registerDecisionHandler = jest.fn();
+      telegram.registerEmployeeActionHandler = jest.fn();
+      service.onModuleInit();
+      expect(telegram.onPersonalLinked).toHaveBeenCalledWith(
+        expect.any(Function),
+      );
+    });
+  });
+
   describe('mudir tasdig‘i', () => {
     const claimed = {
       id: 'os1',
@@ -297,6 +362,60 @@ describe('Bo‘sh smena birjasi', () => {
         '42',
         expect.stringContaining('grafigingizga yozildi'),
       );
+    });
+
+    describe('smena boshlangandan keyin tasdiqlansa — "kechikdi" emas', () => {
+      const at = (time: string) => dayjs.tz(`2026-10-20 ${time}`, TZ).toDate();
+      const date = dayjs.tz('2026-10-20', TZ).startOf('day').toDate();
+      afterEach(() => jest.useRealTimers());
+
+      it('kelish vaqti: tasdiq + 1 soat yo‘l, smena tugashidan oshmaydi', () => {
+        const late = (time: string) =>
+          OpenShiftsService.lateStartAt(date, DAY_SHIFT, at(time));
+        // Yo'lga vaqt yetarli — odatdagi 08:00
+        expect(late('06:00')).toBeNull();
+        expect(late('07:00')).toBeNull();
+        // Smenaga oz qolganda yoki boshlangandan keyin
+        expect(late('07:30')).toEqual(at('08:30'));
+        expect(late('10:00')).toEqual(at('11:00'));
+        expect(late('19:30')).toEqual(at('20:00'));
+      });
+
+      it('grafikka kech kelish vaqti yoziladi va xodimga aytiladi', async () => {
+        jest.useFakeTimers({ now: at('10:00') });
+        const { prisma, service, telegram } = setup([employee('e1')]);
+        prisma.openShift.findFirst.mockResolvedValue({ ...claimed, date });
+
+        await service.review('os1', 'APPROVED', {
+          userId: 'u1',
+          hospitalId: 'h1',
+        });
+
+        const call = prisma.schedule.upsert.mock.calls[0][0];
+        expect(call.update.expectedStartAt).toEqual(at('11:00'));
+        expect(call.create.expectedStartAt).toEqual(at('11:00'));
+        expect(telegram.sendPersonal).toHaveBeenCalledWith(
+          '42',
+          expect.stringContaining('soat 11:00 gacha yetib keling'),
+        );
+      });
+
+      it('oldindan tasdiqlansa odatdagi smena vaqti qoladi', async () => {
+        jest.useFakeTimers({ now: at('06:00') });
+        const { prisma, service, telegram } = setup([employee('e1')]);
+        prisma.openShift.findFirst.mockResolvedValue({ ...claimed, date });
+
+        await service.review('os1', 'APPROVED', {
+          userId: 'u1',
+          hospitalId: 'h1',
+        });
+
+        const call = prisma.schedule.upsert.mock.calls[0][0];
+        expect(call.update.expectedStartAt).toBeNull();
+        expect(telegram.sendPersonal.mock.calls[0][1]).not.toContain(
+          'yetib keling',
+        );
+      });
     });
 
     it('rad etilsa smena yana ochiq, grafik o‘zgarmaydi', async () => {
@@ -409,6 +528,11 @@ describe('Bo‘sh smena birjasi', () => {
         }),
       );
       expect(prisma.schedule.upsert).not.toHaveBeenCalled();
+      // O'rinbosarning yangi grafigiga kech kelish vaqti (bu yerda — yo'q)
+      expect(prisma.schedule.updateMany).toHaveBeenCalledWith({
+        where: { employeeId: 'e1', date: day(1) },
+        data: { expectedStartAt: null },
+      });
     });
   });
 });

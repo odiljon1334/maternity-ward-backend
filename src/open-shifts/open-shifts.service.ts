@@ -31,6 +31,11 @@ const TZ = process.env.TIMEZONE || 'Asia/Tashkent';
 const WINDOW_DAYS = 14;
 /** Smenalar orasidagi dam shundan kam bo'lsa — ogohlantirish (bloklamaydi) */
 const REST_WARNING_HOURS = 12;
+/**
+ * Smena boshlanishiga oz qolganda yoki boshlangandan keyin tasdiqlansa,
+ * o'rinbosarga yo'l uchun shuncha vaqt beriladi — kechikish undan keyin.
+ */
+export const LATE_APPROVAL_TRAVEL_MINUTES = 60;
 
 const STATUS_LABEL: Record<string, string> = {
   WORKING: 'o‘z smenasi bor',
@@ -122,6 +127,9 @@ export class OpenShiftsService implements OnModuleInit {
       'openshift',
       (id, verb, chatId) => this.respondFromTelegram(id, verb, chatId),
     );
+    this.telegram.onPersonalLinked?.((employeeIds) =>
+      this.sendPendingOffers(employeeIds),
+    );
   }
 
   // ── Yordamchilar ───────────────────────────────────────────────────────
@@ -140,6 +148,26 @@ export class OpenShiftsService implements OnModuleInit {
       end = dayjs(end).add(1, 'day').toDate();
     }
     return { start, end };
+  }
+
+  /**
+   * Tasdiqdan keyin o'rinbosar qachon kelishi kerak.
+   *
+   * Smena boshlanishigacha yo'l uchun vaqt yetarli bo'lsa — null (odatdagi
+   * smena boshlanishi). Aks holda tasdiq + LATE_APPROVAL_TRAVEL_MINUTES,
+   * lekin smena tugashidan keyin emas. Ilgari tasdiq soat 10:00 da bo'lsa,
+   * 08:00 dagi smenaga kelgan o'rinbosar 2 soat "kechikdi" deb yozilardi.
+   */
+  static lateStartAt(
+    date: Date,
+    shift: ShiftLike,
+    approvedAt: Date,
+  ): Date | null {
+    const { start, end } = OpenShiftsService.interval(date, shift);
+    const arrival =
+      approvedAt.getTime() + LATE_APPROVAL_TRAVEL_MINUTES * 60_000;
+    if (arrival <= start.getTime()) return null;
+    return new Date(Math.min(arrival, end.getTime()));
   }
 
   private describe(date: Date, shift: ShiftLike, departmentName: string) {
@@ -529,11 +557,7 @@ export class OpenShiftsService implements OnModuleInit {
       },
     });
     if (!openShift) return;
-    const text =
-      `🆘 <b>Bo'sh smena taklifi</b>\n` +
-      `${esc(this.describe(openShift.date, openShift.shift, openShift.department.name))}\n` +
-      (openShift.note ? `📝 ${esc(openShift.note)}\n` : '') +
-      `\nBirinchi rozi bo'lgan xodim band qiladi, rahbar tasdiqlagach grafikka yoziladi.`;
+    const text = this.offerText(openShift);
 
     for (const offer of openShift.offers) {
       const chatId = offer.employee.telegramChatId;
@@ -550,6 +574,79 @@ export class OpenShiftsService implements OnModuleInit {
         });
       }
     }
+  }
+
+  private offerText(openShift: {
+    date: Date;
+    shift: ShiftLike;
+    department: { name: string };
+    note: string | null;
+  }) {
+    return (
+      `🆘 <b>Bo'sh smena taklifi</b>\n` +
+      `${esc(this.describe(openShift.date, openShift.shift, openShift.department.name))}\n` +
+      (openShift.note ? `📝 ${esc(openShift.note)}\n` : '') +
+      `\nBirinchi rozi bo'lgan xodim band qiladi, rahbar tasdiqlagach grafikka yoziladi.`
+    );
+  }
+
+  /**
+   * Telegramni endi ulagan xodimga hali ochiq, javob berilmagan va
+   * yuborilmagan takliflari. Takliflar faqat e'lon paytida yuboriladi —
+   * o'sha paytda Telegrami ulanmagan xodim ularni umuman olmasdi.
+   */
+  async sendPendingOffers(employeeIds: string[]) {
+    const offers = await this.prisma.openShiftOffer.findMany({
+      where: {
+        employeeId: { in: employeeIds },
+        notifiedAt: null,
+        response: null,
+        openShift: {
+          status: OpenShiftStatus.OPEN,
+          date: { gte: DateUtil.startOfDay(new Date()) },
+        },
+      },
+      select: {
+        id: true,
+        employee: { select: { telegramChatId: true } },
+        openShift: {
+          select: {
+            id: true,
+            date: true,
+            note: true,
+            shift: true,
+            department: { select: { name: true } },
+          },
+        },
+      },
+      orderBy: { openShift: { date: 'asc' } },
+    });
+    let sent = 0;
+    for (const offer of offers) {
+      const chatId = offer.employee.telegramChatId;
+      const { openShift } = offer;
+      if (!chatId) continue;
+      // Tugagan smena taklif qilinmaydi
+      if (
+        OpenShiftsService.interval(openShift.date, openShift.shift).end <=
+        new Date()
+      ) {
+        continue;
+      }
+      const ok = await this.telegram.sendOpenShiftOffer?.(
+        chatId,
+        this.offerText(openShift),
+        openShift.id,
+      );
+      if (ok) {
+        sent++;
+        await this.prisma.openShiftOffer.update({
+          where: { id: offer.id },
+          data: { notifiedAt: new Date() },
+        });
+      }
+    }
+    return { sent };
   }
 
   async list(hospitalId: string, status?: string) {
@@ -719,6 +816,11 @@ export class OpenShiftsService implements OnModuleInit {
     const scheduleNote = openShift.absentEmployee
       ? `Bo'sh smena: ${openShift.absentEmployee.fullName} o'rniga`
       : "Bo'sh smena birjasi";
+    const expectedStartAt = OpenShiftsService.lateStartAt(
+      openShift.date,
+      openShift.shift,
+      reviewData.reviewedAt,
+    );
     await this.prisma.$transaction(async (tx) => {
       const r = await tx.openShift.updateMany({
         where: { id, status: OpenShiftStatus.CLAIMED, claimedById: claimer.id },
@@ -736,6 +838,10 @@ export class OpenShiftsService implements OnModuleInit {
           approvedById: reviewer.userId,
           reason: `Bo'sh smena birjasi: ${claimer.fullName}${openShift.absentEmployee ? ` — ${openShift.absentEmployee.fullName} o'rniga` : ''}`,
         });
+        await tx.schedule.updateMany({
+          where: { employeeId: claimer.id, date: openShift.date },
+          data: { expectedStartAt },
+        });
         return;
       }
       await tx.schedule.upsert({
@@ -746,6 +852,7 @@ export class OpenShiftsService implements OnModuleInit {
           status: 'WORKING',
           shiftId: openShift.shiftId,
           note: scheduleNote,
+          expectedStartAt,
         },
         create: {
           employeeId: claimer.id,
@@ -753,6 +860,7 @@ export class OpenShiftsService implements OnModuleInit {
           status: 'WORKING',
           shiftId: openShift.shiftId,
           note: scheduleNote,
+          expectedStartAt,
         },
       });
     });
@@ -761,7 +869,10 @@ export class OpenShiftsService implements OnModuleInit {
       void this.telegram
         .sendPersonal?.(
           claimer.telegramChatId,
-          `✅ Bo'sh smena sizga berildi va grafigingizga yozildi:\n${esc(what)}`,
+          `✅ Bo'sh smena sizga berildi va grafigingizga yozildi:\n${esc(what)}` +
+            (expectedStartAt
+              ? `\n🕐 Smena boshlangan — soat ${dayjs(expectedStartAt).tz(TZ).format('HH:mm')} gacha yetib keling, kechikish shundan keyin hisoblanadi.`
+              : ''),
         )
         .catch(() => {});
     }

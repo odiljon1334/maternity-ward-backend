@@ -30,7 +30,10 @@ import {
 } from '../attendance-notices/notice-excuse.util';
 import { PushService } from '../push/push.service';
 import { DateUtil } from '../common/utils/date.util';
-import { isAwaitingCheckIn } from '../common/utils/shift-timing.util';
+import {
+  isAwaitingCheckIn,
+  shiftStartAt,
+} from '../common/utils/shift-timing.util';
 import {
   isHospitalBillingBlocked,
   isHospitalBlocked,
@@ -1070,7 +1073,7 @@ export class AttendanceService {
             coffeeLateMin: 0,
             expectedCheckIn:
               isWorking && sch.shift
-                ? DateUtil.buildDateTime(sch.date, sch.shift.startTime)
+                ? shiftStartAt(sch.date, sch.shift, sch.expectedStartAt)
                 : null,
             expectedCheckOut:
               isWorking && sch.shift
@@ -1244,7 +1247,8 @@ export class AttendanceService {
       // Smenasi hali boshlanmagan xodim "Kelmadi" emas — "Rejada"
       // (masalan kunduzi 20:00 dagi kechki smena xodimi).
       const virtualStatus =
-        isWorking && isAwaitingCheckIn(workDate, sch.shift, now)
+        isWorking &&
+        isAwaitingCheckIn(workDate, sch.shift, now, sch.expectedStartAt)
           ? 'SCHEDULED'
           : this.scheduleStatusToAttendance(sch.status);
 
@@ -1267,9 +1271,7 @@ export class AttendanceService {
         // Ishlamaydigan kunda kutilayotgan vaqt bo'lmaydi
         expectedCheckIn: !isWorking
           ? null
-          : sch.shift
-            ? DateUtil.buildDateTime(workDate, sch.shift.startTime)
-            : new Date(workDate.getTime() + 8 * 3600 * 1000),
+          : shiftStartAt(workDate, sch.shift, sch.expectedStartAt),
         expectedCheckOut: !isWorking
           ? null
           : sch.shift
@@ -1390,7 +1392,13 @@ export class AttendanceService {
     // Faqat grafigi WORKING bo'lgan xodimlar
     const scheduled = await this.prisma.schedule.findMany({
       where: { date: workDate, status: 'WORKING', ...scope },
-      select: { id: true, employeeId: true, shiftId: true, shift: true },
+      select: {
+        id: true,
+        employeeId: true,
+        shiftId: true,
+        shift: true,
+        expectedStartAt: true,
+      },
     });
     if (scheduled.length === 0) return { marked: 0 };
 
@@ -1407,12 +1415,12 @@ export class AttendanceService {
         (sch) =>
           !attendedSet.has(sch.employeeId) &&
           sch.shift &&
-          !isAwaitingCheckIn(workDate, sch.shift, now),
+          !isAwaitingCheckIn(workDate, sch.shift, now, sch.expectedStartAt),
       )
       .map((sch) => ({
         employeeId: sch.employeeId,
         scheduleId: sch.id,
-        expectedCheckIn: DateUtil.buildDateTime(workDate, sch.shift!.startTime),
+        expectedCheckIn: shiftStartAt(workDate, sch.shift, sch.expectedStartAt),
         expectedCheckOut: this.buildExpectedCheckOut(
           workDate,
           sch as any,
@@ -1520,7 +1528,7 @@ export class AttendanceService {
     );
 
     const expectedCheckIn = schedule?.shift
-      ? DateUtil.buildDateTime(workDate, schedule.shift.startTime)
+      ? shiftStartAt(workDate, schedule.shift, schedule.expectedStartAt)
       : DateUtil.buildDateTime(workDate, '08:00');
     const expectedCheckOut = schedule
       ? this.buildExpectedCheckOut(workDate, schedule, null)
@@ -2447,6 +2455,10 @@ export class AttendanceService {
     schedule: any | null,
     fallbackShift: any | null,
   ): Date {
+    // Bo'sh smena smena boshlangandan keyin berilgan bo'lsa — o'sha vaqtdan
+    if (schedule?.shift && schedule.expectedStartAt) {
+      return schedule.expectedStartAt;
+    }
     const startTime =
       schedule?.shift?.startTime ?? fallbackShift?.startTime ?? '08:00';
     return DateUtil.buildDateTime(workDate, startTime);

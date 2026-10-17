@@ -195,3 +195,51 @@ describe('Smenasi hali boshlanmagan xodim "Kelmadi" emas', () => {
     );
   });
 });
+
+describe('Bo‘sh smena smena boshlangandan keyin berilgan bo‘lsa', () => {
+  afterEach(() => jest.useRealTimers());
+  const workDate = day('2026-10-20');
+  const lateStart = at('2026-10-20', '11:00');
+
+  it('"Kelmadi" muddati va kutilgan vaqt — grafikdagi kech kelish vaqtidan', () => {
+    expect(checkInDeadline(workDate, DAY, lateStart)).toEqual(
+      at('2026-10-20', '11:15'),
+    );
+    expect(
+      isAwaitingCheckIn(workDate, DAY, at('2026-10-20', '10:30'), lateStart),
+    ).toBe(true);
+    expect(isAwaitingCheckIn(workDate, DAY, at('2026-10-20', '10:30'))).toBe(
+      false,
+    );
+  });
+
+  it('11:00 da kelish kerak bo‘lgan o‘rinbosar 10:30 da "Kelmadi" emas, "Rejada"', async () => {
+    jest.useFakeTimers({ now: at('2026-10-20', '10:30') });
+    const prisma: any = {
+      attendanceRecord: { findMany: jest.fn(async () => []) },
+      schedule: {
+        findMany: jest.fn(async () => [
+          {
+            id: 's1',
+            employeeId: 'sub',
+            status: 'WORKING',
+            shift: DAY,
+            expectedStartAt: lateStart,
+            employee: { id: 'sub', fullName: 'O‘rinbosar' },
+          },
+        ]),
+      },
+      employee: { findMany: jest.fn(async () => []) },
+    };
+    const service = new AttendanceService(
+      prisma,
+      {} as any,
+      {} as any,
+      {} as any,
+      { log: jest.fn() } as any,
+    );
+    const [row] = await service.getDailyAttendance('2026-10-20');
+    expect(row.status).toBe('SCHEDULED');
+    expect(row.expectedCheckIn).toEqual(lateStart);
+  });
+});

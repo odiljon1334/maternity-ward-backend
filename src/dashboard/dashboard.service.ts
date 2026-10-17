@@ -100,7 +100,7 @@ export class DashboardService {
       orderBy: { employee: { fullName: 'asc' } },
     });
     const upcoming = notCheckedIn.filter((sch) =>
-      isAwaitingCheckIn(today, sch.shift, now),
+      isAwaitingCheckIn(today, sch.shift, now, sch.expectedStartAt),
     );
 
     // Kelmagan = bugun rejada bor - kelgan - smenasi hali boshlanmagan
