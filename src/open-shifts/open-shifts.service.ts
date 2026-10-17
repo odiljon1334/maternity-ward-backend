@@ -551,7 +551,7 @@ export class OpenShiftsService implements OnModuleInit {
         offers: {
           select: {
             id: true,
-            employee: { select: { telegramChatId: true } },
+            employee: { select: { id: true, telegramChatId: true } },
           },
         },
       },
@@ -559,21 +559,35 @@ export class OpenShiftsService implements OnModuleInit {
     if (!openShift) return;
     const text = this.offerText(openShift);
 
+    let sent = 0;
+    const notLinked: string[] = [];
     for (const offer of openShift.offers) {
       const chatId = offer.employee.telegramChatId;
-      if (!chatId) continue;
-      const sent = await this.telegram.sendOpenShiftOffer?.(
+      if (!chatId) {
+        notLinked.push(offer.employee.id);
+        continue;
+      }
+      const ok = await this.telegram.sendOpenShiftOffer?.(
         chatId,
         text,
         openShift.id,
       );
-      if (sent) {
+      if (ok) {
+        sent++;
         await this.prisma.openShiftOffer.update({
           where: { id: offer.id },
           data: { notifiedAt: new Date() },
         });
       }
     }
+    // Telegram kelmadi degan murojaatlarni tekshirish uchun
+    this.logger.log(
+      `Bo'sh smena ${openShift.id}: ${openShift.offers.length} xodimga taklif, ` +
+        `${sent} tasi Telegram'da yuborildi` +
+        (notLinked.length
+          ? `, Telegram ulanmagan: ${notLinked.join(', ')}`
+          : ''),
+    );
   }
 
   private offerText(openShift: {
@@ -645,6 +659,11 @@ export class OpenShiftsService implements OnModuleInit {
           data: { notifiedAt: new Date() },
         });
       }
+    }
+    if (offers.length) {
+      this.logger.log(
+        `Telegram ulangach ochiq takliflar: ${sent}/${offers.length} yuborildi (xodim: ${employeeIds.join(', ')})`,
+      );
     }
     return { sent };
   }
