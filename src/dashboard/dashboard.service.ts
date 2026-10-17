@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { DateUtil } from '../common/utils/date.util';
 import dayjs from 'dayjs';
 import { unexcusedLate } from '../attendance-notices/notice-excuse.util';
+import { isAwaitingCheckIn } from '../common/utils/shift-timing.util';
 
 @Injectable()
 export class DashboardService {
@@ -81,28 +82,44 @@ export class DashboardService {
       }),
     ]);
 
-    // Kelmagan = bugun rejada bor - kelgan
+    // Bugun ishlashi kerak, lekin davomat yozuvi yo'q xodimlar. Smenasi
+    // hali boshlanmaganlar (masalan 20:00 dagi kechki smena) "Kelmadi"
+    // emas — ular alohida "Rejada" sanaladi.
+    const notCheckedIn = await this.prisma.schedule.findMany({
+      where: {
+        date: today,
+        status: 'WORKING',
+        // Davomat yozuvi xodim bo'yicha tekshiriladi: check-in grafikka
+        // bog'lanmagan bo'lishi ham mumkin (scheduleId bo'sh).
+        employee: { ...empFilter, attendances: { none: { workDate: today } } },
+      },
+      include: {
+        shift: { select: { startTime: true, graceMinutes: true } },
+        employee: { include: { department: true } },
+      },
+      orderBy: { employee: { fullName: 'asc' } },
+    });
+    const upcoming = notCheckedIn.filter((sch) =>
+      isAwaitingCheckIn(today, sch.shift, now),
+    );
+
+    // Kelmagan = bugun rejada bor - kelgan - smenasi hali boshlanmagan
     // Agar jadval yo'q bo'lsa, jami xodimlar - kelgan
     const expectedToday =
-      scheduledTodayCount > 0 ? scheduledTodayCount : totalEmployees;
+      scheduledTodayCount > 0
+        ? scheduledTodayCount - upcoming.length
+        : totalEmployees;
     const todayLateCount = todayLateRecords.filter(
       (record) => unexcusedLate(record) > 0,
     ).length;
     const todayAbsentCount = Math.max(0, expectedToday - todayPresentCount);
     const total = todayPresentCount + todayAbsentCount;
 
-    // Bugun rejada bor lekin kelmagan hodimlarni ham qo'shamiz (max 20 ta)
-    const attendedIds = new Set(todayAttendances.map((a) => a.employeeId));
-    const absentScheduled = await this.prisma.schedule.findMany({
-      where: {
-        date: today,
-        status: 'WORKING',
-        employeeId: { notIn: [...attendedIds] },
-        employee: empFilter,
-      },
-      include: { employee: { include: { department: true } } },
-      take: 20,
-    });
+    // Bugun rejada bor, smenasi boshlangan, lekin kelmagan xodimlar (max 20 ta)
+    const upcomingIds = new Set(upcoming.map((sch) => sch.employeeId));
+    const absentScheduled = notCheckedIn
+      .filter((sch) => !upcomingIds.has(sch.employeeId))
+      .slice(0, 20);
 
     const absentAttendances = absentScheduled.map((sch) => ({
       id: `absent-${sch.employeeId}`,
@@ -123,6 +140,8 @@ export class DashboardService {
       totalEmployees,
       todayPresent: todayPresentCount,
       todayAbsent: todayAbsentCount,
+      /** Smenasi hali boshlanmagan (Rejada) xodimlar */
+      todayUpcoming: upcoming.length,
       todayLate: todayLateCount,
       todayLunchLate: todayLunchLateCount,
       attendanceRate:
