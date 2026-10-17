@@ -2663,6 +2663,157 @@ export class SchedulePlanningService {
     });
   }
 
+  /**
+   * Bo'sh smena birjasi (post rejali muassasa): xodimning shu kungi
+   * tasdiqlangan post rejadagi ish smenasi.
+   */
+  async findApprovedWorkingEntry(
+    hospitalId: string,
+    employeeId: string,
+    workDate: Date,
+  ) {
+    return this.prisma.monthlyScheduleEntry.findFirst({
+      where: {
+        employeeId,
+        workDate,
+        entryType: SchedulePlanEntryType.WORKING,
+        plan: { hospitalId, status: MonthlySchedulePlanStatus.APPROVED },
+      },
+      include: {
+        shift: {
+          select: {
+            id: true,
+            name: true,
+            startTime: true,
+            endTime: true,
+            isOvernight: true,
+          },
+        },
+      },
+      orderBy: { plan: { version: 'desc' } },
+    });
+  }
+
+  /**
+   * Bo'sh smena birjasidan tasdiqlangan almashtirish.
+   *
+   * Post reja hujjat sifatida o'zgarmaydi: tasdiqlangan "o'rnini bosish"
+   * (SUBSTITUTION) yozuvi yaratiladi va amaldagi grafik yangilanadi —
+   * Excel'dagi "O'zgarishlar" varag'ida ham ko'rinadi. Kelmagan xodimning
+   * kuni "Boshqa yo'qlik" bo'ladi; u allaqachon kasallik/ta'til va hokazo
+   * deb belgilangan bo'lsa, o'sha holat saqlanadi.
+   */
+  async substituteFromOpenShift(
+    tx: Prisma.TransactionClient,
+    params: {
+      hospitalId: string;
+      entryId: string;
+      replacementEmployeeId: string;
+      requestedById: string;
+      approvedById: string | null;
+      reason: string;
+    },
+  ) {
+    await this.lockPlanning(tx, params.hospitalId);
+    const entry = await tx.monthlyScheduleEntry.findFirst({
+      where: {
+        id: params.entryId,
+        entryType: SchedulePlanEntryType.WORKING,
+        plan: {
+          hospitalId: params.hospitalId,
+          status: MonthlySchedulePlanStatus.APPROVED,
+        },
+      },
+    });
+    if (!entry) {
+      throw new ConflictException(
+        'Post rejadagi smena o‘zgargan yoki reja qayta tahrirlashga ochilgan',
+      );
+    }
+    this.assertChangeDateInWindow(entry.workDate);
+
+    const blocking = await tx.scheduleChangeRequest.findFirst({
+      where: {
+        hospitalId: params.hospitalId,
+        OR: [{ primaryEntryId: entry.id }, { counterpartEntryId: entry.id }],
+        AND: [
+          {
+            OR: [
+              {
+                status: {
+                  in: [
+                    ScheduleChangeStatus.REQUESTED,
+                    ScheduleChangeStatus.ACCEPTED,
+                  ],
+                },
+              },
+              {
+                status: ScheduleChangeStatus.APPROVED,
+                type: {
+                  in: [
+                    ScheduleChangeType.SUBSTITUTION,
+                    ScheduleChangeType.SWAP,
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      },
+      select: { status: true },
+    });
+    if (blocking) {
+      throw new ConflictException(
+        blocking.status === ScheduleChangeStatus.APPROVED
+          ? 'Bu smena allaqachon boshqa xodimga o‘tkazilgan'
+          : 'Bu smena uchun yakunlanmagan o‘zgarish so‘rovi mavjud',
+      );
+    }
+
+    const original = await tx.schedule.findUnique({
+      where: {
+        employeeId_date: {
+          employeeId: entry.employeeId,
+          date: entry.workDate,
+        },
+      },
+      select: { status: true },
+    });
+
+    const request = await tx.scheduleChangeRequest.create({
+      data: {
+        hospitalId: params.hospitalId,
+        planId: entry.planId,
+        type: ScheduleChangeType.SUBSTITUTION,
+        status: ScheduleChangeStatus.APPROVED,
+        primaryEntryId: entry.id,
+        replacementEmployeeId: params.replacementEmployeeId,
+        absenceEntryType: SchedulePlanEntryType.OTHER_ABSENCE,
+        reason: params.reason,
+        requestedById: params.requestedById,
+        approvedById: params.approvedById,
+        approvedAt: new Date(),
+      },
+    });
+    await this.applySubstitution(
+      tx,
+      {
+        id: request.id,
+        planId: entry.planId,
+        replacementEmployeeId: params.replacementEmployeeId,
+        absenceEntryType: SchedulePlanEntryType.OTHER_ABSENCE,
+        primaryEntry: {
+          id: entry.id,
+          employeeId: entry.employeeId,
+          shiftId: entry.shiftId,
+          workDate: entry.workDate,
+        },
+      },
+      { markOriginal: !original || original.status === ScheduleStatus.WORKING },
+    );
+    return request;
+  }
+
   private async applySubstitution(
     tx: Prisma.TransactionClient,
     request: {
@@ -2677,6 +2828,7 @@ export class SchedulePlanningService {
         workDate: Date;
       };
     },
+    options: { markOriginal?: boolean } = {},
   ) {
     const occupied = await tx.schedule.findUnique({
       where: {
@@ -2692,7 +2844,9 @@ export class SchedulePlanningService {
         'O‘rnini bosadigan xodimda shu kuni boshqa smena mavjud',
       );
     }
-    await this.markOriginalEmployeeAbsent(tx, request);
+    if (options.markOriginal !== false) {
+      await this.markOriginalEmployeeAbsent(tx, request);
+    }
     await tx.schedule.upsert({
       where: {
         employeeId_date: {

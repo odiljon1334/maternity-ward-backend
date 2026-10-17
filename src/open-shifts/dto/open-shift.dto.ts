@@ -17,8 +17,10 @@ export class PreviewOpenShiftDto {
   @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'Sana YYYY-MM-DD formatida' })
   date: string;
 
+  /** Post rejali muassasada ixtiyoriy — smena kelmagan xodimning rejasidan olinadi */
+  @IsOptional()
   @IsUUID()
-  shiftId: string;
+  shiftId?: string;
 
   @IsOptional()
   @IsUUID()

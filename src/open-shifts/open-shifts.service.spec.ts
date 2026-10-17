@@ -26,11 +26,32 @@ function employee(id: string, patch: Record<string, unknown> = {}) {
   };
 }
 
-function setup(employees: any[] = []) {
+function setup(employees: any[] = [], mode = 'STANDARD') {
   const prisma: any = {
+    hospital: {
+      findUnique: jest.fn(async () => ({
+        id: 'h1',
+        schedulePlanningMode: mode,
+      })),
+    },
+    department: {
+      findFirst: jest.fn(async () => ({ id: 'dep', name: 'Tug‘ruq bloki' })),
+    },
+    scheduleChangeRequest: { findFirst: jest.fn(async () => null) },
+    shiftTemplate: {
+      findFirst: jest.fn(async ({ where }: any) => ({
+        id: where.id,
+        name: 'Smena',
+        ...DAY_SHIFT,
+      })),
+    },
     employee: {
       findMany: jest.fn(async () => employees),
-      findFirst: jest.fn(async () => ({ positionId: 'doya', id: 'absent' })),
+      findFirst: jest.fn(async () => ({
+        positionId: 'doya',
+        id: 'absent',
+        departmentId: 'dep',
+      })),
     },
     openShift: {
       findFirst: jest.fn(),
@@ -48,7 +69,19 @@ function setup(employees: any[] = []) {
     sendDecisionRequest: jest.fn(async () => undefined),
     sendPersonal: jest.fn(async () => true),
   };
-  return { prisma, telegram, service: new OpenShiftsService(prisma, telegram) };
+  const planning: any = {
+    findApprovedWorkingEntry: jest.fn(async () => ({
+      id: 'entry-1',
+      shiftId: 'plan-shift',
+    })),
+    substituteFromOpenShift: jest.fn(async () => ({ id: 'change-1' })),
+  };
+  return {
+    prisma,
+    telegram,
+    planning,
+    service: new OpenShiftsService(prisma, telegram, planning),
+  };
 }
 
 describe('Bo‘sh smena birjasi', () => {
@@ -296,6 +329,85 @@ describe('Bo‘sh smena birjasi', () => {
       await expect(
         service.review('os1', 'APPROVED', { userId: 'u1', hospitalId: 'h1' }),
       ).rejects.toBeInstanceOf(ConflictException);
+      expect(prisma.schedule.upsert).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('post rejali muassasa (tug‘ruqxona)', () => {
+    it('kim o‘rniga tanlanmasa e’lon qilinmaydi', async () => {
+      const { service } = setup([employee('e1')], 'POST_COVERAGE');
+      await expect(
+        service.preview('h1', {
+          departmentId: 'dep',
+          date: dayjs(day(1)).tz(TZ).format('YYYY-MM-DD'),
+          shiftId: 'any',
+        }),
+      ).rejects.toThrow('kimning o‘rniga');
+    });
+
+    it('smena kelmagan xodimning post rejadagi smenasidan olinadi', async () => {
+      const { service, prisma } = setup([employee('e1')], 'POST_COVERAGE');
+      const result = await service.preview('h1', {
+        departmentId: 'dep',
+        date: dayjs(day(1)).tz(TZ).format('YYYY-MM-DD'),
+        shiftId: 'user-picked-shift',
+        absentEmployeeId: 'absent',
+      });
+      expect(result.postCoverage).toBe(true);
+      expect(result.shift.id).toBe('plan-shift');
+      expect(prisma.shiftTemplate.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ id: 'plan-shift' }),
+        }),
+      );
+    });
+
+    it('rejada smenasi bo‘lmasa rad etiladi', async () => {
+      const { service, planning } = setup([employee('e1')], 'POST_COVERAGE');
+      planning.findApprovedWorkingEntry.mockResolvedValue(null);
+      await expect(
+        service.preview('h1', {
+          departmentId: 'dep',
+          date: dayjs(day(1)).tz(TZ).format('YYYY-MM-DD'),
+          shiftId: 'x',
+          absentEmployeeId: 'absent',
+        }),
+      ).rejects.toThrow('tasdiqlangan post rejada ish smenasi yo‘q');
+    });
+
+    it('tasdiqlash "o‘rnini bosish" orqali yoziladi, grafik to‘g‘ridan-to‘g‘ri yozilmaydi', async () => {
+      const { service, prisma, planning } = setup(
+        [employee('e1')],
+        'POST_COVERAGE',
+      );
+      prisma.openShift.findFirst.mockResolvedValue({
+        id: 'os1',
+        hospitalId: 'h1',
+        departmentId: 'dep',
+        date: day(1),
+        shiftId: 'plan-shift',
+        shift: DAY_SHIFT,
+        status: 'CLAIMED',
+        absentEmployeeId: 'absent',
+        createdById: 'manager-user',
+        department: { name: 'Tug‘ruq bloki' },
+        absentEmployee: { fullName: 'Karimova N.' },
+        claimedBy: { id: 'e1', fullName: 'Aliyeva D.', telegramChatId: null },
+      });
+
+      await expect(
+        service.review('os1', 'APPROVED', { userId: null, hospitalId: 'h1' }),
+      ).resolves.toEqual({ id: 'os1', status: 'FILLED' });
+      expect(planning.substituteFromOpenShift).toHaveBeenCalledWith(
+        prisma,
+        expect.objectContaining({
+          hospitalId: 'h1',
+          entryId: 'entry-1',
+          replacementEmployeeId: 'e1',
+          requestedById: 'manager-user',
+          approvedById: null,
+        }),
+      );
       expect(prisma.schedule.upsert).not.toHaveBeenCalled();
     });
   });
