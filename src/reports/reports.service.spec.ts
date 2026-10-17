@@ -1,5 +1,11 @@
 import * as ExcelJS from 'exceljs';
+import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc';
+import timezone from 'dayjs/plugin/timezone';
 import { ReportsService } from './reports.service';
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
 
 /**
  * ReportsService.generateT13Excel uchun unit test — StaffPulse rejasi,
@@ -11,13 +17,20 @@ import { ReportsService } from './reports.service';
  * status→kod moslashtirish va ustun indekslash mantig'i.
  */
 
-function makeFakePrisma(employees: any[], hospital: any = null) {
+function makeFakePrisma(
+  employees: any[],
+  hospital: any = null,
+  carryIn: any[] = [],
+) {
   return {
     employee: {
       findMany: jest.fn(async () => employees),
     },
     hospital: {
       findUnique: jest.fn(async () => hospital),
+    },
+    attendanceRecord: {
+      findMany: jest.fn(async () => carryIn),
     },
   };
 }
@@ -31,90 +44,163 @@ function makeFakeAttendanceService(byEmployeeId: Record<string, any[]>) {
   };
 }
 
+/** Toshkent vaqti bo'yicha kun boshi (Schedule.workDate kabi) */
+const tashkentDay = (iso: string) => dayjs.tz(iso, 'Asia/Tashkent').toDate();
+const tashkentAt = (iso: string, time: string) =>
+  dayjs.tz(`${iso} ${time}`, 'Asia/Tashkent').toDate();
+
+async function readSheet(buffer: any) {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer as any);
+  return workbook.worksheets[0];
+}
+
 describe('ReportsService.generateT13Excel', () => {
   const YEAR = 2026;
   const MONTH = 9; // 30 kunlik oy
+  const day = (d: number) => `2026-09-${String(d).padStart(2, '0')}`;
+  // 1-kun ustuni = 4 (№/F.I.O/Bo'lim/Lavozim) + 1; jami ustunlar 30-kundan keyin
+  const col = (d: number) => 4 + d;
+  const totalsStart = 4 + 30;
 
-  it("holat kodlarini (Я/Н/В/ОТ/Б) to'g'ri ustunlarga yozadi va jami ustunlarni hisoblaydi", async () => {
+  it('rasmiy kodlar: kelmagan — НН (Н emas), grafiksiz kun — В', async () => {
     const emp = {
       id: 'emp-1',
       fullName: 'Alisher Odilov',
       department: { name: 'Kardiologiya' },
       position: { name: 'Hamshira' },
     };
-
-    // 1-kun: ishladi (180 daqiqa = 3 soat), 2-kun: kelmadi, 3-kun: dam olish,
-    // 4-kun: ta'til, 5-kun: kasallik — qolgan kunlar uchun yozuv yo'q (bo'sh).
     const records = [
-      {
-        workDate: new Date(YEAR, MONTH - 1, 1),
-        status: 'PRESENT',
-        netWorkMin: 180,
-      },
-      {
-        workDate: new Date(YEAR, MONTH - 1, 2),
-        status: 'ABSENT',
-        netWorkMin: 0,
-      },
-      {
-        workDate: new Date(YEAR, MONTH - 1, 3),
-        status: 'DAY_OFF',
-        netWorkMin: 0,
-      },
-      {
-        workDate: new Date(YEAR, MONTH - 1, 4),
-        status: 'VACATION',
-        netWorkMin: 0,
-      },
-      { workDate: new Date(YEAR, MONTH - 1, 5), status: 'SICK', netWorkMin: 0 },
+      { workDate: tashkentDay(day(1)), status: 'PRESENT', netWorkMin: 180 },
+      { workDate: tashkentDay(day(2)), status: 'ABSENT', netWorkMin: 0 },
+      { workDate: tashkentDay(day(3)), status: 'DAY_OFF', netWorkMin: 0 },
+      { workDate: tashkentDay(day(4)), status: 'VACATION', netWorkMin: 0 },
+      { workDate: tashkentDay(day(5)), status: 'SICK', netWorkMin: 0 },
+      { workDate: tashkentDay(day(7)), status: 'PLANNED', netWorkMin: 0 },
     ];
 
-    const prisma = makeFakePrisma([emp], { name: 'Test Poliklinika' });
-    const attendance = makeFakeAttendanceService({ 'emp-1': records });
-    const svc = new ReportsService(prisma as any, attendance as any, {} as any);
-
-    const buffer = await svc.generateT13Excel({
-      month: MONTH,
-      year: YEAR,
-      hospitalId: 'hosp-1',
-    });
-
-    const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.load(buffer as any);
-    const sheet = workbook.worksheets[0];
-
-    // Kod qatori — 6-qator (4-header, 5-kod sarlavhasi, 6-birinchi xodim kodi)
+    const svc = new ReportsService(
+      makeFakePrisma([emp], { name: 'Test Poliklinika' }) as any,
+      makeFakeAttendanceService({ 'emp-1': records }) as any,
+      {} as any,
+    );
+    const sheet = await readSheet(
+      await svc.generateT13Excel({ month: MONTH, year: YEAR, hospitalId: 'h' }),
+    );
     const codeRow = sheet.getRow(6);
     const hoursRow = sheet.getRow(7);
 
-    // 1-kun ustuni = 4 (F.I.O/Bo'lim/Lavozim) + 1 = 5-ustun
-    expect(codeRow.getCell(5).value).toBe('Я'); // 1-kun: PRESENT
-    expect(hoursRow.getCell(5).value).toBe(3); // 180 daqiqa = 3 soat
-    expect(codeRow.getCell(6).value).toBe('Н'); // 2-kun: ABSENT
-    expect(hoursRow.getCell(6).value).toBe(''); // ishlamagan kun uchun soat yo'q
-    expect(codeRow.getCell(7).value).toBe('В'); // 3-kun: DAY_OFF
-    expect(codeRow.getCell(8).value).toBe('ОТ'); // 4-kun: VACATION
-    expect(codeRow.getCell(9).value).toBe('Б'); // 5-kun: SICK
-    expect(codeRow.getCell(10).value).toBe(''); // 6-kun: yozuv yo'q — bo'sh
+    expect(codeRow.getCell(col(1)).value).toBe('Я');
+    expect(hoursRow.getCell(col(1)).value).toBe(3);
+    expect(codeRow.getCell(col(2)).value).toBe('НН');
+    expect(hoursRow.getCell(col(2)).value).toBe('');
+    expect(codeRow.getCell(col(3)).value).toBe('В');
+    expect(codeRow.getCell(col(4)).value).toBe('ОТ');
+    expect(codeRow.getCell(col(5)).value).toBe('Б');
+    expect(codeRow.getCell(col(6)).value).toBe('В'); // grafik qo'yilmagan kun
+    expect(codeRow.getCell(col(7)).value).toBe(''); // rejadagi (kelajak) ish kuni
 
-    // Jami ustunlar (Я, ОТ, Б, Н) — daysInMonth (30) dan keyin, 4+30=34-ustundan boshlab
-    const totalsStart = 4 + 30;
-    expect(sheet.getCell(6, totalsStart + 1).value).toBe(1); // Я soni
-    expect(sheet.getCell(6, totalsStart + 2).value).toBe(1); // ОТ soni
-    expect(sheet.getCell(6, totalsStart + 3).value).toBe(1); // Б soni
-    expect(sheet.getCell(6, totalsStart + 4).value).toBe(1); // Н soni
+    expect(sheet.getCell(4, totalsStart + 4).value).toBe("НН (yo'qlik)");
+    expect(sheet.getCell(6, totalsStart + 1).value).toBe(1); // Я
+    expect(sheet.getCell(6, totalsStart + 2).value).toBe(1); // ОТ
+    expect(sheet.getCell(6, totalsStart + 3).value).toBe(1); // Б
+    expect(sheet.getCell(6, totalsStart + 4).value).toBe(1); // НН
+    expect(sheet.getCell(6, totalsStart + 5).value).toBe(3); // jami soat
+  });
+
+  it('tungi smena kunlarga bo‘linadi va tungi soatlar (Н) ko‘rsatiladi', async () => {
+    const emp = {
+      id: 'emp-n',
+      fullName: 'Tungi Xodim',
+      department: { name: 'Tug‘ruq' },
+      position: { name: 'Doya' },
+    };
+    // 10-sana 20:00 — 11-sana 08:00, tanaffussiz 12 soat
+    const records = [
+      {
+        workDate: tashkentDay(day(10)),
+        status: 'PRESENT',
+        checkIn: tashkentAt(day(10), '20:00'),
+        checkOut: tashkentAt(day(11), '08:00'),
+        netWorkMin: 720,
+      },
+    ];
+    // O'tgan oyning 31-avgust 20:00 — 1-sentyabr 08:00 smenasi
+    const carryIn = [
+      {
+        employeeId: 'emp-n',
+        workDate: tashkentDay('2026-08-31'),
+        status: 'PRESENT',
+        checkIn: tashkentAt('2026-08-31', '20:00'),
+        checkOut: tashkentAt(day(1), '08:00'),
+        netWorkMin: 720,
+      },
+    ];
+    const svc = new ReportsService(
+      makeFakePrisma([emp], null, carryIn) as any,
+      makeFakeAttendanceService({ 'emp-n': records }) as any,
+      {} as any,
+    );
+    const sheet = await readSheet(
+      await svc.generateT13Excel({ month: MONTH, year: YEAR }),
+    );
+    const codeRow = sheet.getRow(6);
+    const hoursRow = sheet.getRow(7);
+
+    // 1-sana: o'tgan oydan 8 soat, shundan 00:00–06:00 = 6 tungi
+    expect(codeRow.getCell(col(1)).value).toBe('Я Н');
+    expect(hoursRow.getCell(col(1)).value).toBe('8/6');
+    // 10-sana: 20:00–24:00 = 4 soat, shundan 22:00–24:00 = 2 tungi
+    expect(codeRow.getCell(col(10)).value).toBe('Я Н');
+    expect(hoursRow.getCell(col(10)).value).toBe('4/2');
+    // 11-sana: 00:00–08:00 = 8 soat, shundan 6 tungi
+    expect(hoursRow.getCell(col(11)).value).toBe('8/6');
+
+    expect(sheet.getCell(6, totalsStart + 1).value).toBe(1); // smenalar: faqat 10-sanadagi
+    expect(sheet.getCell(6, totalsStart + 5).value).toBe(20); // 8 + 4 + 8
+    expect(sheet.getCell(6, totalsStart + 6).value).toBe(14); // 6 + 2 + 6
+  });
+
+  it('oy ichida bo‘shagan xodim ham olinadi, ketgan kunidan keyin bo‘sh', async () => {
+    const emp = {
+      id: 'emp-f',
+      fullName: 'Ketgan Xodim',
+      department: { name: 'Bo‘lim' },
+      position: { name: 'Hamshira' },
+      hiredAt: tashkentDay('2025-01-01'),
+      firedAt: tashkentDay(day(15)),
+    };
+    const prisma = makeFakePrisma([emp]);
+    const svc = new ReportsService(
+      prisma as any,
+      makeFakeAttendanceService({}) as any,
+      {} as any,
+    );
+    const sheet = await readSheet(
+      await svc.generateT13Excel({ month: MONTH, year: YEAR }),
+    );
+
+    expect(prisma.employee.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          OR: [{ firedAt: null }, { firedAt: { gte: expect.any(Date) } }],
+        }),
+      }),
+    );
+    expect(sheet.getRow(6).getCell(col(15)).value).toBe('В');
+    expect(sheet.getRow(6).getCell(col(16)).value).toBe('');
   });
 
   it("xodim yo'q bo'lsa — xatosiz bo'sh jadval generatsiya qiladi", async () => {
-    const prisma = makeFakePrisma([]);
-    const attendance = makeFakeAttendanceService({});
-    const svc = new ReportsService(prisma as any, attendance as any, {} as any);
-
-    const buffer = await svc.generateT13Excel({ month: MONTH, year: YEAR });
-
-    const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.load(buffer as any);
-    expect(workbook.worksheets[0]).toBeDefined();
+    const svc = new ReportsService(
+      makeFakePrisma([]) as any,
+      makeFakeAttendanceService({}) as any,
+      {} as any,
+    );
+    const sheet = await readSheet(
+      await svc.generateT13Excel({ month: MONTH, year: YEAR }),
+    );
+    expect(sheet).toBeDefined();
   });
 
   it('LATE/EARLY_LEAVE/LATE_EARLY — barchasi "Я" (ishladi) sifatida hisoblanadi', async () => {
@@ -125,40 +211,24 @@ describe('ReportsService.generateT13Excel', () => {
       position: { name: 'Shifokor' },
     };
     const records = [
-      {
-        workDate: new Date(YEAR, MONTH - 1, 1),
-        status: 'LATE',
-        netWorkMin: 120,
-      },
-      {
-        workDate: new Date(YEAR, MONTH - 1, 2),
-        status: 'EARLY_LEAVE',
-        netWorkMin: 90,
-      },
-      {
-        workDate: new Date(YEAR, MONTH - 1, 3),
-        status: 'LATE_EARLY',
-        netWorkMin: 60,
-      },
+      { workDate: tashkentDay(day(1)), status: 'LATE', netWorkMin: 120 },
+      { workDate: tashkentDay(day(2)), status: 'EARLY_LEAVE', netWorkMin: 90 },
+      { workDate: tashkentDay(day(3)), status: 'LATE_EARLY', netWorkMin: 60 },
     ];
-
-    const prisma = makeFakePrisma([emp]);
-    const attendance = makeFakeAttendanceService({ 'emp-2': records });
-    const svc = new ReportsService(prisma as any, attendance as any, {} as any);
-
-    const buffer = await svc.generateT13Excel({ month: MONTH, year: YEAR });
-
-    const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.load(buffer as any);
-    const sheet = workbook.worksheets[0];
+    const svc = new ReportsService(
+      makeFakePrisma([emp]) as any,
+      makeFakeAttendanceService({ 'emp-2': records }) as any,
+      {} as any,
+    );
+    const sheet = await readSheet(
+      await svc.generateT13Excel({ month: MONTH, year: YEAR }),
+    );
     const codeRow = sheet.getRow(6);
 
-    expect(codeRow.getCell(5).value).toBe('Я');
-    expect(codeRow.getCell(6).value).toBe('Я');
-    expect(codeRow.getCell(7).value).toBe('Я');
-
-    const totalsStart = 4 + 30;
-    expect(sheet.getCell(6, totalsStart + 1).value).toBe(3); // 3 kun ham "ishladi" deb hisoblanadi
+    expect(codeRow.getCell(col(1)).value).toBe('Я');
+    expect(codeRow.getCell(col(2)).value).toBe('Я');
+    expect(codeRow.getCell(col(3)).value).toBe('Я');
+    expect(sheet.getCell(6, totalsStart + 1).value).toBe(3);
   });
 });
 
