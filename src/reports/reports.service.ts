@@ -2,9 +2,20 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import * as ExcelJS from 'exceljs';
 import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc';
+import timezone from 'dayjs/plugin/timezone';
 import { AttendanceService } from '../attendance/attendance.service';
 import { PayrollService } from '../payroll/payroll.service';
 import { unexcusedLate } from '../attendance-notices/notice-excuse.util';
+import {
+  localDateParts,
+  localMonthBoundsMs,
+  splitIntervalMinutesByLocalDate,
+} from '../schedule-planning/schedule-planning-time';
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
+const TZ = process.env.TIMEZONE || 'Asia/Tashkent';
 
 @Injectable()
 export class ReportsService {
@@ -901,12 +912,18 @@ export class ReportsService {
   // EMAS — bizning tizimimizda OKPO/STIR kabi maydonlar saqlanmaydi.
   // Buxgalteriyaga rasmiy blank kerak bo'lsa, aniq shablon berilishi va
   // shunga moslab qayta ko'rib chiqilishi kerak.
+  //
+  // Rasmiy kodlar: Я — ish vaqti, Н — TUNGI soatlar (22:00–06:00),
+  // НН — sababi aniqlanmagan kelmaslik, В — dam olish/bayram, ОТ — ta'til,
+  // Б — kasallik, Р — tug'ruq ta'tili, ПК — malaka oshirish.
+  // ⚠️ Ilgari kelmagan kunga "Н" yozilardi — buxgalter va 1C uni tungi ish
+  // deb o'qirdi.
   private static readonly T13_CODES: Record<string, string> = {
     PRESENT: 'Я',
     LATE: 'Я',
     EARLY_LEAVE: 'Я',
     LATE_EARLY: 'Я',
-    ABSENT: 'Н',
+    ABSENT: 'НН',
     DAY_OFF: 'В',
     HOLIDAY: 'В',
     VACATION: 'ОТ',
@@ -932,11 +949,20 @@ export class ReportsService {
   }): Promise<ExcelJS.Buffer> {
     const { month, year, departmentId, hospitalId } = query;
     const daysInMonth = new Date(year, month, 0).getDate();
+    const { startMs: monthStartMs, endMs: monthEndMs } = localMonthBoundsMs(
+      year,
+      month,
+    );
+    const monthStart = new Date(monthStartMs);
+    const nextMonthStart = new Date(monthEndMs);
 
     const [employees, hospital] = await Promise.all([
       this.prisma.employee.findMany({
         where: {
-          firedAt: null,
+          // Oy ichida ishdan bo'shagan yoki ishga kirgan xodim ham tabelga
+          // tushadi — ishlagan kunlari yo'qolmasligi kerak.
+          OR: [{ firedAt: null }, { firedAt: { gte: monthStart } }],
+          hiredAt: { lt: nextMonthStart },
           ...(departmentId ? { departmentId } : {}),
           ...(hospitalId ? { hospitalId } : {}),
         },
@@ -963,6 +989,18 @@ export class ReportsService {
       ),
     );
 
+    // O'tgan oyning oxirgi kunida boshlangan tungi smena — uning shu oyga
+    // tushgan soatlari (masalan 31-dagi 20:00–08:00 → 1-sanaga 8 soat).
+    const carryIn = employees.length
+      ? await this.prisma.attendanceRecord.findMany({
+          where: {
+            employeeId: { in: employees.map((emp) => emp.id) },
+            workDate: new Date(monthStartMs - 86_400_000),
+            status: { in: [...ReportsService.T13_WORKED_STATUSES] as any },
+          },
+        })
+      : [];
+
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'StaffPulse (MaternityCare)';
     workbook.created = new Date();
@@ -973,7 +1011,7 @@ export class ReportsService {
     );
 
     const monthName = dayjs(`${year}-${month}-01`).format('MMMM YYYY');
-    const totalCols = 6 + daysInMonth + 4; // №,FIO,Bo'lim,Lavozim + kunlar + 4 jami ustun
+    const totalCols = 4 + daysInMonth + 6; // №,FIO,Bo'lim,Lavozim + kunlar + 6 jami ustun
 
     sheet.mergeCells(1, 1, 1, totalCols);
     const titleCell = sheet.getCell(1, 1);
@@ -1034,10 +1072,12 @@ export class ReportsService {
     }
 
     const totalsHeaders = [
-      'Я (ish kuni)',
+      'Я (smena)',
       "ОТ (ta'til)",
       'Б (kasallik)',
-      "Н (yo'qlik)",
+      "НН (yo'qlik)",
+      'Soat (jami)',
+      'Н (tungi soat)',
     ];
     totalsHeaders.forEach((h, i) => {
       const col = 4 + daysInMonth + i + 1;
@@ -1064,15 +1104,17 @@ export class ReportsService {
     sheet.getColumn(4).width = 18;
 
     // ── Har bir xodim uchun 2 qator: kod qatori + soat qatori ──
+    const round1 = (minutes: number) => Math.round(minutes / 6) / 10;
     let rowCursor = codesRowIdx + 1;
     employees.forEach((emp, idx) => {
-      const dayMap = new Map<number, { status: string; netWorkMin: number }>();
-      attendanceByEmployee[idx].records.forEach((r: any) => {
-        dayMap.set(new Date(r.workDate).getDate(), {
-          status: r.status,
-          netWorkMin: r.netWorkMin ?? 0,
-        });
-      });
+      const records: any[] = attendanceByEmployee[idx].records;
+      const days = this.t13DayCells(
+        [...records, ...carryIn.filter((r) => r.employeeId === emp.id)],
+        year,
+        month,
+      );
+      const hiredDay = emp.hiredAt ? localDateParts(emp.hiredAt).iso : null;
+      const firedDay = emp.firedAt ? localDateParts(emp.firedAt).iso : null;
 
       const codeRow = sheet.getRow(rowCursor);
       const hoursRow = sheet.getRow(rowCursor + 1);
@@ -1092,50 +1134,83 @@ export class ReportsService {
         };
       });
 
+      // Smenalar soni — shu oyda boshlangan smenalar (tungi smena ikki
+      // kunga tushsa ham bitta smena).
       let worked = 0;
       let vacation = 0;
       let sick = 0;
       let absent = 0;
+      for (const record of records) {
+        if (ReportsService.T13_WORKED_STATUSES.has(record.status)) worked++;
+        else if (record.status === 'VACATION') vacation++;
+        else if (record.status === 'SICK') sick++;
+        else if (record.status === 'ABSENT') absent++;
+      }
+      let totalMinutes = 0;
+      let nightMinutes = 0;
 
       for (let d = 1; d <= daysInMonth; d++) {
         const col = 4 + d;
-        const day = dayMap.get(d);
-        const code = day ? (ReportsService.T13_CODES[day.status] ?? '') : '';
-        codeRow.getCell(col).value = code;
+        const iso = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+        const day = days.get(iso);
+        const employed =
+          (!hiredDay || iso >= hiredDay) && (!firedDay || iso <= firedDay);
+
+        const codes: string[] = [];
+        let hoursValue: number | string = '';
+        if (!employed) {
+          // Ishga kirishdan oldin / ishdan ketgandan keyin — bo'sh
+        } else if (day && day.workedMin > 0) {
+          codes.push('Я');
+          if (day.nightMin > 0) codes.push('Н');
+          // Ishlagan soat bilan birga shu kunning boshqa holati (masalan
+          // tungi smena tugagan kuni kelmagan bo'lsa) ham ko'rinadi.
+          const extra = day.status
+            ? ReportsService.T13_CODES[day.status]
+            : undefined;
+          if (extra && extra !== 'Я' && extra !== 'В') codes.push(extra);
+          totalMinutes += day.workedMin;
+          nightMinutes += day.nightMin;
+          hoursValue =
+            day.nightMin > 0
+              ? `${round1(day.workedMin)}/${round1(day.nightMin)}`
+              : round1(day.workedMin);
+        } else if (day?.status) {
+          const code = ReportsService.T13_CODES[day.status] ?? '';
+          if (code) codes.push(code);
+        } else {
+          // Grafik qo'yilmagan kun — dam olish (grafik yagona manba)
+          codes.push('В');
+        }
+
+        codeRow.getCell(col).value = codes.join(' ');
         codeRow.getCell(col).alignment = { horizontal: 'center' };
         codeRow.getCell(col).font = { size: 9 };
-
-        const isWorked =
-          day && ReportsService.T13_WORKED_STATUSES.has(day.status);
-        hoursRow.getCell(col).value = isWorked
-          ? +(day!.netWorkMin / 60).toFixed(1)
-          : '';
+        hoursRow.getCell(col).value = hoursValue;
         hoursRow.getCell(col).alignment = { horizontal: 'center' };
         hoursRow.getCell(col).font = { size: 7, color: { argb: 'FF757575' } };
-
-        if (isWorked) worked++;
-        else if (day?.status === 'VACATION') vacation++;
-        else if (day?.status === 'SICK') sick++;
-        else if (day?.status === 'ABSENT') absent++;
       }
 
       const totalsCol = 4 + daysInMonth;
-      sheet.mergeCells(rowCursor, totalsCol + 1, rowCursor + 1, totalsCol + 1);
-      sheet.mergeCells(rowCursor, totalsCol + 2, rowCursor + 1, totalsCol + 2);
-      sheet.mergeCells(rowCursor, totalsCol + 3, rowCursor + 1, totalsCol + 3);
-      sheet.mergeCells(rowCursor, totalsCol + 4, rowCursor + 1, totalsCol + 4);
-      sheet.getCell(rowCursor, totalsCol + 1).value = worked;
-      sheet.getCell(rowCursor, totalsCol + 2).value = vacation;
-      sheet.getCell(rowCursor, totalsCol + 3).value = sick;
-      sheet.getCell(rowCursor, totalsCol + 4).value = absent;
-      [1, 2, 3, 4].forEach((i) => {
-        const cell = sheet.getCell(rowCursor, totalsCol + i);
+      const totals = [
+        worked,
+        vacation,
+        sick,
+        absent,
+        round1(totalMinutes),
+        round1(nightMinutes),
+      ];
+      totals.forEach((value, i) => {
+        const col = totalsCol + i + 1;
+        sheet.mergeCells(rowCursor, col, rowCursor + 1, col);
+        const cell = sheet.getCell(rowCursor, col);
+        cell.value = value;
         cell.alignment = { horizontal: 'center', vertical: 'middle' };
         cell.font = { bold: true };
       });
 
       if (idx % 2 === 0) {
-        for (let c = 1; c <= totalsCol + 4; c++) {
+        for (let c = 1; c <= totalsCol + totals.length; c++) {
           [codeRow.getCell(c), hoursRow.getCell(c)].forEach((cell) => {
             if (!cell.fill) {
               cell.fill = {
@@ -1157,8 +1232,87 @@ export class ReportsService {
     legendRow.getCell(1).font = { bold: true };
     sheet.mergeCells(rowCursor + 1, 2, rowCursor + 1, totalCols);
     legendRow.getCell(2).value =
-      "Я=Yavka (ishladi)  Н=Noma'lum sababli yo'qlik  В=Dam olish/bayram  ОТ=Navbatdagi ta'til  Б=Vaqtinchalik mehnatga layoqatsizlik (kasallik)";
+      "Я=Ishladi  Н=Tungi soatlar (22:00–06:00), soat qatorida \"jami/tungi\"  НН=Sababi aniqlanmagan kelmaslik  В=Dam olish/bayram (grafik qo'yilmagan kun ham)  ОТ=Navbatdagi ta'til  Б=Kasallik  Р=Tug'ruq ta'tili  ПК=Malaka oshirish. Tungi smena soatlari kalendar kunlariga bo'linadi (20:00–08:00 → 4 + 8).";
 
     return workbook.xlsx.writeBuffer() as Promise<ExcelJS.Buffer>;
+  }
+
+  /**
+   * Har bir kalendar kun uchun ishlangan va tungi daqiqalar hamda holat.
+   *
+   * Ishlangan vaqt check-in/check-out (bo'lmasa grafik) oralig'i bo'yicha
+   * Toshkent kunlariga bo'linadi va sof ish vaqtiga (netWorkMin)
+   * proporsional moslanadi (tushlik va tanaffuslar chiqib ketadi).
+   * Tungi daqiqalar — 22:00–06:00 bilan kesishgan qism.
+   */
+  private t13DayCells(records: any[], year: number, month: number) {
+    const days = new Map<
+      string,
+      { workedMin: number; nightMin: number; status?: string }
+    >();
+    const cell = (iso: string) => {
+      let value = days.get(iso);
+      if (!value) {
+        value = { workedMin: 0, nightMin: 0 };
+        days.set(iso, value);
+      }
+      return value;
+    };
+    const monthPrefix = `${year}-${String(month).padStart(2, '0')}-`;
+
+    for (const record of records) {
+      const ownDay = localDateParts(record.workDate).iso;
+      if (!ReportsService.T13_WORKED_STATUSES.has(record.status)) {
+        if (ownDay.startsWith(monthPrefix)) cell(ownDay).status = record.status;
+        continue;
+      }
+      const start = record.checkIn ?? record.expectedCheckIn;
+      const end = record.checkOut ?? record.expectedCheckOut;
+      const segments =
+        start && end
+          ? splitIntervalMinutesByLocalDate(start, end, year, month)
+          : null;
+      if (!segments) {
+        // Vaqtlar noma'lum — sof ish vaqti o'z kuniga yoziladi
+        if (ownDay.startsWith(monthPrefix)) {
+          cell(ownDay).workedMin += record.netWorkMin ?? 0;
+        }
+        continue;
+      }
+      const startMs = new Date(start).getTime();
+      const endMs = new Date(end).getTime();
+      const spanMin = (endMs - startMs) / 60_000;
+      const net =
+        record.netWorkMin && record.netWorkMin > 0
+          ? record.netWorkMin
+          : spanMin;
+      const factor = spanMin > 0 ? Math.min(1, net / spanMin) : 0;
+      for (const [iso, minutes] of Object.entries(segments)) {
+        const target = cell(iso);
+        target.workedMin += minutes * factor;
+        target.nightMin +=
+          ReportsService.nightOverlapMinutes(iso, startMs, endMs) * factor;
+      }
+    }
+    return days;
+  }
+
+  /** Shu kalendar kunidagi 00:00–06:00 va 22:00–24:00 bilan kesishuv (daqiqa). */
+  private static nightOverlapMinutes(
+    iso: string,
+    startMs: number,
+    endMs: number,
+  ) {
+    const dayStart = dayjs.tz(iso, TZ).startOf('day').valueOf();
+    const windows: Array<[number, number]> = [
+      [dayStart, dayStart + 6 * 3_600_000],
+      [dayStart + 22 * 3_600_000, dayStart + 24 * 3_600_000],
+    ];
+    let total = 0;
+    for (const [from, to] of windows) {
+      const overlap = Math.min(endMs, to) - Math.max(startMs, from);
+      if (overlap > 0) total += overlap / 60_000;
+    }
+    return total;
   }
 }
