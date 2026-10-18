@@ -150,10 +150,11 @@ services:
         reservations:
           memory: 256M
           cpus: '0.25'
-      restart_policy:
-        condition: on-failure
-        delay: 5s
-        max_attempts: 3
+      # restart_policy BU YERDA YO'Q — u yuqoridagi `restart: always`ni bosib
+      # ketadi. 2026-10-18 da server o'chib-yonganda backend (on-failure,
+      # chiqish kodi 0) qayta ishga tushmadi, nginx esa "backend"ni topa
+      # olmay yiqildi — sayt ~1,5 soat ishlamadi. max_attempts: 3 ham
+      # uch marta yiqilgan backendni butunlay o'chiq qoldirardi.
 
   # ── Frontend (Next.js) ─────────────────────────────────────
   frontend:
