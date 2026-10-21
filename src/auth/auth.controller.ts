@@ -32,13 +32,8 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
 
-/** Proxy orqali kelgan so'rovlarda ham haqiqiy IP ni olish */
+/** Express trust proxy tekshirgan IP; mijoz yuborgan sarlavhani o'qimaymiz. */
 function getIp(req: Request): string {
-  const forwarded = req.headers['x-forwarded-for'];
-  if (forwarded)
-    return (Array.isArray(forwarded) ? forwarded[0] : forwarded)
-      .split(',')[0]
-      .trim();
   return req.ip ?? 'unknown';
 }
 

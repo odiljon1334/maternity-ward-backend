@@ -17,6 +17,21 @@ describe('AuthController — mobil ilova login', () => {
     return { controller: new AuthController(authService), authService };
   };
 
+  it('audit IP mijoz yuborgan sarlavhadan emas, tekshirilgan req.ip dan olinadi', async () => {
+    const { controller, authService } = make('EMPLOYEE');
+    await controller.mobileLogin(
+      { username: 'a', password: 'b' },
+      {
+        ip: '203.0.113.10',
+        headers: { 'x-forwarded-for': '74.125.210.103' },
+      } as any,
+    );
+    expect(authService.login).toHaveBeenCalledWith(
+      { username: 'a', password: 'b' },
+      '203.0.113.10',
+    );
+  });
+
   it('xodim — token javobda qaytadi (cookie emas)', async () => {
     const { controller } = make('EMPLOYEE');
     await expect(
