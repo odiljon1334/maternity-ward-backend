@@ -1186,6 +1186,9 @@ model AuditLog {
 
   createdAt DateTime @default(now())
 
+  @@index([createdAt, id])
+  @@index([action, createdAt])
+  @@index([ip, createdAt])
   @@index([hospitalId, createdAt])
   @@index([userId, createdAt])
   @@index([entity, entityId])

@@ -20,6 +20,10 @@ export class AuditLogController {
     @Query('action') action?: string,
     @Query('page') page = '1',
     @Query('limit') limit = '50',
+    @Query('search') search?: string,
+    @Query('ip') ip?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
   ) {
     // Tenant rollari yuborgan targetHospitalId JWT scope'ini hech qachon
     // almashtira olmaydi. Platforma foydalanuvchisida jwtHospitalId null
@@ -31,6 +35,10 @@ export class AuditLogController {
       action,
       page: +page,
       limit: +limit,
+      search,
+      ip,
+      from,
+      to,
     });
   }
 
