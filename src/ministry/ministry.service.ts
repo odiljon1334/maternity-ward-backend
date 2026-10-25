@@ -19,6 +19,7 @@ export interface HospitalSummary {
   // Bugungi davomat
   todayPresent: number;
   todayAbsent: number;
+  todayIncomplete: number;
   todayLate: number;
   todayOnBreak: number; // hozir tushlik/coffeeda
   attendanceRate: number; // % kelganlar/rejada borlar
@@ -36,6 +37,7 @@ export interface MinistryOverview {
   totalEmployees: number;
   todayPresent: number;
   todayAbsent: number;
+  todayIncomplete: number;
   todayLate: number;
   attendanceRate: number;
   expectedMonthlySalary: number;
@@ -112,6 +114,7 @@ export class MinistryService {
         acc.totalEmployees += h.totalEmployees;
         acc.todayPresent += h.todayPresent;
         acc.todayAbsent += h.todayAbsent;
+        acc.todayIncomplete += h.todayIncomplete;
         acc.todayLate += h.todayLate;
         acc.expectedMonthlySalary += h.expectedMonthlySalary;
         acc.approvedMonthlySalary += h.approvedMonthlySalary;
@@ -122,6 +125,7 @@ export class MinistryService {
         totalEmployees: 0,
         todayPresent: 0,
         todayAbsent: 0,
+        todayIncomplete: 0,
         todayLate: 0,
         expectedMonthlySalary: 0,
         approvedMonthlySalary: 0,
@@ -129,7 +133,8 @@ export class MinistryService {
       },
     );
 
-    const total = totals.todayPresent + totals.todayAbsent;
+    const total =
+      totals.todayPresent + totals.todayAbsent + totals.todayIncomplete;
     const attendanceRate =
       total > 0 ? Math.round((totals.todayPresent / total) * 100) : 0;
 
@@ -353,6 +358,7 @@ export class MinistryService {
       expectedSalary,
       approvedPayroll,
       monthlyFinesAgg,
+      incompleteCount,
     ] = await Promise.all([
       // Jami aktiv xodimlar
       this.prisma.employee.count({
@@ -431,12 +437,19 @@ export class MinistryService {
           advanceApplied: true,
         },
       }),
+      this.prisma.attendanceRecord.count({
+        where: {
+          workDate: today,
+          status: 'INCOMPLETE',
+          employee: { hospitalId: hospital.id },
+        },
+      }),
     ]);
 
     // Kelmagan = rejadagilar - kelganlar (agar jadval yo'q bo'lsa: jami - kelgan)
     const expected = scheduledCount > 0 ? scheduledCount : totalEmployees;
-    const todayAbsent = Math.max(0, expected - presentCount);
-    const total = presentCount + todayAbsent;
+    const todayAbsent = Math.max(0, expected - presentCount - incompleteCount);
+    const total = presentCount + todayAbsent + incompleteCount;
     const attendanceRate =
       total > 0 ? Math.round((presentCount / total) * 100) : 0;
 
@@ -458,6 +471,7 @@ export class MinistryService {
       totalEmployees,
       todayPresent: presentCount,
       todayAbsent,
+      todayIncomplete: incompleteCount,
       todayLate: lateCount,
       todayOnBreak: onBreakCount,
       attendanceRate,
