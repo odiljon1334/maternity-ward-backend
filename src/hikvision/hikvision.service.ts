@@ -551,45 +551,95 @@ export class HikvisionService {
   // Gateway device list
   // ═══════════════════════════════════════════════════════════════════════════
 
-  private async requestGatewayDevices(): Promise<any[]> {
-    this.logger.log('fetchGatewayDevices: request...');
+  private gatewayDevicesInFlight: Promise<any[]> | null = null;
 
+  private requestGatewayDevices(): Promise<any[]> {
+    // Monitoring va bir nechta ochiq sahifa bir xil Gateway so‘rovini bo‘lishadi.
+    if (this.gatewayDevicesInFlight) return this.gatewayDevicesInFlight;
+    const request = this.loadGatewayDevices();
+    this.gatewayDevicesInFlight = request;
+    const clear = () => {
+      if (this.gatewayDevicesInFlight === request)
+        this.gatewayDevicesInFlight = null;
+    };
+    void request.then(clear, clear);
+    return request;
+  }
+
+  private async loadGatewayDevices(): Promise<any[]> {
     const url = this.buildUrl('/ISAPI/ContentMgmt/DeviceMgmt/deviceList', {
       format: 'json',
     });
-
-    const response = await this.digestRequest('POST', url, {
-      data: {
-        SearchDescription: {
-          position: 0,
-          maxResult: 100,
-          Filter: {
-            key: '',
-            devType: '',
-            protocolType: ['ehomeV5'],
-            devStatus: ['online', 'offline'],
-          },
-        },
-      },
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    const devices = response.data?.SearchResult?.MatchList ?? [];
-
-    this.logger.log(`fetchGatewayDevices: ${devices.length} devices`);
-
-    return devices;
+    const devices: any[] = [];
+    const seen = new Set<string>();
+    const pageSize = 100;
+    for (let page = 0; page < 50; page++) {
+      const response = await this.withRetry(
+        () =>
+          this.digestRequest('POST', url, {
+            data: {
+              SearchDescription: {
+                position: page * pageSize,
+                maxResult: pageSize,
+                Filter: {
+                  key: '',
+                  devType: '',
+                  protocolType: ['ehomeV5'],
+                  devStatus: ['online', 'offline'],
+                },
+              },
+            },
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        2,
+      );
+      const result = response.data?.SearchResult;
+      if (!result || !Array.isArray(result.MatchList)) {
+        throw new Error(
+          'Gateway deviceList javobi noto‘g‘ri: SearchResult.MatchList yo‘q',
+        );
+      }
+      let added = 0;
+      for (const item of result.MatchList) {
+        const id = item?.Device?.devIndex;
+        if (!id) throw new Error('Gateway deviceList: devIndex yo‘q');
+        if (!seen.has(id)) {
+          seen.add(id);
+          devices.push(item);
+          added++;
+        }
+      }
+      const total =
+        result.totalMatches == null ? NaN : Number(result.totalMatches);
+      if (Number.isFinite(total) && devices.length >= total) return devices;
+      if (result.MatchList.length < pageSize) {
+        if (Number.isFinite(total) && devices.length < total)
+          throw new Error('Gateway deviceList to‘liq olinmadi');
+        return devices;
+      }
+      if (added === 0)
+        throw new Error('Gateway pagination bir xil sahifani qaytardi');
+    }
+    throw new Error('Gateway deviceList sahifalash chegarasidan oshdi');
   }
 
-  private async fetchGatewayDevices(): Promise<any[]> {
+  private async fetchGatewayStatus() {
     try {
-      return await this.requestGatewayDevices();
-    } catch (err: any) {
-      this.logger.error(`fetchGatewayDevices error: ${err.message}`);
-
-      return [];
+      const devices = await this.requestGatewayDevices();
+      return {
+        statusMap: this.buildStatusMap(devices),
+        gatewayReachable: true,
+        statusCheckedAt: new Date().toISOString(),
+      };
+    } catch (err) {
+      this.logger.warn(
+        'Gateway holatini olib bo‘lmadi; terminallar holati noma’lum',
+      );
+      return {
+        statusMap: {} as Record<string, string>,
+        gatewayReachable: false,
+        statusCheckedAt: null,
+      };
     }
   }
 
@@ -600,7 +650,9 @@ export class HikvisionService {
       const device = item?.Device;
 
       if (device?.devIndex) {
-        statusMap[device.devIndex] = device.devStatus ?? 'offline';
+        const status = String(device.devStatus ?? '').toLowerCase();
+        statusMap[device.devIndex] =
+          status === 'online' || status === 'offline' ? status : 'unknown';
       }
     }
 
@@ -698,13 +750,14 @@ export class HikvisionService {
       },
     });
 
-    const gatewayDevices = await this.fetchGatewayDevices();
-
-    const statusMap = this.buildStatusMap(gatewayDevices);
+    const { statusMap, gatewayReachable, statusCheckedAt } =
+      await this.fetchGatewayStatus();
 
     return terminals.map((terminal) => ({
       ...terminal,
-      onlineStatus: statusMap[terminal.devIndex] ?? 'offline',
+      onlineStatus: statusMap[terminal.devIndex] ?? 'unknown',
+      gatewayReachable,
+      statusCheckedAt,
     }));
   }
 
@@ -715,13 +768,14 @@ export class HikvisionService {
       },
     });
 
-    const gatewayDevices = await this.fetchGatewayDevices();
-
-    const statusMap = this.buildStatusMap(gatewayDevices);
+    const { statusMap, gatewayReachable, statusCheckedAt } =
+      await this.fetchGatewayStatus();
 
     return terminals.map((terminal) => ({
       ...terminal,
-      onlineStatus: statusMap[terminal.devIndex] ?? 'offline',
+      onlineStatus: statusMap[terminal.devIndex] ?? 'unknown',
+      gatewayReachable,
+      statusCheckedAt,
     }));
   }
 
@@ -776,10 +830,10 @@ export class HikvisionService {
     const result = new Map<string, boolean>();
     let position = 0;
     const pageSize = 30;
+    const searchID = crypto.randomUUID();
 
     // Cheksiz tsiklga tushib qolmaslik uchun xavfsizlik chegarasi
     for (let page = 0; page < 500; page++) {
-      const searchID = crypto.randomUUID();
       const response = await this.digestRequest('POST', url, {
         data: {
           UserInfoSearchCond: {
@@ -792,7 +846,14 @@ export class HikvisionService {
       });
 
       const search = response.data?.UserInfoSearch;
-      const list: any[] = search?.UserInfo ?? [];
+      if (
+        !search ||
+        (search.UserInfo !== undefined && !Array.isArray(search.UserInfo))
+      ) {
+        throw new Error('Terminal UserInfoSearch javobi noto‘g‘ri');
+      }
+      const list: any[] = search.UserInfo ?? [];
+      const beforeCount = result.size;
 
       for (const u of list) {
         if (u?.employeeNo) {
@@ -803,11 +864,18 @@ export class HikvisionService {
       const status = search?.responseStatusStrg;
       const numOfMatches = Number(search?.numOfMatches ?? list.length);
 
-      if (status !== 'MORE' || numOfMatches < pageSize) break;
-      position += pageSize;
+      if (status !== 'MORE') return result;
+      if (numOfMatches <= 0 || result.size === beforeCount) {
+        throw new Error(
+          'Terminal foydalanuvchi sahifasi takrorlandi yoki to‘liq olinmadi',
+        );
+      }
+      position += list.length;
     }
 
-    return result;
+    throw new Error(
+      'Terminal foydalanuvchi qidiruvi sahifalash chegarasidan oshdi',
+    );
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
