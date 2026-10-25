@@ -537,7 +537,6 @@ export class AttendanceService {
       ctx;
     const data = {
       checkIn: null,
-      rawCheckInTime: null,
       checkOut: eventDate,
       rawCheckOutTime: eventDate,
       checkOutSource: 'TERMINAL',

@@ -170,4 +170,20 @@ describe('Terminal CHECK_OUT without a check-in', () => {
     ).rejects.toThrow('chiqishdan keyin');
     expect(f.prisma.attendanceRecord.update).not.toHaveBeenCalled();
   });
+  it('preserves existing raw arrival evidence even when its processed check-in is missing', async () => {
+    const raw = new Date('2026-10-25T08:00:00+05:00');
+    const f = setup({
+      id: 'record-1',
+      status: 'ABSENT',
+      checkIn: null,
+      rawCheckInTime: raw,
+      checkOut: null,
+    });
+    await f.scan();
+    expect(f.record()).toMatchObject({
+      status: 'INCOMPLETE',
+      checkIn: null,
+      rawCheckInTime: raw,
+    });
+  });
 });
