@@ -296,22 +296,54 @@ export class AttendanceService {
     }
 
     const eventDate = DateUtil.parseTerminalTime(eventTime);
-    const workDate = DateUtil.startOfDay(eventDate);
+    let workDate = DateUtil.startOfDay(eventDate);
     const tzDate = dayjs(eventDate).tz(TZ);
 
     // 3. Bugungi e'lon qilingan holat va faol ish jadvali.
     // `findTodaySchedule` faqat WORKING (yoki kechagi tungi WORKING) ni
     // qaytaradi. Ta'til/kasallik/dam olishni "grafik yo'q" bilan adashtirmaslik
     // uchun bugungi xom Schedule yozuvini alohida o'qiymiz.
-    const declaredSchedule = await this.prisma.schedule.findUnique({
+    let declaredSchedule = await this.prisma.schedule.findUnique({
       where: { employeeId_date: { employeeId: employee.id, date: workDate } },
       include: { shift: true },
     });
-    const schedule = await this.findTodaySchedule(
-      employee.id,
-      workDate,
-      tzDate,
-    );
+    let schedule = await this.findTodaySchedule(employee.id, workDate, tzDate);
+    // An explicit morning exit can finish yesterday's overnight shift even
+    // when today also has a plan. This changes the work day, never arrival time.
+    if (
+      terminalEventType === TerminalEventType.CHECK_OUT &&
+      tzDate.hour() < 12
+    ) {
+      const previousDay = DateUtil.startOfDay(
+        dayjs(workDate).subtract(1, 'day'),
+      );
+      const previous = await this.prisma.schedule.findUnique({
+        where: {
+          employeeId_date: { employeeId: employee.id, date: previousDay },
+        },
+        include: { shift: true },
+      });
+      if (previous?.status === 'WORKING' && previous.shift?.isOvernight) {
+        const end = this.buildExpectedCheckOut(previousDay, previous, null);
+        const todayStart = declaredSchedule?.shift
+          ? shiftStartAt(
+              workDate,
+              declaredSchedule.shift,
+              declaredSchedule.expectedStartAt,
+            )
+          : null;
+        // A bounded late-exit window prevents attaching an afternoon scan to
+        // an old shift. Events outside it stay visible for individual review.
+        if (
+          eventDate.getTime() <= end.getTime() + 4 * 3600_000 &&
+          (!todayStart || eventDate < todayStart)
+        ) {
+          workDate = previousDay;
+          schedule = previous;
+          declaredSchedule = previous;
+        }
+      }
+    }
     const hasDeclaredPlan = Boolean(declaredSchedule || schedule);
     const fallbackShift = !hasDeclaredPlan
       ? await this.findFallbackShift(employee.hospitalId, tzDate)
@@ -453,13 +485,11 @@ export class AttendanceService {
         return this.handleCheckIn(ctx);
 
       case TerminalEventType.CHECK_OUT:
-        if (!attendance) {
-          this.logger.warn(
-            `${employee.fullName}: CHECK_OUT keldi lekin check-in yo'q — ignore`,
-          );
+        if (!attendance?.checkIn) {
+          await this.saveIncompleteCheckout(ctx);
           return null;
         }
-        if (attendance.checkOut) {
+        if (attendance.checkOut && !attendance.autoCheckOut) {
           this.logger.log(
             `${employee.fullName}: allaqachon check-out qilgan — ignore`,
           );
@@ -500,6 +530,69 @@ export class AttendanceService {
   // ──────────────────────────────────────────────────────────────────────────────
   // PRIVATE: ACTION HANDLERS
   // ──────────────────────────────────────────────────────────────────────────────
+
+  /** A real exit is evidence of a scan, not evidence of an arrival time. */
+  private async saveIncompleteCheckout(ctx: EventContext): Promise<void> {
+    const { employee, eventDate, workDate, schedule, fallbackShift, deviceId } =
+      ctx;
+    const data = {
+      checkIn: null,
+      rawCheckInTime: null,
+      checkOut: eventDate,
+      rawCheckOutTime: eventDate,
+      checkOutSource: 'TERMINAL',
+      autoCheckOut: false,
+      status: AttendanceStatus.INCOMPLETE,
+      lateMinutes: 0,
+      earlyLeaveMin: 0,
+      overtimeMinutes: 0,
+      netWorkMin: 0,
+      ...(deviceId && { deviceId }),
+    };
+    // The unique employee/day key handles concurrent first scans. A conditional
+    // update cannot overwrite a real check-in or an already recorded first exit.
+    await this.prisma.attendanceRecord.createMany({
+      data: {
+        ...data,
+        employeeId: employee.id,
+        scheduleId: schedule?.id,
+        workDate,
+        expectedCheckIn: this.buildExpectedCheckIn(
+          workDate,
+          schedule,
+          fallbackShift,
+        ),
+        expectedCheckOut: this.buildExpectedCheckOut(
+          workDate,
+          schedule,
+          fallbackShift,
+        ),
+      },
+      skipDuplicates: true,
+    });
+    await this.prisma.attendanceRecord.updateMany({
+      where: {
+        employeeId: employee.id,
+        workDate,
+        checkIn: null,
+        checkOut: null,
+        status: { in: [AttendanceStatus.ABSENT, AttendanceStatus.INCOMPLETE] },
+      },
+      data,
+    });
+    const record = await this.prisma.attendanceRecord.findFirst({
+      where: { employeeId: employee.id, workDate },
+    });
+    if (record) {
+      await this.prisma.attendanceEvent.updateMany({
+        where: { employeeId: employee.id, rawTime: eventDate, recordId: null },
+        data: { recordId: record.id },
+      });
+    }
+    this.logger.warn(
+      `CHECK_OUT saqlandi, kirish qaydi yo'q — tekshirish kerak (employee=${employee.id})`,
+    );
+  }
 
   /** Xodim keldi — yangi AttendanceRecord yaratadi */
   private async handleCheckIn(
@@ -625,6 +718,29 @@ export class AttendanceService {
         )
       : 0;
 
+    if (rec.checkOut && eventDate > rec.checkOut) {
+      throw new BadRequestException(
+        'Kirish vaqti saqlangan chiqishdan keyin. Davomatni haqiqiy dalillar bilan tekshiring',
+      );
+    }
+    const earlyLeaveMin =
+      rec.checkOut && schedule
+        ? this.calcEarlyLeaveMinutes(rec.checkOut, rec.expectedCheckOut)
+        : 0;
+    const overtimeMinutes =
+      rec.checkOut && schedule
+        ? this.calcOvertimeMinutes(rec.checkOut, rec.expectedCheckOut)
+        : 0;
+    const netWorkMin = rec.checkOut
+      ? calcNetWorkMin(
+          eventDate,
+          rec.checkOut,
+          rec.lunchOut,
+          rec.lunchIn,
+          schedule?.shift?.lunchStart,
+          schedule?.shift?.lunchEnd,
+        )
+      : 0;
     const updated = await this.prisma.attendanceRecord.update({
       where: { id: rec.id },
       data: {
@@ -633,7 +749,10 @@ export class AttendanceService {
         ...(deviceId && { deviceId }),
         expectedCheckIn,
         lateMinutes,
-        status: lateMinutes > 0 ? 'LATE' : 'PRESENT',
+        status: this.recalcStatus('PRESENT', lateMinutes, earlyLeaveMin),
+        earlyLeaveMin,
+        overtimeMinutes,
+        netWorkMin,
       },
     });
 
@@ -1106,7 +1225,9 @@ export class AttendanceService {
     // Ish kuni deb hisoblanadigan statuslar (dam olish/ta'til/reja kirmaydi)
     const WORKED = ['PRESENT', 'LATE', 'EARLY_LEAVE', 'LATE_EARLY'];
     const expected = rows.filter(
-      (r) => WORKED.includes(r.status) || r.status === 'ABSENT',
+      (r) =>
+        WORKED.includes(r.status) ||
+        ['ABSENT', 'INCOMPLETE'].includes(r.status),
     );
 
     const stats = {
@@ -1122,6 +1243,7 @@ export class AttendanceService {
           ['LATE', 'LATE_EARLY'].includes(r.status) && unexcusedLate(r) > 0,
       ).length,
       absent: rows.filter((r) => r.status === 'ABSENT').length,
+      incomplete: rows.filter((r) => r.status === 'INCOMPLETE').length,
       earlyLeave: rows.filter((r) =>
         ['EARLY_LEAVE', 'LATE_EARLY'].includes(r.status),
       ).length,
@@ -1488,15 +1610,25 @@ export class AttendanceService {
           (sum, record) => sum + record.overtimeMinutes,
           0,
         ),
-        daysWorked: records.filter((record) => record.status !== 'ABSENT')
-          .length,
+        daysWorked: records.filter((record) =>
+          ['PRESENT', 'LATE', 'EARLY_LEAVE', 'LATE_EARLY'].includes(
+            record.status,
+          ),
+        ).length,
         daysAbsent: records.filter((record) => record.status === 'ABSENT')
           .length,
         penaltyLateMin: 0,
         deductionAmount: 0,
       };
     }
-    return { ...cached, totalLateMin };
+    return {
+      ...cached,
+      totalLateMin,
+      daysWorked: records.filter((r) =>
+        ['PRESENT', 'LATE', 'EARLY_LEAVE', 'LATE_EARLY'].includes(r.status),
+      ).length,
+      daysAbsent: records.filter((r) => r.status === 'ABSENT').length,
+    };
   }
 
   async manualCheckIn(
@@ -1546,9 +1678,41 @@ export class AttendanceService {
     });
 
     if (existing) {
+      if (existing.checkOut && eventDate > existing.checkOut) {
+        throw new BadRequestException(
+          "Kelish vaqti chiqish vaqtidan keyin bo'lishi mumkin emas",
+        );
+      }
+      const earlyLeaveMin =
+        existing.checkOut && schedule
+          ? this.calcEarlyLeaveMinutes(existing.checkOut, expectedCheckOut)
+          : 0;
+      const overtimeMinutes =
+        existing.checkOut && schedule
+          ? this.calcOvertimeMinutes(existing.checkOut, expectedCheckOut)
+          : 0;
+      const netWorkMin = existing.checkOut
+        ? calcNetWorkMin(
+            eventDate,
+            existing.checkOut,
+            existing.lunchOut,
+            existing.lunchIn,
+            schedule?.shift?.lunchStart,
+            schedule?.shift?.lunchEnd,
+          )
+        : 0;
       return this.prisma.attendanceRecord.update({
         where: { id: existing.id },
-        data: { checkIn: eventDate, lateMinutes, status, note },
+        data: {
+          checkIn: eventDate,
+          checkInSource: 'MANUAL',
+          lateMinutes,
+          status: this.recalcStatus(status, lateMinutes, earlyLeaveMin),
+          earlyLeaveMin,
+          overtimeMinutes,
+          netWorkMin,
+          note,
+        },
       });
     }
 

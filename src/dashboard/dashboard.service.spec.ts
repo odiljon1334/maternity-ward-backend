@@ -50,4 +50,26 @@ describe('DashboardService excused lateness', () => {
       },
     ]);
   });
+  it('keeps an unknown arrival out of both present and absent totals', async () => {
+    const prisma: any = {
+      employee: { count: jest.fn().mockResolvedValue(1) },
+      attendanceRecord: {
+        count: jest.fn(async ({ where }: any) =>
+          where.status === 'INCOMPLETE' ? 1 : 0,
+        ),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      payrollRecord: {
+        aggregate: jest.fn().mockResolvedValue({ _sum: { netSalary: 0 } }),
+      },
+      schedule: {
+        count: jest.fn().mockResolvedValue(1),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+    };
+    const summary = await new DashboardService(prisma).getOverview();
+    expect(summary.todayPresent).toBe(0);
+    expect(summary.todayAbsent).toBe(0);
+    expect(summary.todayIncomplete).toBe(1);
+  });
 });

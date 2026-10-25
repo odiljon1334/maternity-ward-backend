@@ -542,7 +542,9 @@ export class MinistryService {
 
     return departments.map((dept) => {
       const records = dept.employees.flatMap((e) => e.attendances);
-      const present = records.filter((r) => r.status !== 'ABSENT').length;
+      const present = records.filter((r) =>
+        ['PRESENT', 'LATE', 'EARLY_LEAVE', 'LATE_EARLY'].includes(r.status),
+      ).length;
       const absent = records.filter((r) => r.status === 'ABSENT').length;
       const late = records.filter((r) =>
         ['LATE', 'LATE_EARLY'].includes(r.status),

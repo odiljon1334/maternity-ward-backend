@@ -97,6 +97,7 @@ enum AttendanceStatus {
   PRESENT
   LATE
   ABSENT
+  INCOMPLETE // Chiqish bor, haqiqiy kirish vaqti nomaʼlum — tekshirish kerak
   EARLY_LEAVE
   LATE_EARLY
 }

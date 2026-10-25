@@ -102,8 +102,15 @@ export class PayrollService {
       where: { employeeId, workDate: { gte: start, lte: end } },
     });
 
+    if (records.some((r) => r.status === 'INCOMPLETE')) {
+      throw new BadRequestException(
+        "Davomatda kirish qaydi yo'q kunlar bor. Maosh hisoblashdan oldin haqiqiy ma'lumotlar bilan tekshiring",
+      );
+    }
     const baseSalary = Number(emp.baseSalary);
-    const workDays = records.filter((r) => r.status !== 'ABSENT').length;
+    const workDays = records.filter((r) =>
+      ['PRESENT', 'LATE', 'EARLY_LEAVE', 'LATE_EARLY'].includes(r.status),
+    ).length;
     const explicitAbsences = records.filter(
       (r) => r.status === 'ABSENT',
     ).length;
@@ -639,6 +646,20 @@ export class PayrollService {
         'Faqat DRAFT holatdagilarni tasdiqlash mumkin',
       );
 
+    const attendance = await this.prisma.attendanceRecord.findMany({
+      where: {
+        employeeId: record.employeeId,
+        workDate: {
+          gte: DateUtil.startOfMonth(record.year, record.month),
+          lte: DateUtil.endOfMonth(record.year, record.month),
+        },
+      },
+    });
+    if (attendance.some((r) => r.status === 'INCOMPLETE')) {
+      throw new BadRequestException(
+        "Kirish qaydi yo'q davomat tekshirilmaguncha maoshni tasdiqlab bo'lmaydi",
+      );
+    }
     return this.prisma.payrollRecord.update({
       where: { id },
       data: { status: 'APPROVED', approvedAt: new Date() },

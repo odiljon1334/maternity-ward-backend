@@ -263,10 +263,18 @@ export class CronService {
         const absent = schedules.filter(
           (s) => !s.attendance || s.attendance.status === 'ABSENT',
         );
-        const onTime = schedules.length - late.length - absent.length;
+        const incomplete = schedules.filter(
+          (s) => s.attendance?.status === 'INCOMPLETE',
+        );
+        const onTime =
+          schedules.length - late.length - absent.length - incomplete.length;
 
         // Hamma keldi — qisqa xabar
-        if (late.length === 0 && absent.length === 0) {
+        if (
+          late.length === 0 &&
+          absent.length === 0 &&
+          incomplete.length === 0
+        ) {
           const msg =
             `✅ <b>${todayStr} — 10:00 holati</b>\n\n` +
             `Kunduzgi smendagi barcha <b>${schedules.length}</b> nafar hodim o'z vaqtida keldi! 🎉`;
@@ -281,6 +289,8 @@ export class CronService {
         }
 
         let msg = `⏰ <b>Kech kelish hisoboti — ${todayStr}</b>\n\n`;
+        if (incomplete.length)
+          msg += `Kirish qaydi yo‘q, tekshirish kerak: ${incomplete.length} nafar.\n\n`;
 
         if (late.length > 0) {
           msg += `🟡 <b>Kech kelganlar (${late.length} nafar):</b>\n`;

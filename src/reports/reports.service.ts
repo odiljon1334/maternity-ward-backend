@@ -151,6 +151,7 @@ export class ReportsService {
       PRESENT: '✓',
       LATE: 'K', // Kechikdi
       ABSENT: '—',
+      INCOMPLETE: '?',
       EARLY_LEAVE: 'E', // Erta ketdi
       LATE_EARLY: 'KE',
     };
@@ -159,6 +160,7 @@ export class ReportsService {
       PRESENT: 'FFE8F5E9',
       LATE: 'FFFFF9C4',
       ABSENT: 'FFFFEBEE',
+      INCOMPLETE: 'FFFFF3CD',
       EARLY_LEAVE: 'FFFFF3E0',
       LATE_EARLY: 'FFFCE4EC',
     };
@@ -268,7 +270,7 @@ export class ReportsService {
     legendRow.getCell(1).value = 'Belgilar:';
     legendRow.getCell(1).font = { bold: true };
     legendRow.getCell(2).value =
-      '✓ = Keldi  |  K = Kechikdi  |  E = Erta ketdi  |  — = Kelmadi  |  ○ = Dam olish kuni';
+      '✓ = Keldi  |  K = Kechikdi  |  E = Erta ketdi  |  — = Kelmadi  |  ○ = Dam olish kuni  |  ? = Kirish qaydi yo‘q, tekshirish kerak';
     sheet.mergeCells(employees.length + 4, 2, employees.length + 4, 10);
 
     return workbook.xlsx.writeBuffer() as Promise<ExcelJS.Buffer>;
@@ -762,6 +764,7 @@ export class ReportsService {
       PRESENT: '✓',
       LATE: 'K',
       ABSENT: '—',
+      INCOMPLETE: '?',
       EARLY_LEAVE: 'E',
       LATE_EARLY: 'KE',
       DAY_OFF: '○',
@@ -776,6 +779,7 @@ export class ReportsService {
       PRESENT: 'FFE8F5E9',
       LATE: 'FFFFF9C4',
       ABSENT: 'FFFFEBEE',
+      INCOMPLETE: 'FFFFF3CD',
       EARLY_LEAVE: 'FFFFF3E0',
       LATE_EARLY: 'FFFCE4EC',
     };
@@ -889,7 +893,7 @@ export class ReportsService {
     lgRow.getCell(1).value = 'Belgilar:';
     lgRow.getCell(1).font = { bold: true };
     lgRow.getCell(2).value =
-      '✓=Keldi  K=Kechikdi  E=Erta ketdi  —=Kelmadi  ○=Dam olish';
+      '✓=Keldi  K=Kechikdi  E=Erta ketdi  —=Kelmadi  ○=Dam olish  ?=Kirish qaydi yo‘q, tekshirish kerak';
     sheet.mergeCells(lgRow.number, 2, lgRow.number, 8);
 
     // Column widths
@@ -924,6 +928,7 @@ export class ReportsService {
     EARLY_LEAVE: 'Я',
     LATE_EARLY: 'Я',
     ABSENT: 'НН',
+    INCOMPLETE: '?', // Needs review; neither absence nor confirmed worked time.
     DAY_OFF: 'В',
     HOLIDAY: 'В',
     VACATION: 'ОТ',
@@ -1232,7 +1237,7 @@ export class ReportsService {
     legendRow.getCell(1).font = { bold: true };
     sheet.mergeCells(rowCursor + 1, 2, rowCursor + 1, totalCols);
     legendRow.getCell(2).value =
-      "Я=Ishladi  Н=Tungi soatlar (22:00–06:00), soat qatorida \"jami/tungi\"  НН=Sababi aniqlanmagan kelmaslik  В=Dam olish/bayram (grafik qo'yilmagan kun ham)  ОТ=Navbatdagi ta'til  Б=Kasallik  Р=Tug'ruq ta'tili  ПК=Malaka oshirish. Tungi smena soatlari kalendar kunlariga bo'linadi (20:00–08:00 → 4 + 8).";
+      "Я=Ishladi  Н=Tungi soatlar (22:00–06:00), soat qatorida \"jami/tungi\"  НН=Sababi aniqlanmagan kelmaslik  В=Dam olish/bayram (grafik qo'yilmagan kun ham)  ОТ=Navbatdagi ta'til  Б=Kasallik  Р=Tug'ruq ta'tili  ПК=Malaka oshirish  ?=Kirish qaydi yo‘q, tekshirish kerak. Tungi smena soatlari kalendar kunlariga bo'linadi (20:00–08:00 → 4 + 8).";
 
     return workbook.xlsx.writeBuffer() as Promise<ExcelJS.Buffer>;
   }

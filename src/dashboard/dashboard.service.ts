@@ -35,6 +35,7 @@ export class DashboardService {
       monthlyPayroll,
       todayAttendances,
       scheduledTodayCount,
+      todayIncompleteCount,
     ] = await Promise.all([
       this.prisma.employee.count({ where: empFilter }),
 
@@ -80,6 +81,9 @@ export class DashboardService {
       this.prisma.schedule.count({
         where: { date: today, status: 'WORKING', employee: empFilter },
       }),
+      this.prisma.attendanceRecord.count({
+        where: { workDate: today, status: 'INCOMPLETE', employee: empFilter },
+      }),
     ]);
 
     // Bugun ishlashi kerak, lekin davomat yozuvi yo'q xodimlar. Smenasi
@@ -112,8 +116,12 @@ export class DashboardService {
     const todayLateCount = todayLateRecords.filter(
       (record) => unexcusedLate(record) > 0,
     ).length;
-    const todayAbsentCount = Math.max(0, expectedToday - todayPresentCount);
-    const total = todayPresentCount + todayAbsentCount;
+    const todayAbsentCount = Math.max(
+      0,
+      expectedToday - todayPresentCount - (todayIncompleteCount ?? 0),
+    );
+    const total =
+      todayPresentCount + todayAbsentCount + (todayIncompleteCount ?? 0);
 
     // Bugun rejada bor, smenasi boshlangan, lekin kelmagan xodimlar (max 20 ta)
     const upcomingIds = new Set(upcoming.map((sch) => sch.employeeId));
@@ -140,6 +148,7 @@ export class DashboardService {
       totalEmployees,
       todayPresent: todayPresentCount,
       todayAbsent: todayAbsentCount,
+      todayIncomplete: todayIncompleteCount ?? 0,
       /** Smenasi hali boshlanmagan (Rejada) xodimlar */
       todayUpcoming: upcoming.length,
       todayLate: todayLateCount,
@@ -282,7 +291,9 @@ export class DashboardService {
 
     return depts.map((d) => {
       const allRecords = d.employees.flatMap((e) => e.attendances);
-      const present = allRecords.filter((r) => r.status !== 'ABSENT').length;
+      const present = allRecords.filter((r) =>
+        ['PRESENT', 'LATE', 'EARLY_LEAVE', 'LATE_EARLY'].includes(r.status),
+      ).length;
       const absent = allRecords.filter((r) => r.status === 'ABSENT').length;
       const late = allRecords.filter(
         (r) =>
