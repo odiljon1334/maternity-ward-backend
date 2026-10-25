@@ -54,5 +54,24 @@ The terminal AcsEvent history endpoint was verified read-only. This firmware
 accepts explicit local offset timestamps (`+05:00`); a UTC `Z` request returned
 HTTP 400. Historical replay has NOT been run. Event types/serial numbers and
 idempotency must be verified before importing historical events into attendance.
-Current bulk synchronization job state is process memory, unlike school-erp-saas
-BullMQ persistence; a durable queue is a separate migration, not part of this fix.
+Bulk sync now uses the PostgreSQL `HikSyncTask` queue. Acceptance is committed
+before the API returns. A partial unique index prevents concurrent active tasks
+for the same hospital, including across backend replicas. Workers claim tasks
+atomically with `FOR UPDATE SKIP LOCKED`, renew a 60-second lease every 5 seconds,
+and persist progress with the heartbeat. A dead worker's task is reclaimable once
+its lease expires. An old lease owner cannot overwrite a newer worker's result.
+
+Recovery is at-least-once: each attempt re-reads terminal users/faces and skips
+already-present entries. External device writes cannot be made transactional with
+PostgreSQL, so a request in flight during a crash can be repeated. Retries are
+bounded to 5 attempts, with waits of 30, 60, 120 and 240 seconds.
+Permanent per-person errors remain visible; transient failures reschedule the task.
+No images or gateway passwords are stored in queue payloads. Completed/failed tasks
+remain in PostgreSQL; Redis eviction cannot delete them. Database backups must
+include this table.
+
+`npm run test:hik-sync-queue` creates and removes an isolated schema in a LOCAL
+PostgreSQL database. It exercises concurrent enqueue, a real SIGKILL, lease recovery,
+progress persistence, retry limits and stale-owner fencing. It never enrolls users
+or sends real gateway requests. Normal unit tests still cover the sync business
+logic. Apply migrations BEFORE starting the new backend version.

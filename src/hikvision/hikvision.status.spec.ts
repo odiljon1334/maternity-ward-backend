@@ -9,7 +9,7 @@ function setup() {
     },
   };
   const config = { get: (_key: string, fallback: unknown) => fallback };
-  const service = new HikvisionService(config as any, prisma as any);
+  const service = new HikvisionService(config as any, prisma as any, {} as any);
   const request = jest.spyOn(service as any, 'digestRequest');
   return { service, request };
 }

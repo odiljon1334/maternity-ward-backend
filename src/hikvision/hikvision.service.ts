@@ -1,11 +1,18 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleInit,
+  OnModuleDestroy,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios, { AxiosResponse } from 'axios';
 import sharp from 'sharp';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import * as crypto from 'crypto';
 import FormData from 'form-data';
 import * as fs from 'fs';
 import * as path from 'path';
+import { HikSyncQueueService } from './hik-sync-queue.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   translateHikvisionError,
@@ -37,8 +44,9 @@ export class HikvisionApiError extends Error {
 }
 
 @Injectable()
-export class HikvisionService {
+export class HikvisionService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(HikvisionService.name);
+  private readonly syncLeaseContext = new AsyncLocalStorage<() => void>();
 
   private readonly baseUrl: string;
   private readonly gatewayUser: string;
@@ -47,6 +55,7 @@ export class HikvisionService {
   constructor(
     private readonly config: ConfigService,
     private readonly prisma: PrismaService,
+    private readonly syncQueue: HikSyncQueueService,
   ) {
     this.baseUrl = (
       this.config.get<string>('HIK_GATEWAY_URL', 'http://95.111.252.83:8080') ||
@@ -208,6 +217,7 @@ export class HikvisionService {
     const methodUpper = method.toUpperCase();
 
     const send = async (authorization?: string) => {
+      this.syncLeaseContext.getStore()?.();
       // FormData — oqim: har yuborishda yangisi yaratiladi (build())
       const { data, headers } = build();
       try {
@@ -895,18 +905,26 @@ export class HikvisionService {
   //    bitta aniq xato bilan to'xtatiladi.
   //  - Yuz rasmi har xodim uchun bir marta siqiladi (har terminal uchun emas).
 
-  private readonly syncJobs = new Map<string, HikSyncJob>();
+  onModuleInit() {
+    this.syncQueue.start((job, assertLease) =>
+      this.syncLeaseContext.run(assertLease, () =>
+        this.runSync(job, assertLease),
+      ),
+    );
+  }
 
-  /** Sync'ni boshlaydi (yoki ishlayotganini qaytaradi) — darhol javob beradi */
-  startSync(hospitalId: string): HikSyncJob {
-    this.pruneSyncJobs();
-    const running = this.syncJobs.get(hospitalId);
-    if (running?.state === 'RUNNING') return this.snapshot(running);
+  async onModuleDestroy() {
+    await this.syncQueue.stop();
+  }
 
-    const job: HikSyncJob = {
+  /** Enqueue is committed before the API acknowledges acceptance. */
+  async startSync(hospitalId: string): Promise<HikSyncJob> {
+    return this.syncQueue.enqueue({
       id: crypto.randomUUID(),
       hospitalId,
       state: 'RUNNING',
+      queuePhase: 'WAITING',
+      attempt: 0,
       total: 0,
       withoutPhoto: 0,
       units: 0,
@@ -919,55 +937,22 @@ export class HikvisionService {
       perTerminal: [],
       startedAt: new Date().toISOString(),
       finishedAt: null,
-      message: null,
-    };
-    this.syncJobs.set(hospitalId, job);
-    void this.runSync(job).catch((err: any) => {
-      this.logger.error(
-        `Sync ishdan chiqdi (hospital=${hospitalId}): ${err?.message ?? err}`,
-      );
-      job.state = 'FAILED';
-      job.message =
-        "Sinxronlash kutilmagan xato bilan to'xtadi. Qayta urinib ko'ring.";
-      job.finishedAt = new Date().toISOString();
+      message: 'Vazifa doimiy navbatga qo‘shildi',
     });
-    return this.snapshot(job);
   }
 
-  /** Oxirgi (yoki ishlayotgan) sync holati; hech qachon ishga tushmagan bo'lsa — null */
-  getSyncStatus(hospitalId: string): HikSyncJob | null {
-    this.pruneSyncJobs();
-    const job = this.syncJobs.get(hospitalId);
-    return job ? this.snapshot(job) : null;
+  getSyncStatus(hospitalId: string): Promise<HikSyncJob | null> {
+    return this.syncQueue.latest(hospitalId);
   }
 
-  /** Sync'ni boshlab, tugashini kutadi (skriptlar va testlar uchun) */
+  /** Internal scripts can await completion; HTTP endpoints never block for a run. */
   async syncHospital(hospitalId: string): Promise<HikSyncJob> {
-    this.startSync(hospitalId);
-    const job = this.syncJobs.get(hospitalId)!;
-    while (job.state === 'RUNNING') {
-      await new Promise((r) => setTimeout(r, 50));
-    }
-    return this.snapshot(job);
-  }
-
-  private snapshot(job: HikSyncJob): HikSyncJob {
-    return {
-      ...job,
-      errors: [...job.errors],
-      perTerminal: job.perTerminal.map((t) => ({ ...t })),
-    };
-  }
-
-  private pruneSyncJobs() {
-    const cutoff = Date.now() - SYNC_JOB_TTL_MS;
-    for (const [id, j] of this.syncJobs) {
-      if (
-        j.state !== 'RUNNING' &&
-        j.finishedAt &&
-        Date.parse(j.finishedAt) < cutoff
-      )
-        this.syncJobs.delete(id);
+    const accepted = await this.startSync(hospitalId);
+    while (true) {
+      const job = await this.getSyncStatus(hospitalId);
+      if (!job || job.id !== accepted.id) throw new Error('Sync task changed');
+      if (job.state !== 'RUNNING') return job;
+      await new Promise((resolve) => setTimeout(resolve, 250));
     }
   }
 
@@ -976,7 +961,11 @@ export class HikvisionService {
     else job.errorsTruncated++;
   }
 
-  private async runSync(job: HikSyncJob): Promise<void> {
+  private async runSync(
+    job: HikSyncJob,
+    assertLease: () => void = () => undefined,
+  ): Promise<void> {
+    assertLease();
     const terminals = await this.prisma.hikTerminal.findMany({
       where: { hospitalId: job.hospitalId, isActive: true },
     });
@@ -1039,6 +1028,7 @@ export class HikvisionService {
     );
 
     await runPool(terminals, terminalLimit, async (terminal) => {
+      assertLease();
       const stat = {
         terminalId: terminal.id,
         terminalName: terminal.name,
@@ -1062,6 +1052,7 @@ export class HikvisionService {
           this.getExistingPersons(terminal.devIndex),
         );
       } catch (err: any) {
+        if (this.isTransientError(err)) job.retryable = true;
         stat.aborted = true;
         fail(employees.length);
         this.pushSyncError(job, {
@@ -1079,6 +1070,7 @@ export class HikvisionService {
       let remaining = employees.length;
 
       await runPool(employees, deviceLimit, async (employee) => {
+        assertLease();
         if (stat.aborted) return; // qolganlari pastda bir yo'la hisoblanadi
         remaining--;
         const employeeNo = employee.employeeNo!;
@@ -1107,23 +1099,30 @@ export class HikvisionService {
         }
 
         try {
+          assertLease();
           let changed = false;
           if (!personExists) {
-            await this.withRetry(() =>
-              this.addPerson(terminal.devIndex, {
-                employeeNo,
-                name: employee.fullName,
-              }),
+            await this.withRetry(
+              () => (
+                assertLease(),
+                this.addPerson(terminal.devIndex, {
+                  employeeNo,
+                  name: employee.fullName,
+                })
+              ),
             ).catch((err) => {
               if (!this.isAlreadyExistsError(err?.message ?? '')) throw err;
             });
             changed = true;
           }
           if (!faceExists) {
-            await this.withRetry(() =>
-              this.addFacePicture(terminal.devIndex, employeeNo, face!, {
-                compressed: true,
-              }),
+            await this.withRetry(
+              () => (
+                assertLease(),
+                this.addFacePicture(terminal.devIndex, employeeNo, face!, {
+                  compressed: true,
+                })
+              ),
             ).catch((err) => {
               if (!this.isAlreadyExistsError(err?.message ?? '')) throw err;
             });
@@ -1139,6 +1138,8 @@ export class HikvisionService {
           }
           job.done++;
         } catch (err: any) {
+          assertLease();
+          if (this.isTransientError(err)) job.retryable = true;
           fail();
           const technical = err?.message ?? "Noma'lum xato";
           this.logger.error(
@@ -1221,6 +1222,9 @@ export interface HikSyncJob {
   id: string;
   hospitalId: string;
   state: 'RUNNING' | 'DONE' | 'FAILED';
+  queuePhase?: 'WAITING' | 'ACTIVE' | 'DONE' | 'FAILED';
+  attempt?: number;
+  retryable?: boolean;
   /** Rasmli faol xodimlar soni */
   total: number;
   /** Rasmi yo'q (yuborilmaydigan) xodimlar */
@@ -1246,7 +1250,6 @@ export interface HikSyncJob {
   message: string | null;
 }
 
-const SYNC_JOB_TTL_MS = 6 * 3600_000;
 const SYNC_MAX_ERRORS = 300;
 const SYNC_ABORT_AFTER_NET_FAILS = 3;
 export let SYNC_RETRY_BASE_MS = 1500;

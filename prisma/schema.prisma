@@ -1648,3 +1648,20 @@ model OpenShiftOffer {
   @@unique([openShiftId, employeeId])
   @@index([employeeId])
 }
+
+// Durable terminal sync queue. Snapshot is UI progress; never contains images/passwords.
+model HikSyncTask {
+  id          String    @id
+  hospitalId  String
+  state       String    @default("WAITING")
+  snapshot    Json
+  attempts    Int       @default(0)
+  availableAt DateTime  @default(dbgenerated("(now() AT TIME ZONE 'UTC'::text)"))
+  leaseOwner  String?
+  leaseUntil  DateTime?
+  createdAt   DateTime  @default(dbgenerated("(now() AT TIME ZONE 'UTC'::text)"))
+  updatedAt   DateTime  @default(dbgenerated("(now() AT TIME ZONE 'UTC'::text)")) @updatedAt
+
+  @@index([hospitalId, createdAt])
+  @@index([state, availableAt])
+}

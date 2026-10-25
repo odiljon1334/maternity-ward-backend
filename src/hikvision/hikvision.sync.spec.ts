@@ -11,7 +11,7 @@ function makeService(prisma: any = {}) {
       k === 'HIK_GATEWAY_URL' ? 'http://gw.local:8080' : d,
     ),
   };
-  return new HikvisionService(config, prisma);
+  return new HikvisionService(config, prisma, {} as any);
 }
 
 const CHALLENGE =
@@ -42,6 +42,19 @@ describe('HikvisionService — digest (nonce qayta ishlatiladi)', () => {
     expect(auth).toMatch(/nonce="abc123"/);
     expect(auth).toMatch(/nc=00000002/);
     expect(auth).toMatch(/uri="\/ISAPI\/b"/);
+  });
+
+  it('lease yo‘qolgach hech qanday terminal HTTP so‘rovi ketmaydi', async () => {
+    const svc: any = makeService();
+    await expect(
+      svc.syncLeaseContext.run(
+        () => {
+          throw new Error('SYNC_LEASE_LOST');
+        },
+        () => svc.digestRequest('POST', 'http://gw.local:8080/write'),
+      ),
+    ).rejects.toThrow('SYNC_LEASE_LOST');
+    expect(mockedRequest).not.toHaveBeenCalled();
   });
 
   it('nonce eskirsa (401) — yangi challenge bilan bir marta qayta yuboriladi', async () => {
@@ -121,6 +134,17 @@ describe('HikvisionService — fon sync', () => {
       .spyOn(fs.promises, 'readFile')
       .mockImplementation(async () => Buffer.from('img') as any);
     jest.spyOn(svc, 'compressFace').mockImplementation(async (b: any) => b);
+    // Unit seam: runSync business logic only; PostgreSQL queue is integration-tested separately.
+    let latest: any = null;
+    svc.syncQueue = {
+      enqueue: async (job: any) => {
+        if (latest?.state === 'RUNNING') return { ...latest };
+        latest = job;
+        void svc.runSync(job);
+        return { ...job };
+      },
+      latest: async () => (latest ? { ...latest } : null),
+    };
     return svc;
   }
 
@@ -137,9 +161,9 @@ describe('HikvisionService — fon sync', () => {
     const addPerson = jest.spyOn(svc, 'addPerson').mockResolvedValue({});
     const addFace = jest.spyOn(svc, 'addFacePicture').mockResolvedValue({});
 
-    const first = svc.startSync('h1');
+    const first = await svc.startSync('h1');
     expect(first.state).toBe('RUNNING');
-    expect(svc.startSync('h1').id).toBe(first.id);
+    expect((await svc.startSync('h1')).id).toBe(first.id);
 
     const res = await svc.syncHospital('h1');
     expect(res).toMatchObject({
@@ -157,7 +181,7 @@ describe('HikvisionService — fon sync', () => {
     // Rasm terminal soniga qarab emas — har xodimga bir marta o'qiladi
     expect((fs.promises.readFile as any).mock.calls.length).toBe(3);
     expect(addFace.mock.calls[0][3]).toEqual({ compressed: true });
-    expect(svc.getSyncStatus('h1').state).toBe('DONE');
+    expect((await svc.getSyncStatus('h1')).state).toBe('DONE');
   });
 
   it("terminal ro'yxati olinmasa — o'sha terminal to'xtatiladi, bitta aniq xato, boshqasi ishlayveradi", async () => {
