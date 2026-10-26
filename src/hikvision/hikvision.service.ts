@@ -1011,6 +1011,21 @@ export class HikvisionService implements OnModuleInit, OnModuleDestroy {
   ) {
     return this.personQueue!.status(hospitalId, employeeId, page, summary);
   }
+  async personDeliveryPeople(
+    hospitalId: string,
+    employeeId?: string,
+    filter = 'ALL',
+    page = 1,
+    summary = false,
+  ) {
+    return this.personQueue!.people(
+      hospitalId,
+      employeeId,
+      filter,
+      page,
+      summary,
+    );
+  }
   async retryPersonDelivery(id: string, hospitalId: string) {
     return this.personQueue!.retry(id, hospitalId);
   }
@@ -1025,7 +1040,7 @@ export class HikvisionService implements OnModuleInit, OnModuleDestroy {
     ].filter((x) => x !== undefined);
     if (codes.some((c) => Number(c) !== 1))
       throw Error(
-        'ERROR:Terminal amalni rad etdi; qurilma javobini tekshiring',
+        `ERROR:Terminal amalni rad etdi. ${translateHikvisionError(parseHikvisionErrorBody(body?.ResponseStatus ?? body))}`,
       );
   }
   private async readTerminalPerson(devIndex: string, employeeNo: string) {
@@ -1171,7 +1186,7 @@ export class HikvisionService implements OnModuleInit, OnModuleDestroy {
       } catch (error: any) {
         if (error?.httpStatus === 400 || error?.httpStatus === 403)
           throw Error(
-            'ERROR:Yuz rasmi terminal tomonidan rad etildi; suratni yoki qurilma imkoniyatini tekshiring',
+            `ERROR:${error.friendlyMessage ?? 'Yuz rasmi terminal tomonidan rad etildi; suratni yoki qurilma imkoniyatini tekshiring'}`,
           );
         throw error;
       }

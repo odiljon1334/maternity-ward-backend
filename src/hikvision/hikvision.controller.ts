@@ -196,6 +196,33 @@ export class HikvisionController {
     );
   }
 
+  @Get('person-delivery-people/:hospitalId')
+  @UseGuards(RolesGuard, TenantScopeGuard)
+  @Roles(...TERMINAL_ROLES)
+  personDeliveryPeople(
+    @Param('hospitalId') hospitalId: string,
+    @Query('employeeId') employeeId: string | undefined,
+    @Query('filter') filter: string | undefined,
+    @Query('page') page: string | undefined,
+    @Query('summary') summary: string | undefined,
+    @CurrentUser('role') role: UserRole,
+    @CurrentUser('hospitalId') jwtHospitalId: string | null,
+  ) {
+    if (!isSuperLike(role) && hospitalId !== jwtHospitalId)
+      throw new ForbiddenException('Bu muassasaga ruxsat yo‘q');
+    return this.hikvision.personDeliveryPeople(
+      hospitalId,
+      employeeId,
+      ['ALL', 'DELIVERED', 'ERROR', 'WAITING', 'NO_PHOTO'].includes(
+        filter ?? '',
+      )
+        ? filter
+        : 'ALL',
+      Math.max(1, Math.min(100000, Number.parseInt(page ?? '1', 10) || 1)),
+      summary === 'true',
+    );
+  }
+
   @Post('person-deliveries/:hospitalId/:id/retry')
   @UseGuards(RolesGuard, TenantScopeGuard)
   @Roles(...TERMINAL_ROLES)

@@ -258,6 +258,162 @@ export class HikPersonQueueService implements OnModuleDestroy {
       counts: Object.fromEntries(groups.map((g) => [g.state, g._count])),
     };
   }
+  async people(
+    hospitalId: string,
+    employeeId?: string,
+    filter = 'ALL',
+    page = 1,
+    summary = false,
+  ) {
+    const missingWhere = {
+      hospitalId,
+      ...(employeeId ? { id: employeeId } : {}),
+      firedAt: null,
+      status: { in: ['ACTIVE', 'ON_LEAVE'] as ('ACTIVE' | 'ON_LEAVE')[] },
+      AND: [
+        { OR: [{ photoUrl: null }, { photoUrl: '' }] },
+        { OR: [{ userId: null }, { user: { status: 'ACTIVE' as const } }] },
+      ],
+    };
+    // Group by employee, not terminal: success requires every current delivery to
+    // be confirmed. Old-ID tombstones cannot inflate upload counts.
+    const [groups, missing] = await Promise.all([
+      this.prisma.$queryRaw<
+        {
+          employeeId: string;
+          uploaded: boolean;
+          failed: boolean;
+          pending: boolean;
+          updatedAt: Date;
+        }[]
+      >`
+        SELECT d."employeeId",bool_and(d.action='UPSERT' AND d.state='DELIVERED'
+          AND d.revision=d."deliveredRevision") AS uploaded,
+          bool_or(d.state='ERROR') AS failed,
+          bool_or(d.state IN ('WAITING','ACTIVE')) AS pending,max(d."updatedAt") AS "updatedAt"
+        FROM "HikPersonDelivery" d LEFT JOIN "Employee" e ON e.id=d."employeeId" AND e."hospitalId"=d."hospitalId"
+        WHERE d."hospitalId"=${hospitalId} AND d.state<>'SKIPPED'
+          AND (${employeeId ?? null}::text IS NULL OR d."employeeId"=${employeeId ?? null})
+          AND (e.id IS NULL OR e."employeeNo"=d."employeeNo")
+        GROUP BY d."employeeId" ORDER BY "updatedAt" DESC,d."employeeId"`,
+      this.prisma.employee.findMany({
+        where: missingWhere,
+        select: { id: true },
+        orderBy: [{ fullName: 'asc' }, { id: 'asc' }],
+      }),
+    ]);
+    const withoutPhoto = missing.length;
+    const allGroups = [
+      ...groups,
+      ...missing
+        .filter((e) => !groups.some((g) => g.employeeId === e.id))
+        .map((e) => ({
+          employeeId: e.id,
+          uploaded: false,
+          failed: false,
+          pending: false,
+          updatedAt: new Date(0),
+        })),
+    ];
+    const counts = {
+      ALL: allGroups.length,
+      DELIVERED: groups.filter((g) => g.uploaded).length,
+      ERROR: groups.filter((g) => g.failed).length,
+      WAITING: groups.filter((g) => g.pending).length,
+      NO_PHOTO: withoutPhoto,
+    };
+    const selected = allGroups.filter((g) =>
+      filter === 'DELIVERED'
+        ? g.uploaded
+        : filter === 'ERROR'
+          ? g.failed
+          : filter === 'WAITING'
+            ? g.pending
+            : true,
+    );
+    const total = filter === 'NO_PHOTO' ? withoutPhoto : selected.length;
+    if (summary) return { employees: [], counts, total, page, pageSize: 30 };
+    const ids = selected
+      .slice((page - 1) * 30, page * 30)
+      .map((g) => g.employeeId);
+    const employees = await this.prisma.employee.findMany({
+      where:
+        filter === 'NO_PHOTO' ? missingWhere : { hospitalId, id: { in: ids } },
+      select: {
+        id: true,
+        fullName: true,
+        employeeNo: true,
+        photoUrl: true,
+        department: { select: { name: true } },
+        position: { select: { name: true } },
+      },
+      ...(filter === 'NO_PHOTO'
+        ? {
+            orderBy: [{ fullName: 'asc' as const }, { id: 'asc' as const }],
+            skip: (page - 1) * 30,
+            take: 30,
+          }
+        : {}),
+    });
+    const deliveries =
+      filter === 'NO_PHOTO'
+        ? []
+        : await this.prisma.hikPersonDelivery.findMany({
+            where: {
+              hospitalId,
+              employeeId: { in: ids },
+              state: { not: 'SKIPPED' },
+            },
+            select: {
+              id: true,
+              employeeId: true,
+              employeeNo: true,
+              fullName: true,
+              terminalId: true,
+              action: true,
+              state: true,
+              lastError: true,
+              photoUrl: true,
+              revision: true,
+              deliveredRevision: true,
+            },
+            orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }],
+          });
+    const terminals = deliveries.length
+      ? await this.prisma.hikTerminal.findMany({
+          where: { hospitalId },
+          select: { id: true, name: true },
+        })
+      : [];
+    const resultIds = filter === 'NO_PHOTO' ? employees.map((e) => e.id) : ids;
+    return {
+      counts,
+      total,
+      page,
+      pageSize: 30,
+      employees: resultIds.map((id) => {
+        const e = employees.find((e) => e.id === id);
+        const tasks = deliveries.filter(
+          (d) => d.employeeId === id && (!e || e.employeeNo === d.employeeNo),
+        );
+        return {
+          id,
+          fullName: e?.fullName ?? tasks[0]?.fullName ?? 'O‘chirilgan xodim',
+          employeeNo: e?.employeeNo ?? tasks[0]?.employeeNo ?? null,
+          photoUrl: e?.photoUrl ?? null,
+          department: e?.department?.name ?? null,
+          position: e?.position?.name ?? null,
+          deliveries: tasks.map((d) => ({
+            ...d,
+            terminalName:
+              terminals.find((t) => t.id === d.terminalId)?.name ??
+              'Uzilgan terminal',
+          })),
+        };
+      }),
+    };
+  }
+
   async retry(id: string, hospitalId: string) {
     const result = await this.prisma.hikPersonDelivery.updateMany({
       where: { id, hospitalId, state: { in: ['ERROR', 'WAITING'] } },

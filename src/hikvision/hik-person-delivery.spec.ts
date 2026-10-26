@@ -114,6 +114,23 @@ describe('Durable employee terminal delivery', () => {
     );
     expect(svc.addFacePicture).not.toHaveBeenCalled();
   });
+  it('face rejection shows the known vendor cause without exposing raw payloads', async () => {
+    const { svc } = setup();
+    jest.spyOn(fs.promises, 'readFile').mockResolvedValue(Buffer.from('photo'));
+    svc.addFacePicture.mockResolvedValue({
+      statusCode: 6,
+      subStatusCode: 'NoFaceDetected',
+      errorMsg: 'PRIVATE_PAYLOAD',
+    });
+    let message = '';
+    try {
+      await svc.deliverPerson(task, jest.fn());
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toContain('Rasmda yuz aniqlanmadi');
+    expect(message).not.toContain('PRIVATE_PAYLOAD');
+  });
   it('name readback mismatch cannot be marked delivered', async () => {
     const { svc } = setup();
     jest.spyOn(fs.promises, 'readFile').mockResolvedValue(Buffer.from('photo'));

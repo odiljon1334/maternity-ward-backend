@@ -369,6 +369,65 @@ async function main() {
     console.log(
       'PASS different terminals run concurrently, same terminal remains serial',
     );
+    await p.hikPersonDelivery.deleteMany();
+    await p.$executeRawUnsafe(
+      'CREATE TABLE "Department" (id TEXT PRIMARY KEY,name TEXT)',
+    );
+    await p.$executeRawUnsafe(
+      'CREATE TABLE "Position" (id TEXT PRIMARY KEY,name TEXT)',
+    );
+    await p.$executeRawUnsafe(
+      'ALTER TABLE "Employee" ADD COLUMN "departmentId" TEXT, ADD COLUMN "positionId" TEXT',
+    );
+    await p.$executeRawUnsafe(
+      `INSERT INTO "Department" VALUES ('dept','Therapy')`,
+    );
+    await p.$executeRawUnsafe(`INSERT INTO "Position" VALUES ('pos','Doctor')`);
+    await p.$executeRawUnsafe(
+      `INSERT INTO "Employee" VALUES ('filter-photo','401','a','Photo Person','/uploads/filter.jpg','ACTIVE',NULL,NULL,'dept','pos'),('filter-none','402','a','No Photo Person',NULL,'ACTIVE',NULL,NULL,'dept','pos')`,
+    );
+    const all = await qa.people('a');
+    assert.equal(all.counts.ALL, 2);
+    assert.equal(all.counts.NO_PHOTO, 1);
+    assert.equal(all.counts.DELIVERED, 0);
+    assert.equal(all.employees[0].department, 'Therapy');
+    assert.equal(all.employees[0].position, 'Doctor');
+    const noPhoto = await qa.people('a', undefined, 'NO_PHOTO');
+    assert.equal(noPhoto.total, 1);
+    assert.equal(noPhoto.employees[0].fullName, 'No Photo Person');
+    assert.equal(noPhoto.employees[0].deliveries.length, 0);
+    await p.$executeRawUnsafe(
+      `UPDATE "HikPersonDelivery" SET state='DELIVERED',"deliveredRevision"=revision WHERE "terminalId"='ta'`,
+    );
+    assert.equal(
+      (await qa.people('a', undefined, 'DELIVERED')).total,
+      0,
+      'one terminal is not full employee success',
+    );
+    await p.$executeRawUnsafe(
+      `UPDATE "HikPersonDelivery" SET state='ERROR',"lastError"='ERROR:No face' WHERE "terminalId"='paused'`,
+    );
+    const errors = await qa.people('a', undefined, 'ERROR');
+    assert.equal(errors.total, 1);
+    assert.equal(
+      errors.employees[0].deliveries.find((d) => d.state === 'ERROR')?.photoUrl,
+      '/uploads/filter.jpg',
+    );
+    await p.$executeRawUnsafe(
+      `UPDATE "HikPersonDelivery" SET state='DELIVERED',"deliveredRevision"=revision`,
+    );
+    assert.equal(
+      (await qa.people('a', undefined, 'DELIVERED')).total,
+      1,
+      'two terminals count as one employee',
+    );
+    const otherTenant = await qa.people('b');
+    assert.equal(otherTenant.counts.ALL, 0);
+    assert.equal(otherTenant.counts.NO_PHOTO, 0);
+    assert.equal(otherTenant.employees.length, 0);
+    console.log(
+      'PASS employee filters: distinct confirmed success, partial delivery excluded, no-photo metadata, failed photo and tenant isolation',
+    );
   } finally {
     worker?.kill('SIGKILL');
     await p.$disconnect();
