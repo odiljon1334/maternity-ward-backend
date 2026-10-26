@@ -204,10 +204,59 @@ export class EmployeesService {
       this.prisma.employee.count({ where }),
     ]);
 
+    const terminalStatuses = await this.terminalPhotoStatuses(data);
     return {
-      data,
+      data: data.map((employee) => ({
+        ...employee,
+        terminalPhotoStatus:
+          terminalStatuses.get(employee.id) ??
+          (employee.photoUrl?.trim() ? 'UNCONFIRMED' : 'NO_PHOTO'),
+      })),
       meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
+  }
+
+  private async terminalPhotoStatuses(
+    employees: {
+      id: string;
+      photoUrl: string | null;
+      employeeNo: string | null;
+    }[],
+  ) {
+    const ids = employees
+      .filter((e) => e.photoUrl?.trim() && e.employeeNo)
+      .map((e) => e.id);
+    const result = new Map<string, string>();
+    if (!ids.length) return result;
+    // One aggregate for this authorized page; never call a terminal or issue per-row queries.
+    const rows = await this.prisma.$queryRaw<
+      {
+        employeeId: string;
+        uploaded: boolean;
+        failed: boolean;
+        pending: boolean;
+      }[]
+    >(Prisma.sql`
+      SELECT d."employeeId",bool_and(COALESCE(d.action='UPSERT' AND d.state='DELIVERED'
+        AND d.revision=d."deliveredRevision" AND d."photoUrl"=e."photoUrl"
+        AND d."deliveredPhotoUrl"=e."photoUrl",false)) AS uploaded,
+        bool_or(d.state='ERROR') AS failed,bool_or(d.state IN ('WAITING','ACTIVE')) AS pending
+      FROM "HikPersonDelivery" d JOIN "Employee" e
+        ON e.id=d."employeeId" AND e."hospitalId"=d."hospitalId" AND e."employeeNo"=d."employeeNo"
+      WHERE e.id IN (${Prisma.join(ids)}) AND d.state<>'SKIPPED'
+      GROUP BY d."employeeId"`);
+    for (const row of rows)
+      result.set(
+        row.employeeId,
+        row.failed
+          ? 'ERROR'
+          : row.pending
+            ? 'WAITING'
+            : row.uploaded
+              ? 'DELIVERED'
+              : 'UNCONFIRMED',
+      );
+    return result;
   }
 
   /** Bo'lim boshlig'ining o'z bo'limi (xodim profili orqali), yo'q bo'lsa null */

@@ -1,3 +1,4 @@
+import { EmployeesService } from '../src/employees/employees.service';
 /** Isolated LOCAL PostgreSQL: outbox atomicity, ordering, restart and tenant isolation. */
 import 'dotenv/config';
 import assert from 'node:assert/strict';
@@ -427,6 +428,73 @@ async function main() {
     assert.equal(otherTenant.employees.length, 0);
     console.log(
       'PASS employee filters: distinct confirmed success, partial delivery excluded, no-photo metadata, failed photo and tenant isolation',
+    );
+    const employeeListService: any = new EmployeesService(p as any, {} as any);
+    const page = [
+      {
+        id: 'filter-photo',
+        photoUrl: '/uploads/filter.jpg',
+        employeeNo: '401',
+      },
+      { id: 'filter-none', photoUrl: null, employeeNo: '402' },
+    ];
+    assert.equal(
+      (await employeeListService.terminalPhotoStatuses(page)).get(
+        'filter-photo',
+      ),
+      'UNCONFIRMED',
+      'missing photo confirmation cannot show a green badge',
+    );
+    await p.$executeRawUnsafe(
+      `UPDATE "HikPersonDelivery" SET "deliveredPhotoUrl"="photoUrl" WHERE "terminalId"='ta'`,
+    );
+    assert.equal(
+      (await employeeListService.terminalPhotoStatuses(page)).get(
+        'filter-photo',
+      ),
+      'UNCONFIRMED',
+      'one NULL confirmation must not be ignored by bool_and',
+    );
+    await p.$executeRawUnsafe(
+      `UPDATE "HikPersonDelivery" SET "deliveredPhotoUrl"="photoUrl"`,
+    );
+    assert.equal(
+      (await employeeListService.terminalPhotoStatuses(page)).get(
+        'filter-photo',
+      ),
+      'DELIVERED',
+    );
+    await p.$executeRawUnsafe(
+      `UPDATE "HikPersonDelivery" SET state='WAITING' WHERE "terminalId"='ta'`,
+    );
+    assert.equal(
+      (await employeeListService.terminalPhotoStatuses(page)).get(
+        'filter-photo',
+      ),
+      'WAITING',
+    );
+    await p.$executeRawUnsafe(
+      `UPDATE "HikPersonDelivery" SET state='ERROR' WHERE "terminalId"='ta'`,
+    );
+    assert.equal(
+      (await employeeListService.terminalPhotoStatuses(page)).get(
+        'filter-photo',
+      ),
+      'ERROR',
+    );
+    await p.$executeRawUnsafe(
+      `UPDATE "HikPersonDelivery" SET state='DELIVERED',"deliveredPhotoUrl"='/uploads/old.jpg' WHERE "terminalId"='ta'`,
+    );
+    assert.equal(
+      (await employeeListService.terminalPhotoStatuses(page)).get(
+        'filter-photo',
+      ),
+      'UNCONFIRMED',
+      'old confirmed photo cannot confirm the current photo',
+    );
+    assert.equal((await employeeListService.terminalPhotoStatuses([])).size, 0);
+    console.log(
+      'PASS list badge aggregate: confirmed current photo only, partial/error/old photo states and empty page',
     );
   } finally {
     worker?.kill('SIGKILL');
