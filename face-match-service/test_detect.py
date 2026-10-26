@@ -16,11 +16,12 @@ class DetectTests(unittest.TestCase):
     def test_counts_zero_one_multiple_without_embeddings(self):
         for count in (0,1,2):
             analyzer=Mock()
-            analyzer.get.return_value=[object() for _ in range(count)]
+            analyzer.det_model.detect.return_value=([object() for _ in range(count)],None)
             with patch.object(app,'get_analyzer',return_value=analyzer):
                 result=app.detect(app.DetectRequest(image=self.image()))
             self.assertEqual(result.model_dump(),{'faceCount':count})
-            analyzer.get.assert_called_once()
+            analyzer.det_model.detect.assert_called_once()
+            analyzer.get.assert_not_called()
 
     def test_invalid_image_is_bad_request_without_running_model(self):
         with patch.object(app,'get_analyzer') as analyzer:

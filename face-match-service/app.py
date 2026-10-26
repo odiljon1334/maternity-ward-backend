@@ -149,5 +149,6 @@ class DetectResponse(BaseModel):
 def detect(req: DetectRequest):
     """Profile upload validation: count faces once; never return embeddings."""
     image = decode_image(req.image)
-    faces = get_analyzer().get(image)
-    return DetectResponse(faceCount=len(faces))
+    # Presence needs detection only; skip recognition/landmark/age models.
+    boxes, _ = get_analyzer().det_model.detect(image, max_num=0, metric="default")
+    return DetectResponse(faceCount=len(boxes))
