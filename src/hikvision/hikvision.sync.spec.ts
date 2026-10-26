@@ -17,6 +17,27 @@ const CHALLENGE =
   'Digest realm="IP Camera", qop="auth", nonce="abc123", algorithm=MD5';
 
 describe('HikvisionService — digest (nonce qayta ishlatiladi)', () => {
+  it('face upsert sends native FDSetUp metadata, not the legacy POST FaceInfo wrapper', async () => {
+    mockedRequest.mockReset();
+    mockedRequest.mockResolvedValue({
+      status: 200,
+      headers: {},
+      data: { statusCode: 1 },
+    });
+    const svc = makeService();
+    await svc.addFacePicture('d1', '101', Buffer.from('jpeg-fixture'), {
+      compressed: true,
+      replace: true,
+    });
+    const request = mockedRequest.mock.calls[0][0];
+    expect(request.method).toBe('PUT');
+    expect(request.url).toContain('/FDSetUp?');
+    const body = request.data.getBuffer().toString();
+    expect(body).toContain('"FPID":"101"');
+    expect(body).toContain('"FDID":"1"');
+    expect(body).not.toContain('"FaceInfo"');
+  });
+
   beforeEach(() => mockedRequest.mockReset());
 
   it("birinchi so'rov 401 → challenge bilan qayta; keyingisi darhol Authorization bilan (1 ta so'rov)", async () => {

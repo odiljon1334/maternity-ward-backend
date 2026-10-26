@@ -492,7 +492,11 @@ export class HikvisionService implements OnModuleInit, OnModuleDestroy {
       const form = new FormData();
       form.append(
         'FaceDataRecord',
-        JSON.stringify({ FaceInfo: { employeeNo, faceLibType: 'blackFD' } }),
+        JSON.stringify(
+          opts.replace
+            ? { faceLibType: 'blackFD', FDID: '1', FPID: employeeNo }
+            : { FaceInfo: { employeeNo, faceLibType: 'blackFD' } },
+        ),
         { contentType: 'application/json' },
       );
       form.append('FaceImage', compressed, {
