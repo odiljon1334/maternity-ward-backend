@@ -21,3 +21,9 @@ Verification:
 - `npm test -- --runInBand hik-person-delivery.spec hikvision.sync.spec hikvision.status.spec` covers remote acknowledgements/readback, face preservation, idempotent deletes, missing photos and stale fences.
 
 Rollout: build both images, take DB backup, run `prisma migrate deploy` before swapping backend replicas, then deploy frontend. Additive table/triggers permit rollback to the old image while preserving queued work, but its legacy direct writers lack the new guarantees. Keep table/triggers when rolling back. The worker never persists vendor payloads, photos or secrets in its UI errors.
+
+## Throughput and status UI
+
+The worker drains ready tasks immediately with at most three concurrent deliveries per process. Claim transactions lock the terminal row and recheck active leases in a fresh statement, keeping one active delivery per terminal across replicas. Network I/O never holds a database transaction. An unchanged previously confirmed photo, name and access validity is read back once without rewriting the person or recompressing the photo. Changes still require write acknowledgement and readback.
+
+The terminal modal has one live summary. `summary=true` omits employee rows and terminal-name queries; details load only on demand. Polling stops when no WAITING/ACTIVE tasks remain. Missing-photo counts appear once.

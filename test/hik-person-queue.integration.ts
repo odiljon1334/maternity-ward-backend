@@ -305,6 +305,70 @@ async function main() {
     console.log(
       'PASS identifier change cleans old ID; hard-delete tombstone survives employee removal',
     );
+    await p.hikPersonDelivery.deleteMany();
+    await p.hikPersonDelivery.createMany({
+      data: [
+        {
+          id: 'speed-1',
+          terminalId: 'ta',
+          hospitalId: 'a',
+          employeeId: 'e1',
+          employeeNo: '201',
+          fullName: 'One',
+          action: 'UPSERT',
+        },
+        {
+          id: 'speed-2',
+          terminalId: 'ta',
+          hospitalId: 'a',
+          employeeId: 'e2',
+          employeeNo: '202',
+          fullName: 'Two',
+          action: 'UPSERT',
+        },
+        {
+          id: 'speed-3',
+          availableAt: new Date(Date.now() + 60000),
+          terminalId: 'paused',
+          hospitalId: 'a',
+          employeeId: 'e3',
+          employeeNo: '203',
+          fullName: 'Three',
+          action: 'UPSERT',
+        },
+      ],
+    });
+    let release!: () => void;
+    let claimed!: () => void;
+    const acquired = new Promise<void>((r) => (claimed = r));
+    const held = new Promise<void>((r) => (release = r));
+    const first = qa.runNext(async () => {
+      claimed();
+      await held;
+    });
+    await acquired;
+    await p.hikPersonDelivery.update({
+      where: { id: 'speed-3' },
+      data: { availableAt: new Date(0) },
+    });
+    let otherTerminal = '';
+    try {
+      await qb.runNext(async (task) => {
+        otherTerminal = task.terminalId;
+      });
+    } finally {
+      release();
+      await first;
+    }
+    assert.equal(
+      otherTerminal,
+      'paused',
+      'busy terminal must not block another terminal or receive concurrent writes',
+    );
+    await qb.runNext(async (task) => assert.equal(task.id, 'speed-2'));
+    console.log(
+      'PASS different terminals run concurrently, same terminal remains serial',
+    );
   } finally {
     worker?.kill('SIGKILL');
     await p.$disconnect();

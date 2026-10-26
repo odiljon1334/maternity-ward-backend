@@ -182,6 +182,7 @@ export class HikvisionController {
     @Param('hospitalId') hospitalId: string,
     @Query('employeeId') employeeId: string | undefined,
     @Query('page') page: string | undefined,
+    @Query('summary') summary: string | undefined,
     @CurrentUser('role') role: UserRole,
     @CurrentUser('hospitalId') jwtHospitalId: string | null,
   ) {
@@ -191,6 +192,7 @@ export class HikvisionController {
       hospitalId,
       employeeId,
       Math.max(1, Math.min(100000, Number.parseInt(page ?? '1', 10) || 1)),
+      summary === 'true',
     );
   }
 

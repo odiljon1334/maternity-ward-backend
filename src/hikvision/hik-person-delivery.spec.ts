@@ -12,15 +12,13 @@ function setup() {
         .mockResolvedValue({ id: 't', hospitalId: 'h', devIndex: 'd' }),
     },
     employee: {
-      findUnique: jest
-        .fn()
-        .mockResolvedValue({
-          id: 'e',
-          hospitalId: 'h',
-          status: 'ACTIVE',
-          photoUrl: null,
-          user: null,
-        }),
+      findUnique: jest.fn().mockResolvedValue({
+        id: 'e',
+        hospitalId: 'h',
+        status: 'ACTIVE',
+        photoUrl: null,
+        user: null,
+      }),
       findMany: jest.fn().mockResolvedValue([{ id: 'e', photoUrl: null }]),
     },
     $executeRaw: jest.fn().mockResolvedValue(1),
@@ -60,6 +58,30 @@ describe('Durable employee terminal delivery', () => {
       reason: 'NO_PHOTO',
     });
     expect(prisma.$executeRaw).not.toHaveBeenCalled();
+  });
+
+  it('unchanged confirmed person/photo requires one read and no device writes or compression', async () => {
+    const { svc } = setup();
+    jest.spyOn(fs.promises, 'readFile').mockResolvedValue(Buffer.from('photo'));
+    svc.readTerminalPerson.mockResolvedValue({
+      employeeNo: '101',
+      name: 'Ali',
+      numOfFace: 1,
+      userType: 'normal',
+      Valid: {
+        enable: true,
+        beginTime: '2020-01-01T00:00:00',
+        endTime: '2037-12-31T23:59:59',
+      },
+    });
+    await svc.deliverPerson(
+      { ...task, deliveredPhotoUrl: task.photoUrl },
+      jest.fn(),
+    );
+    expect(svc.readTerminalPerson).toHaveBeenCalledTimes(1);
+    expect(svc.digestRequest).not.toHaveBeenCalled();
+    expect(svc.addFacePicture).not.toHaveBeenCalled();
+    expect(svc.compressFace).not.toHaveBeenCalled();
   });
 
   it('offline terminal cannot receive a write or confirmation', async () => {

@@ -1007,8 +1007,9 @@ export class HikvisionService implements OnModuleInit, OnModuleDestroy {
     hospitalId: string,
     employeeId?: string,
     page = 1,
+    summary = false,
   ) {
-    return this.personQueue!.status(hospitalId, employeeId, page);
+    return this.personQueue!.status(hospitalId, employeeId, page, summary);
   }
   async retryPersonDelivery(id: string, hospitalId: string) {
     return this.personQueue!.retry(id, hospitalId);
@@ -1098,6 +1099,18 @@ export class HikvisionService implements OnModuleInit, OnModuleDestroy {
       await fence();
       if (await this.readTerminalPerson(terminal.devIndex, task.employeeNo))
         throw Error('WAIT:Terminaldan olib tashlash hali tasdiqlanmadi');
+      return;
+    }
+    if (
+      task.deliveredPhotoUrl === task.photoUrl &&
+      existing?.name === task.fullName &&
+      existing?.userType === 'normal' &&
+      existing?.Valid?.enable === true &&
+      existing?.Valid?.beginTime === '2020-01-01T00:00:00' &&
+      existing?.Valid?.endTime === '2037-12-31T23:59:59' &&
+      Number(existing?.numOfFace ?? 0) > 0
+    ) {
+      await fence();
       return;
     }
     let face: Buffer | null = null;
@@ -1195,7 +1208,7 @@ export class HikvisionService implements OnModuleInit, OnModuleDestroy {
     }
     job.units = employees.length;
     job.message =
-      'Xodim amallari doimiy navbatga yozildi. Yetkazilish holati quyida har bir terminal uchun ko‘rsatiladi.';
+      'Vazifalar doimiy navbatga saqlandi. Terminalga yetkazilmoqda.';
     job.state = 'DONE';
     job.finishedAt = new Date().toISOString();
   }

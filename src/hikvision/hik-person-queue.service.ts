@@ -11,42 +11,74 @@ type Runner = (
 export class HikPersonQueueService implements OnModuleDestroy {
   private readonly logger = new Logger(HikPersonQueueService.name);
   private timer?: ReturnType<typeof setInterval>;
-  private active?: Promise<void>;
+  private readonly active = new Set<Promise<void>>();
   constructor(private readonly prisma: PrismaService) {}
 
   start(runner: Runner) {
     if (this.timer) return;
-    this.timer = setInterval(() => {
-      if (this.active) return;
-      this.active = this.runNext(runner)
-        .catch(() =>
-          this.logger.error('Xodim terminal navbatini bajarib bo‘lmadi'),
-        )
-        .finally(() => {
-          this.active = undefined;
-        });
-    }, 1000);
+    const pump = () => {
+      if (!this.timer) return;
+      while (this.active.size < 3) {
+        let worked = false;
+        const work = this.runNext(runner)
+          .then((result) => {
+            worked = result;
+          })
+          .catch(() =>
+            this.logger.error('Xodim terminal navbatini bajarib bo‘lmadi'),
+          )
+          .finally(() => {
+            this.active.delete(work);
+            // Drain ready work immediately, poll only when idle.
+            if (worked) pump();
+          });
+        this.active.add(work);
+      }
+    };
+    this.timer = setInterval(pump, 1000);
     this.timer.unref();
+    pump();
   }
   async onModuleDestroy() {
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
-    await this.active;
+    await Promise.all(this.active);
   }
 
-  async runNext(runner: Runner) {
+  async runNext(runner: Runner): Promise<boolean> {
     const owner = randomUUID();
-    const rows = await this.prisma.$queryRaw<HikPersonDelivery[]>`
-      UPDATE "HikPersonDelivery" SET "state"='ACTIVE',"leaseOwner"=${owner},
-       "leaseUntil"=(now() AT TIME ZONE 'UTC')+interval '90 seconds',"attempts"="attempts"+1
-      WHERE "id"=(SELECT "id" FROM "HikPersonDelivery"
-       WHERE ("state"='WAITING' AND "availableAt" <= (now() AT TIME ZONE 'UTC'))
-        OR ("state"='ACTIVE' AND "leaseUntil" < (now() AT TIME ZONE 'UTC'))
-       ORDER BY CASE WHEN "action" IN ('DELETE','BLOCK') THEN 0 ELSE 1 END,"availableAt","createdAt"
-       FOR UPDATE SKIP LOCKED LIMIT 1)
-      RETURNING *`;
-    const task = rows[0];
-    if (!task) return;
+    const task = await this.prisma.$transaction(async (tx) => {
+      // Lock the terminal only for the short claim transaction. A fresh statement
+      // below rechecks its active lease, so replicas cannot claim the same device.
+      const terminals = await tx.$queryRaw<{ id: string }[]>`
+        SELECT t.id FROM "HikTerminal" t
+        WHERE EXISTS (SELECT 1 FROM "HikPersonDelivery" d WHERE d."terminalId"=t.id
+          AND ((d.state='WAITING' AND d."availableAt" <= (now() AT TIME ZONE 'UTC'))
+           OR (d.state='ACTIVE' AND d."leaseUntil" < (now() AT TIME ZONE 'UTC'))))
+        AND NOT EXISTS (SELECT 1 FROM "HikPersonDelivery" d WHERE d."terminalId"=t.id
+          AND d.state='ACTIVE' AND d."leaseUntil" >= (now() AT TIME ZONE 'UTC'))
+        ORDER BY (SELECT min(CASE WHEN d.action IN ('DELETE','BLOCK') THEN 0 ELSE 1 END)
+          FROM "HikPersonDelivery" d WHERE d."terminalId"=t.id AND
+          ((d.state='WAITING' AND d."availableAt" <= (now() AT TIME ZONE 'UTC'))
+           OR (d.state='ACTIVE' AND d."leaseUntil" < (now() AT TIME ZONE 'UTC')))), t.id
+        LIMIT 1 FOR UPDATE OF t SKIP LOCKED`;
+      if (!terminals.length) return undefined;
+      const rows = await tx.$queryRaw<HikPersonDelivery[]>`
+        UPDATE "HikPersonDelivery" SET "state"='ACTIVE',"leaseOwner"=${owner},
+         "leaseUntil"=(now() AT TIME ZONE 'UTC')+interval '90 seconds',"attempts"="attempts"+1
+        WHERE "id"=(SELECT d.id FROM "HikPersonDelivery" d
+         WHERE d."terminalId"=${terminals[0].id}
+          AND NOT EXISTS (SELECT 1 FROM "HikPersonDelivery" busy
+           WHERE busy."terminalId"=d."terminalId" AND busy.state='ACTIVE'
+            AND busy."leaseUntil" >= (now() AT TIME ZONE 'UTC'))
+          AND ((d.state='WAITING' AND d."availableAt" <= (now() AT TIME ZONE 'UTC'))
+           OR (d.state='ACTIVE' AND d."leaseUntil" < (now() AT TIME ZONE 'UTC')))
+         ORDER BY CASE WHEN d.action IN ('DELETE','BLOCK') THEN 0 ELSE 1 END,d."availableAt",d."createdAt",d.id
+         FOR UPDATE SKIP LOCKED LIMIT 1)
+        RETURNING *`;
+      return rows[0];
+    });
+    if (!task) return false;
     let lost = false;
     const fence = async () => {
       if (lost) throw Error('LEASE_LOST');
@@ -150,46 +182,55 @@ export class HikPersonQueueService implements OnModuleDestroy {
         },
       });
     }
+    return true;
   }
 
-  async status(hospitalId: string, employeeId?: string, page = 1) {
+  async status(
+    hospitalId: string,
+    employeeId?: string,
+    page = 1,
+    summary = false,
+  ) {
     const where = {
       hospitalId,
       ...(employeeId ? { employeeId } : {}),
       state: { not: 'SKIPPED' },
     };
-    const [items, total, groups, terminals, withoutPhoto] = await Promise.all([
-      this.prisma.hikPersonDelivery.findMany({
-        where,
-        orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }],
-        skip: (page - 1) * 30,
-        take: 30,
-        select: {
-          id: true,
-          terminalId: true,
-          employeeId: true,
-          employeeNo: true,
-          fullName: true,
-          action: true,
-          state: true,
-          revision: true,
-          deliveredRevision: true,
-          attempts: true,
-          lastError: true,
-          confirmedAt: true,
-          updatedAt: true,
-        },
-      }),
-      this.prisma.hikPersonDelivery.count({ where }),
+    const [items, groups, terminals, withoutPhoto] = await Promise.all([
+      summary
+        ? Promise.resolve([])
+        : this.prisma.hikPersonDelivery.findMany({
+            where,
+            orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }],
+            skip: (page - 1) * 30,
+            take: 30,
+            select: {
+              id: true,
+              terminalId: true,
+              employeeId: true,
+              employeeNo: true,
+              fullName: true,
+              action: true,
+              state: true,
+              revision: true,
+              deliveredRevision: true,
+              attempts: true,
+              lastError: true,
+              confirmedAt: true,
+              updatedAt: true,
+            },
+          }),
       this.prisma.hikPersonDelivery.groupBy({
         by: ['state'],
         where,
         _count: true,
       }),
-      this.prisma.hikTerminal.findMany({
-        where: { hospitalId },
-        select: { id: true, name: true, isActive: true },
-      }),
+      summary
+        ? Promise.resolve([])
+        : this.prisma.hikTerminal.findMany({
+            where: { hospitalId },
+            select: { id: true, name: true, isActive: true },
+          }),
       this.prisma.employee.count({
         where: {
           hospitalId,
@@ -210,7 +251,7 @@ export class HikPersonQueueService implements OnModuleDestroy {
           terminals.find((t) => t.id === i.terminalId)?.name ??
           'Uzilgan terminal',
       })),
-      total,
+      total: groups.reduce((sum, group) => sum + group._count, 0),
       withoutPhoto,
       page,
       pageSize: 30,
