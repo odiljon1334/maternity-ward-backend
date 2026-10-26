@@ -1,3 +1,7 @@
+import {
+  BadRequestException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { HikvisionService } from './hikvision.service';
 import * as fs from 'fs';
 
@@ -28,6 +32,7 @@ function setup() {
     prisma as any,
     {} as any,
   );
+  svc.validateProfilePhoto = jest.fn().mockResolvedValue(undefined);
   svc.getTerminalStatusSnapshot = jest.fn().mockResolvedValue({ d: 'online' });
   svc.readTerminalPerson = jest
     .fn()
@@ -84,6 +89,29 @@ describe('Durable employee terminal delivery', () => {
     expect(svc.compressFace).not.toHaveBeenCalled();
   });
 
+  it('face-less stored photo is rejected before any terminal write', async () => {
+    const { svc } = setup();
+    jest.spyOn(fs.promises, 'readFile').mockResolvedValue(Buffer.from('tree'));
+    svc.validateProfilePhoto.mockRejectedValue(
+      new BadRequestException('Rasmda yuz aniqlanmadi'),
+    );
+    await expect(svc.deliverPerson(task, jest.fn())).rejects.toThrow(
+      'ERROR:Rasmda yuz aniqlanmadi',
+    );
+    expect(svc.digestRequest).not.toHaveBeenCalled();
+    expect(svc.addFacePicture).not.toHaveBeenCalled();
+  });
+  it('detection outage remains retryable and cannot write a terminal', async () => {
+    const { svc } = setup();
+    jest.spyOn(fs.promises, 'readFile').mockResolvedValue(Buffer.from('photo'));
+    svc.validateProfilePhoto.mockRejectedValue(
+      new ServiceUnavailableException('Yuz tekshiruvi hozir ishlamayapti'),
+    );
+    await expect(svc.deliverPerson(task, jest.fn())).rejects.toThrow(
+      'WAIT:Yuz tekshiruvi hozir ishlamayapti',
+    );
+    expect(svc.digestRequest).not.toHaveBeenCalled();
+  });
   it('offline terminal cannot receive a write or confirmation', async () => {
     const { svc } = setup();
     svc.getTerminalStatusSnapshot.mockResolvedValue({ d: 'offline' });

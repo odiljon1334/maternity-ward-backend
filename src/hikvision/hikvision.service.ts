@@ -1,3 +1,4 @@
+import { ProfileFaceValidationService } from './profile-face-validation.service';
 import {
   Injectable,
   Optional,
@@ -61,6 +62,7 @@ export class HikvisionService implements OnModuleInit, OnModuleDestroy {
     private readonly prisma: PrismaService,
     private readonly syncQueue: HikSyncQueueService,
     @Optional() private readonly personQueue?: HikPersonQueueService,
+    private readonly profileFaceValidation: ProfileFaceValidationService = new ProfileFaceValidationService(),
   ) {
     this.baseUrl = (
       this.config.get<string>('HIK_GATEWAY_URL', 'http://95.111.252.83:8080') ||
@@ -458,6 +460,10 @@ export class HikvisionService implements OnModuleInit, OnModuleDestroy {
       .toBuffer();
   }
 
+  async validateProfilePhoto(buffer: Buffer) {
+    await this.profileFaceValidation.assertFace(buffer);
+  }
+
   async addFacePicture(
     devIndex: string,
     employeeNo: string,
@@ -472,6 +478,8 @@ export class HikvisionService implements OnModuleInit, OnModuleDestroy {
     const compressed = opts.compressed
       ? imageBuffer
       : await this.compressFace(imageBuffer);
+
+    await this.validateProfilePhoto(compressed);
 
     this.logger.log(
       `Hikvision Face upload: employee=${employeeNo}, devIndex=${devIndex}, ` +
@@ -1145,6 +1153,15 @@ export class HikvisionService implements OnModuleInit, OnModuleDestroy {
       } catch {
         throw Error('ERROR:Profil rasmi topilmadi yoki o‘qib bo‘lmadi');
       }
+    }
+    try {
+      await this.validateProfilePhoto(face!);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Yuz tekshiruvi bajarilmadi';
+      throw Error(
+        `${(error as any)?.getStatus?.() === 400 ? 'ERROR' : 'WAIT'}:${message}`,
+      );
     }
     await fence();
     const response = await this.digestRequest(

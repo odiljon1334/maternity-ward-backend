@@ -1,3 +1,4 @@
+import { ProfileFaceValidationService } from './profile-face-validation.service';
 // hikvision.module.ts
 import { HikSyncQueueService } from './hik-sync-queue.service';
 import { HikPersonQueueService } from './hik-person-queue.service';
@@ -9,7 +10,12 @@ import { PrismaModule } from '../prisma/prisma.module';
 @Module({
   imports: [PrismaModule],
   controllers: [HikvisionController],
-  providers: [HikvisionService, HikSyncQueueService, HikPersonQueueService],
+  providers: [
+    HikvisionService,
+    HikSyncQueueService,
+    HikPersonQueueService,
+    ProfileFaceValidationService,
+  ],
   exports: [HikvisionService],
 })
 export class HikvisionModule {}

@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 
 import numpy as np
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from PIL import Image
 
 logging.basicConfig(level=logging.INFO)
@@ -135,3 +135,19 @@ def verify(req: VerifyRequest):
         referenceFaceFound=True,
         liveFaceFound=True,
     )
+
+
+class DetectRequest(BaseModel):
+    image: str = Field(min_length=1, max_length=2_000_000)
+
+
+class DetectResponse(BaseModel):
+    faceCount: int
+
+
+@app.post("/detect", response_model=DetectResponse)
+def detect(req: DetectRequest):
+    """Profile upload validation: count faces once; never return embeddings."""
+    image = decode_image(req.image)
+    faces = get_analyzer().get(image)
+    return DetectResponse(faceCount=len(faces))

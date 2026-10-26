@@ -46,3 +46,9 @@ Javob:
 threshold`), yoki yuzlardan biri aniqlanmadi
 (`referenceFaceFound`/`liveFaceFound: false`) — bu ikkalasini backend
 tomonda (`FaceMatchService`) ajratib ko'rib chiqiladi.
+
+### `POST /detect`
+
+Internal profile-photo validation. Accepts `{"image":"<base64 JPEG/PNG>"}` and returns only `{"faceCount":1}`. Zero faces or more than one face is rejected by the backend before profile/file/outbox changes. Detection failures return a temporary error and never bypass validation, independently of attendance's `FACE_MATCH_ENABLED` / lenient settings. No images or embeddings are persisted by this endpoint.
+
+Run contract tests with `python -m unittest test_detect.py`. Upload and terminal-delivery gates share a bounded in-memory content-hash cache and deduplicate simultaneous requests; invalid legacy images are also blocked before terminal writes.

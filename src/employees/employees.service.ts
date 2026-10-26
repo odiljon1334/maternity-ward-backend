@@ -490,6 +490,7 @@ export class EmployeesService {
   async updatePhoto(id: string, imageBuffer: Buffer, hospitalId: string) {
     await this.findOne(id, hospitalId);
     const emp = await this.prisma.employee.findUnique({ where: { id } });
+    await this.hikvision.validateProfilePhoto(imageBuffer);
 
     const uploadDir = process.env.UPLOAD_DIR || './uploads';
     const filenameBase = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
@@ -499,14 +500,6 @@ export class EmployeesService {
       filenameBase,
     );
     const photoUrl = `/uploads/${filename}`;
-
-    if (emp?.photoUrl) {
-      const oldFile = path.join(
-        uploadDir,
-        emp.photoUrl.replace(/^\/uploads\//, ''),
-      );
-      if (fs.existsSync(oldFile)) fs.unlinkSync(oldFile);
-    }
 
     const updateData: any = { photoUrl };
 

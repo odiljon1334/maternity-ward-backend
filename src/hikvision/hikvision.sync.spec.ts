@@ -10,7 +10,9 @@ function makeService(prisma: any = {}) {
       k === 'HIK_GATEWAY_URL' ? 'http://gw.local:8080' : d,
     ),
   };
-  return new HikvisionService(config, prisma, {} as any);
+  return new HikvisionService(config, prisma, {} as any, undefined, {
+    assertFace: jest.fn().mockResolvedValue(undefined),
+  } as any);
 }
 
 const CHALLENGE =
@@ -36,6 +38,17 @@ describe('HikvisionService — digest (nonce qayta ishlatiladi)', () => {
     expect(body).toContain('"FPID":"101"');
     expect(body).toContain('"FDID":"1"');
     expect(body).not.toContain('"FaceInfo"');
+  });
+
+  it('direct face upload cannot bypass presence validation', async () => {
+    const svc = makeService();
+    jest.spyOn(svc, 'validateProfilePhoto').mockRejectedValue(Error('NO_FACE'));
+    await expect(
+      svc.addFacePicture('d1', '101', Buffer.from('tree'), {
+        compressed: true,
+      }),
+    ).rejects.toThrow('NO_FACE');
+    expect(mockedRequest).not.toHaveBeenCalled();
   });
 
   beforeEach(() => mockedRequest.mockReset());
