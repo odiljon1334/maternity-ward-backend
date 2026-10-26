@@ -30,7 +30,8 @@
     "db:generate": "prisma generate",
     "db:seed": "ts-node prisma/seed.ts",
     "db:studio": "prisma studio",
-    "db:reset": "prisma migrate reset --force && npm run db:seed"
+    "db:reset": "prisma migrate reset --force && npm run db:seed",
+    "test:hik-person-queue": "node -r ts-node/register/transpile-only test/hik-person-queue.integration.ts"
   },
   "dependencies": {
     "@nestjs/common": "^10.0.0",

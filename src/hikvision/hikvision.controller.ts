@@ -52,7 +52,7 @@ export class HikvisionController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.SUPER_ADMIN)
   addPerson(@Param('devIndex') devIndex: string, @Body() dto: AddPersonDto) {
-    return this.hikvision.addPerson(devIndex, dto);
+    return this.hikvision.queueDevicePerson(devIndex, dto.employeeNo);
   }
 
   @Delete('devices/:devIndex/persons/:employeeNo')
@@ -62,7 +62,7 @@ export class HikvisionController {
     @Param('devIndex') devIndex: string,
     @Param('employeeNo') employeeNo: string,
   ) {
-    return this.hikvision.deletePerson(devIndex, employeeNo);
+    return this.hikvision.queueDevicePerson(devIndex, employeeNo, true);
   }
 
   // Face
@@ -173,6 +173,39 @@ export class HikvisionController {
       throw new ForbiddenException('Shifoxona aniqlanmadi');
     }
     return this.hikvision.toggleTerminal(id, hospitalId, body.isActive);
+  }
+
+  @Get('person-deliveries/:hospitalId')
+  @UseGuards(RolesGuard, TenantScopeGuard)
+  @Roles(...TERMINAL_ROLES)
+  personDeliveries(
+    @Param('hospitalId') hospitalId: string,
+    @Query('employeeId') employeeId: string | undefined,
+    @Query('page') page: string | undefined,
+    @CurrentUser('role') role: UserRole,
+    @CurrentUser('hospitalId') jwtHospitalId: string | null,
+  ) {
+    if (!isSuperLike(role) && hospitalId !== jwtHospitalId)
+      throw new ForbiddenException('Bu muassasaga ruxsat yo‘q');
+    return this.hikvision.personDeliveryStatus(
+      hospitalId,
+      employeeId,
+      Math.max(1, Math.min(100000, Number.parseInt(page ?? '1', 10) || 1)),
+    );
+  }
+
+  @Post('person-deliveries/:hospitalId/:id/retry')
+  @UseGuards(RolesGuard, TenantScopeGuard)
+  @Roles(...TERMINAL_ROLES)
+  retryDelivery(
+    @Param('hospitalId') hospitalId: string,
+    @Param('id') id: string,
+    @CurrentUser('role') role: UserRole,
+    @CurrentUser('hospitalId') jwtHospitalId: string | null,
+  ) {
+    if (!isSuperLike(role) && hospitalId !== jwtHospitalId)
+      throw new ForbiddenException('Bu muassasaga ruxsat yo‘q');
+    return this.hikvision.retryPersonDelivery(id, hospitalId);
   }
 
   // Bulk sync — fon vazifasi: POST darhol javob beradi (ishlayotgan bo'lsa —

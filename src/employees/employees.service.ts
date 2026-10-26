@@ -1,3 +1,4 @@
+import { randomBytes } from 'crypto';
 import {
   Injectable,
   ConflictException,
@@ -311,7 +312,9 @@ export class EmployeesService {
 
       return tx.employee.create({
         data: {
-          employeeNo: dto.employeeNo || undefined,
+          employeeNo:
+            dto.employeeNo ||
+            BigInt('0x' + randomBytes(10).toString('hex')).toString(),
           fullName: dto.fullName,
           gender: dto.gender,
           birthDate: dto.birthDate ? new Date(dto.birthDate) : undefined,
@@ -518,97 +521,8 @@ export class EmployeesService {
       data: updateData,
     });
 
-    // ─── Terminal sync ──────────────────────────────────────────────────────
-    //
-    // ⚠️ Bu yerda KUTILMAYDI.
-    //
-    //   Terminal o'chiq bo'lsa har bir so'rov timeout'gacha osilib turardi
-    //   va rasm yuklash butunlay to'xtab qolardi — holbuki rasm allaqachon
-    //   bazaga saqlangan bo'ladi. Ish jarayoni esa shunday: avval hamma
-    //   xodim suratga olinadi, keyin Kasalxonalar sahifasidagi "Sync"
-    //   tugmasi bilan barcha rasmlar terminalga bir yo'la yuboriladi
-    //   (hikvision.syncHospital — mavjudlarini o'tkazib yuboradi).
-    //
-    //   Shuning uchun: terminal onlayn bo'lsa rasm fonda darhol yetib
-    //   boradi, oflayn bo'lsa — Sync kutadi. Ikkala holatda ham
-    //   foydalanuvchi kutmaydi.
-    const employeeNo = updated.employeeNo;
-    if (employeeNo) {
-      void this.syncFaceToTerminals(
-        hospitalId,
-        employeeNo,
-        updated.fullName,
-        imageBuffer,
-      );
-    }
-    // ───────────────────────────────────────────────────────────────────────
-
+    // The Employee outbox trigger commits per-terminal delivery atomically.
     return updated;
-  }
-
-  /**
-   * Yuzni barcha faol terminallarga yuboradi (fon rejimi).
-   *
-   * HTTP javobini bloklamaydi — xatolar faqat logga yoziladi.
-   * Yetib bormagan rasmlar keyinroq Sync orqali yuboriladi.
-   */
-  private async syncFaceToTerminals(
-    hospitalId: string,
-    employeeNo: string,
-    fullName: string,
-    imageBuffer: Buffer,
-  ): Promise<void> {
-    try {
-      const terminals = await this.prisma.hikTerminal.findMany({
-        where: { hospitalId, isActive: true },
-      });
-      if (!terminals.length) return;
-
-      // Parallel — bittasi o'chiq bo'lsa qolganlari kutmaydi
-      await Promise.all(
-        terminals.map(async (terminal) => {
-          try {
-            try {
-              await this.hikvision.deleteFacePicture(
-                terminal.devIndex,
-                employeeNo,
-              );
-            } catch {
-              // ignore: yuz hali yuklanmagan bo'lishi mumkin
-            }
-
-            try {
-              await this.hikvision.addPerson(terminal.devIndex, {
-                employeeNo,
-                name: fullName,
-              });
-            } catch (err: any) {
-              if (!/alreadyexist/i.test(err?.message ?? '')) throw err;
-            }
-
-            await this.hikvision.addFacePicture(
-              terminal.devIndex,
-              employeeNo,
-              imageBuffer,
-            );
-
-            this.logger.log(
-              `Face synced to terminal ${terminal.name}: ${employeeNo}`,
-            );
-          } catch (err: any) {
-            // Sync keyinroq qayta urinadi — bu yerda faqat qayd etamiz
-            this.logger.warn(
-              `Terminal sync kutilmoqda [${terminal.name}] ${employeeNo}: ` +
-                `${err?.friendlyMessage ?? err?.message}`,
-            );
-          }
-        }),
-      );
-    } catch (err: any) {
-      this.logger.error(
-        `syncFaceToTerminals xatosi (${employeeNo}): ${err?.message}`,
-      );
-    }
   }
 
   /** EMP-XXXXXX formatli eski employee numberlarni raqamli formatga o'tkazish */
@@ -983,23 +897,7 @@ export class EmployeesService {
     // ─── Terminal dan o'chirish ───────────────────────────────────────────────
     // Bu tashqi tarmoq chaqiruvi (Hikvision API), DB emas — shuning uchun
     // $transaction ichiga kiritilmaydi, avvalgidek alohida bajariladi.
-    if (emp.employeeNo) {
-      const terminals = await this.prisma.hikTerminal.findMany({
-        where: { hospitalId, isActive: true },
-      });
-      for (const terminal of terminals) {
-        try {
-          await this.hikvision.deletePerson(terminal.devIndex, emp.employeeNo);
-          this.logger.log(
-            `Person removed from terminal ${terminal.name}: ${emp.employeeNo}`,
-          );
-        } catch (err: any) {
-          this.logger.error(
-            `Terminal remove failed [${terminal.name}]: ${err.message}`,
-          );
-        }
-      }
-    }
+    // Deletion is durably captured by the Employee outbox trigger.
     // ─────────────────────────────────────────────────────────────────────────
 
     // Bajariladigan DB operatsiyalari — hammasi bitta transactionda,

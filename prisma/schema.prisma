@@ -1666,3 +1666,31 @@ model HikSyncTask {
   @@index([hospitalId, createdAt])
   @@index([state, availableAt])
 }
+
+// One durable desired state per terminal/person; survives Employee deletion.
+model HikPersonDelivery {
+  id                String    @id
+  terminalId        String
+  hospitalId        String
+  employeeId        String
+  employeeNo        String
+  fullName          String
+  photoUrl          String?
+  action            String
+  revision          Int       @default(1)
+  deliveredRevision Int       @default(0)
+  state             String    @default("WAITING")
+  attempts          Int       @default(0)
+  lastError         String?
+  deliveredPhotoUrl String?
+  confirmedAt       DateTime?
+  availableAt       DateTime  @default(now())
+  leaseOwner        String?
+  leaseUntil        DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @default(now()) @updatedAt
+
+  @@unique([terminalId, employeeNo])
+  @@index([hospitalId, employeeId])
+  @@index([state, availableAt])
+}

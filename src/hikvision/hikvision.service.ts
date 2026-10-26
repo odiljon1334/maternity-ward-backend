@@ -1,5 +1,7 @@
 import {
   Injectable,
+  Optional,
+  BadRequestException,
   Logger,
   OnModuleInit,
   OnModuleDestroy,
@@ -12,6 +14,8 @@ import * as crypto from 'crypto';
 import FormData from 'form-data';
 import * as fs from 'fs';
 import * as path from 'path';
+import { HikPersonQueueService } from './hik-person-queue.service';
+import { HikPersonDelivery } from '@prisma/client';
 import { HikSyncQueueService } from './hik-sync-queue.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -56,6 +60,7 @@ export class HikvisionService implements OnModuleInit, OnModuleDestroy {
     private readonly config: ConfigService,
     private readonly prisma: PrismaService,
     private readonly syncQueue: HikSyncQueueService,
+    @Optional() private readonly personQueue?: HikPersonQueueService,
   ) {
     this.baseUrl = (
       this.config.get<string>('HIK_GATEWAY_URL', 'http://95.111.252.83:8080') ||
@@ -457,7 +462,7 @@ export class HikvisionService implements OnModuleInit, OnModuleDestroy {
     devIndex: string,
     employeeNo: string,
     imageBuffer: Buffer,
-    opts: { compressed?: boolean } = {},
+    opts: { compressed?: boolean; replace?: boolean } = {},
   ) {
     if (!devIndex) throw new Error('Hikvision devIndex is required');
     if (!employeeNo) throw new Error('Hikvision employeeNo is required');
@@ -473,10 +478,15 @@ export class HikvisionService implements OnModuleInit, OnModuleDestroy {
         `original=${imageBuffer.length}b → compressed=${compressed.length}b`,
     );
 
-    const url = this.buildUrl('/ISAPI/Intelligent/FDLib/FaceDataRecord', {
-      format: 'json',
-      devIndex,
-    });
+    const url = this.buildUrl(
+      opts.replace
+        ? '/ISAPI/Intelligent/FDLib/FDSetUp'
+        : '/ISAPI/Intelligent/FDLib/FaceDataRecord',
+      {
+        format: 'json',
+        devIndex,
+      },
+    );
 
     const createForm = () => {
       const form = new FormData();
@@ -500,7 +510,7 @@ export class HikvisionService implements OnModuleInit, OnModuleDestroy {
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
         const response = await this.digestMultipartRequest(
-          'POST',
+          opts.replace ? 'PUT' : 'POST',
           url,
           createForm,
         );
@@ -641,7 +651,7 @@ export class HikvisionService implements OnModuleInit, OnModuleDestroy {
         gatewayReachable: true,
         statusCheckedAt: new Date().toISOString(),
       };
-    } catch (err) {
+    } catch {
       this.logger.warn(
         'Gateway holatini olib bo‘lmadi; terminallar holati noma’lum',
       );
@@ -906,9 +916,10 @@ export class HikvisionService implements OnModuleInit, OnModuleDestroy {
   //  - Yuz rasmi har xodim uchun bir marta siqiladi (har terminal uchun emas).
 
   onModuleInit() {
+    this.personQueue?.start((task, fence) => this.deliverPerson(task, fence));
     this.syncQueue.start((job, assertLease) =>
       this.syncLeaseContext.run(assertLease, () =>
-        this.runSync(job, assertLease),
+        this.queueHospitalPeople(job, assertLease),
       ),
     );
   }
@@ -956,226 +967,231 @@ export class HikvisionService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private pushSyncError(job: HikSyncJob, e: HikSyncError) {
-    if (job.errors.length < SYNC_MAX_ERRORS) job.errors.push(e);
-    else job.errorsTruncated++;
+  async queueDevicePerson(
+    devIndex: string,
+    employeeNo: string,
+    remove = false,
+  ) {
+    const terminal = await this.prisma.hikTerminal.findUnique({
+      where: { devIndex },
+    });
+    if (!terminal)
+      throw new BadRequestException('Terminal muassasaga biriktirilmagan');
+    const employee = await this.prisma.employee.findUnique({
+      where: { employeeNo },
+      include: { user: { select: { status: true } } },
+    });
+    if (!employee || employee.hospitalId !== terminal.hospitalId)
+      throw new BadRequestException(
+        'Xodim bu terminal muassasasiga tegishli emas',
+      );
+    const action = remove
+      ? 'DELETE'
+      : employee.firedAt ||
+          ['INACTIVE', 'FIRED'].includes(employee.status) ||
+          (employee.user && employee.user.status !== 'ACTIVE')
+        ? 'BLOCK'
+        : 'UPSERT';
+    await this.prisma
+      .$executeRaw`SELECT staffplus_queue_person(${employee.id},${employeeNo},${terminal.hospitalId},${employee.fullName},${employee.photoUrl},${action},${terminal.id})`;
+    return { queued: true };
   }
 
-  private async runSync(
-    job: HikSyncJob,
-    assertLease: () => void = () => undefined,
-  ): Promise<void> {
-    assertLease();
-    const terminals = await this.prisma.hikTerminal.findMany({
-      where: { hospitalId: job.hospitalId, isActive: true },
+  async personDeliveryStatus(
+    hospitalId: string,
+    employeeId?: string,
+    page = 1,
+  ) {
+    return this.personQueue!.status(hospitalId, employeeId, page);
+  }
+  async retryPersonDelivery(id: string, hospitalId: string) {
+    return this.personQueue!.retry(id, hospitalId);
+  }
+
+  private checkDeviceAck(body: any) {
+    const codes = [
+      body?.statusCode,
+      body?.ResponseStatus?.statusCode,
+      ...(body?.UserInfoOutList?.UserInfoOut ?? []).map(
+        (x: any) => x.statusCode,
+      ),
+    ].filter((x) => x !== undefined);
+    if (codes.some((c) => Number(c) !== 1))
+      throw Error(
+        'ERROR:Terminal amalni rad etdi; qurilma javobini tekshiring',
+      );
+  }
+  private async readTerminalPerson(devIndex: string, employeeNo: string) {
+    const response = await this.digestRequest(
+      'POST',
+      this.buildUrl('/ISAPI/AccessControl/UserInfo/Search', {
+        format: 'json',
+        devIndex,
+      }),
+      {
+        data: {
+          UserInfoSearchCond: {
+            searchID: crypto.randomUUID(),
+            searchResultPosition: 0,
+            maxResults: 30,
+            EmployeeNoList: [{ employeeNo }],
+          },
+        },
+      },
+    );
+    const search = response.data?.UserInfoSearch;
+    if (
+      !search ||
+      !Array.isArray(search.UserInfo ?? []) ||
+      !['OK', 'MORE', 'NO MATCH'].includes(search.responseStatusStrg)
+    )
+      throw Error('WAIT:Terminal ro‘yxati ishonchli tasdiqlanmadi');
+    if (search.responseStatusStrg === 'MORE')
+      throw Error('WAIT:Terminal xodim filtri tasdiqlanmadi');
+    return (
+      (search.UserInfo ?? []).find(
+        (x: any) => String(x.employeeNo) === employeeNo,
+      ) ?? null
+    );
+  }
+
+  private async deliverPerson(
+    task: HikPersonDelivery,
+    fence: () => Promise<void>,
+  ) {
+    const terminal = await this.prisma.hikTerminal.findFirst({
+      where: {
+        id: task.terminalId,
+        hospitalId: task.hospitalId,
+        isActive: true,
+      },
     });
-    if (terminals.length === 0) {
-      this.pushSyncError(job, {
-        employeeNo: '-',
-        name: '-',
-        reason: 'Faol terminal topilmadi',
-      });
-      job.state = 'DONE';
-      job.finishedAt = new Date().toISOString();
+    if (!terminal)
+      throw Error('WAIT:Terminal faol emas yoki muassasadan uzilgan');
+    const status = await this.getTerminalStatusSnapshot();
+    if (status[terminal.devIndex] !== 'online')
+      throw Error(
+        status[terminal.devIndex] === 'offline'
+          ? 'WAIT:Terminal offline; qayta ulanganda yuboriladi'
+          : 'WAIT:Terminal ulanishi tasdiqlanmadi; qayta tekshiriladi',
+      );
+    await fence();
+    const existing = await this.readTerminalPerson(
+      terminal.devIndex,
+      task.employeeNo,
+    );
+    if (task.action !== 'UPSERT') {
+      if (existing) {
+        await fence();
+        this.checkDeviceAck(
+          await this.deletePerson(terminal.devIndex, task.employeeNo),
+        );
+      }
+      await fence();
+      if (await this.readTerminalPerson(terminal.devIndex, task.employeeNo))
+        throw Error('WAIT:Terminaldan olib tashlash hali tasdiqlanmadi');
       return;
     }
-
-    const all = await this.prisma.employee.findMany({
-      where: {
-        hospitalId: job.hospitalId,
-        firedAt: null,
-        employeeNo: { not: null },
-      },
-      select: { employeeNo: true, fullName: true, photoUrl: true },
-    });
-    const employees = all.filter((e) => !!e.employeeNo && !!e.photoUrl);
-    job.withoutPhoto = all.length - employees.length;
-    job.total = employees.length;
-    job.units = employees.length * terminals.length;
-
-    const uploadDir = this.config.get<string>('UPLOAD_DIR', './uploads');
-
-    // Yuz rasmi har xodim uchun BIR marta o'qiladi va siqiladi
-    const faces = new Map<string, Promise<Buffer | null>>();
-    const faceOf = (e: {
-      employeeNo: string | null;
-      photoUrl: string | null;
-    }) => {
-      const key = e.employeeNo!;
-      let p = faces.get(key);
-      if (!p) {
-        const file = path.join(
-          uploadDir,
-          e.photoUrl!.replace(/^\/uploads\//, ''),
-        );
-        p = fs.promises
-          .readFile(file)
-          .then((buf) => this.compressFace(buf))
-          .catch(() => null);
-        faces.set(key, p);
-      }
-      return p;
-    };
-    const missingReported = new Set<string>();
-
-    const terminalLimit = envInt(
-      this.config.get('HIK_SYNC_TERMINAL_CONCURRENCY'),
-      3,
-    );
-    const deviceLimit = envInt(
-      this.config.get('HIK_SYNC_DEVICE_CONCURRENCY'),
-      1,
-    );
-
-    await runPool(terminals, terminalLimit, async (terminal) => {
-      assertLease();
-      const stat = {
-        terminalId: terminal.id,
-        terminalName: terminal.name,
-        created: 0,
-        skipped: 0,
-        failed: 0,
-        aborted: false,
-      };
-      job.perTerminal.push(stat);
-
-      const fail = (n = 1) => {
-        stat.failed += n;
-        job.failed += n;
-        job.done += n;
-      };
-
-      // Terminaldagi mavjud userlar: employeeNo → hasFace
-      let existing: Map<string, boolean>;
+    let face: Buffer | null = null;
+    if (task.photoUrl) {
+      // Validate/compress before touching the terminal; rejected files preserve its existing face.
+      const base = path.resolve(
+        this.config.get<string>('UPLOAD_DIR', './uploads'),
+      );
+      const file = path.resolve(
+        base,
+        task.photoUrl.replace(/^\/uploads\//, ''),
+      );
+      if (!file.startsWith(base + path.sep))
+        throw Error('ERROR:Profil rasmi manzili noto‘g‘ri');
       try {
-        existing = await this.withRetry(() =>
-          this.getExistingPersons(terminal.devIndex),
-        );
-      } catch (err: any) {
-        if (this.isTransientError(err)) job.retryable = true;
-        stat.aborted = true;
-        fail(employees.length);
-        this.pushSyncError(job, {
-          employeeNo: '-',
-          name: terminal.name,
-          reason: `${terminal.name}: terminal javob bermadi (${err?.friendlyMessage ?? err?.message ?? 'xato'}) — ${employees.length} xodim yuborilmadi. Terminal internetga ulanganini tekshirib, qayta urinib ko'ring.`,
-        });
-        this.logger.error(
-          `Sync: ${terminal.name} ro'yxatini olib bo'lmadi: ${err?.message}`,
-        );
-        return;
+        face = await this.compressFace(await fs.promises.readFile(file));
+      } catch {
+        throw Error('ERROR:Profil rasmi topilmadi yoki o‘qib bo‘lmadi');
       }
-
-      let consecutiveNetFails = 0;
-      let remaining = employees.length;
-
-      await runPool(employees, deviceLimit, async (employee) => {
-        assertLease();
-        if (stat.aborted) return; // qolganlari pastda bir yo'la hisoblanadi
-        remaining--;
-        const employeeNo = employee.employeeNo!;
-        const personExists = existing.has(employeeNo);
-        const faceExists = existing.get(employeeNo) === true;
-        if (personExists && faceExists) {
-          stat.skipped++;
-          job.skipped++;
-          job.done++;
-          return;
-        }
-
-        const face = faceExists ? null : await faceOf(employee);
-        if (!faceExists && !face) {
-          fail();
-          if (!missingReported.has(employeeNo)) {
-            missingReported.add(employeeNo);
-            this.pushSyncError(job, {
-              employeeNo,
-              name: employee.fullName,
-              reason:
-                "Profil rasmi fayli topilmadi yoki o'qib bo'lmadi — rasmni qayta yuklang",
-            });
-          }
-          return;
-        }
-
-        try {
-          assertLease();
-          let changed = false;
-          if (!personExists) {
-            await this.withRetry(
-              () => (
-                assertLease(),
-                this.addPerson(terminal.devIndex, {
-                  employeeNo,
-                  name: employee.fullName,
-                })
-              ),
-            ).catch((err) => {
-              if (!this.isAlreadyExistsError(err?.message ?? '')) throw err;
-            });
-            changed = true;
-          }
-          if (!faceExists) {
-            await this.withRetry(
-              () => (
-                assertLease(),
-                this.addFacePicture(terminal.devIndex, employeeNo, face!, {
-                  compressed: true,
-                })
-              ),
-            ).catch((err) => {
-              if (!this.isAlreadyExistsError(err?.message ?? '')) throw err;
-            });
-            changed = true;
-          }
-          consecutiveNetFails = 0;
-          if (changed) {
-            stat.created++;
-            job.created++;
-          } else {
-            stat.skipped++;
-            job.skipped++;
-          }
-          job.done++;
-        } catch (err: any) {
-          assertLease();
-          if (this.isTransientError(err)) job.retryable = true;
-          fail();
-          const technical = err?.message ?? "Noma'lum xato";
-          this.logger.error(
-            `[Sync xatoligi | ${employeeNo} @ ${terminal.name}] ${technical}`,
-          );
-          if (this.isTransientError(err)) consecutiveNetFails++;
-          else consecutiveNetFails = 0;
-
-          if (consecutiveNetFails >= SYNC_ABORT_AFTER_NET_FAILS) {
-            stat.aborted = true;
-            fail(remaining);
-            this.pushSyncError(job, {
-              employeeNo: '-',
-              name: terminal.name,
-              reason: `${terminal.name}: terminal ketma-ket javob bermadi — qolgan ${remaining} xodim yuborilmadi. Aloqani tekshirib, qayta urinib ko'ring.`,
-            });
-            remaining = 0;
-            return;
-          }
-          this.pushSyncError(job, {
-            employeeNo,
-            name: employee.fullName,
-            reason: `${terminal.name}: ${err?.friendlyMessage ?? technical}`,
-          });
-        }
-      });
-    });
-
-    job.state = 'DONE';
-    job.finishedAt = new Date().toISOString();
-    this.logger.log(
-      `Sync tugadi (hospital=${job.hospitalId}): ${job.created} yangi, ${job.skipped} skip, ${job.failed} xato, ${job.units} birlik`,
+    }
+    await fence();
+    const response = await this.digestRequest(
+      'PUT',
+      this.buildUrl('/ISAPI/AccessControl/UserInfo/SetUp', {
+        format: 'json',
+        devIndex: terminal.devIndex,
+      }),
+      {
+        data: {
+          UserInfo: {
+            employeeNo: task.employeeNo,
+            name: task.fullName,
+            userType: 'normal',
+            Valid: {
+              enable: true,
+              beginTime: '2020-01-01T00:00:00',
+              endTime: '2037-12-31T23:59:59',
+              timeType: 'local',
+            },
+          },
+        },
+      },
     );
+    this.checkDeviceAck(response.data);
+    if (
+      face &&
+      (task.photoUrl !== task.deliveredPhotoUrl ||
+        Number(existing?.numOfFace ?? 0) === 0)
+    ) {
+      await fence();
+      try {
+        this.checkDeviceAck(
+          await this.addFacePicture(terminal.devIndex, task.employeeNo, face, {
+            compressed: true,
+            replace: true,
+          }),
+        );
+      } catch (error: any) {
+        if (error?.httpStatus === 400 || error?.httpStatus === 403)
+          throw Error(
+            'ERROR:Yuz rasmi terminal tomonidan rad etildi; suratni yoki qurilma imkoniyatini tekshiring',
+          );
+        throw error;
+      }
+    }
+    await fence();
+    const confirmed = await this.readTerminalPerson(
+      terminal.devIndex,
+      task.employeeNo,
+    );
+    if (!confirmed || confirmed.name !== task.fullName)
+      throw Error('WAIT:Xodim ma’lumoti terminalda hali tasdiqlanmadi');
+    if (!face)
+      throw Error('ERROR:Xodim yozuvi yuborildi; yuz rasmi yuklanishi kerak');
+    if (Number(confirmed.numOfFace ?? 0) < 1)
+      throw Error('WAIT:Yuz rasmi terminalda hali tasdiqlanmadi');
   }
 
-  /** Vaqtinchalik xato: tarmoq uzilishi, timeout, 5xx, qurilma band */
+  private async queueHospitalPeople(job: HikSyncJob, assertLease: () => void) {
+    const employees = await this.prisma.employee.findMany({
+      where: { hospitalId: job.hospitalId },
+      select: { id: true, photoUrl: true },
+    });
+    job.total = employees.length;
+    job.withoutPhoto = employees.filter((e) => !e.photoUrl).length;
+    for (const employee of employees) {
+      assertLease();
+      // SQL reads current employee/account state in the same statement; bulk sync cannot resurrect a fired person.
+      await this.prisma.$executeRaw`
+        SELECT staffplus_queue_person(e.id,e."employeeNo",e."hospitalId",e."fullName",e."photoUrl",
+          CASE WHEN e."firedAt" IS NOT NULL OR e.status::text IN ('INACTIVE','FIRED')
+           OR EXISTS (SELECT 1 FROM "User" u WHERE u.id=e."userId" AND u.status::text<>'ACTIVE') THEN 'BLOCK' ELSE 'UPSERT' END)
+        FROM "Employee" e WHERE e.id=${employee.id} AND e."hospitalId"=${job.hospitalId}`;
+      job.done++;
+    }
+    job.units = employees.length;
+    job.message =
+      'Xodim amallari doimiy navbatga yozildi. Yetkazilish holati quyida har bir terminal uchun ko‘rsatiladi.';
+    job.state = 'DONE';
+    job.finishedAt = new Date().toISOString();
+  }
+
   private isTransientError(err: any): boolean {
     if (!err) return false;
     if (
@@ -1250,34 +1266,8 @@ export interface HikSyncJob {
   message: string | null;
 }
 
-const SYNC_MAX_ERRORS = 300;
-const SYNC_ABORT_AFTER_NET_FAILS = 3;
 export let SYNC_RETRY_BASE_MS = 1500;
 /** Testlar uchun: qayta urinish kutishini qisqartirish */
 export function setSyncRetryBaseMs(ms: number) {
   SYNC_RETRY_BASE_MS = ms;
-}
-
-function envInt(v: unknown, fallback: number): number {
-  const n = Number(v);
-  return Number.isFinite(n) && n >= 1 ? Math.min(Math.floor(n), 10) : fallback;
-}
-
-/** items'ni ko'pi bilan `limit` ta parallel ishlov bilan bajaradi */
-async function runPool<T>(
-  items: T[],
-  limit: number,
-  worker: (item: T) => Promise<void>,
-): Promise<void> {
-  let next = 0;
-  const runners = Array.from(
-    { length: Math.min(limit, items.length) },
-    async () => {
-      while (next < items.length) {
-        const item = items[next++];
-        await worker(item);
-      }
-    },
-  );
-  await Promise.all(runners);
 }
