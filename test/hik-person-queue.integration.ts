@@ -50,14 +50,23 @@ async function main() {
     qb = new HikPersonQueueService(other as any);
   try {
     for (const sql of [
-      'CREATE TABLE "User" (id TEXT PRIMARY KEY,status TEXT NOT NULL)',
-      'CREATE TABLE "Employee" (id TEXT PRIMARY KEY,"employeeNo" TEXT,"hospitalId" TEXT,"fullName" TEXT,"photoUrl" TEXT,status TEXT,"firedAt" TIMESTAMP,"userId" TEXT)',
+      `CREATE TYPE "EmployeeStatus" AS ENUM ('ACTIVE','ON_LEAVE','INACTIVE','FIRED')`,
+      `CREATE TYPE "UserStatus" AS ENUM ('ACTIVE','INACTIVE','SUSPENDED')`,
+      'CREATE TABLE "User" (id TEXT PRIMARY KEY,status "UserStatus" NOT NULL)',
+      'CREATE TABLE "Employee" (id TEXT PRIMARY KEY,"employeeNo" TEXT,"hospitalId" TEXT,"fullName" TEXT,"photoUrl" TEXT,status "EmployeeStatus","firedAt" TIMESTAMP,"userId" TEXT)',
       'CREATE TABLE "HikTerminal" (id TEXT PRIMARY KEY,"hospitalId" TEXT,"isActive" BOOLEAN,"devIndex" TEXT,name TEXT)',
     ])
       await p.$executeRawUnsafe(sql);
     for (const sql of statements(
       readFileSync(
         'prisma/migrations/20261026120000_terminal_employee_delivery/migration.sql',
+        'utf8',
+      ),
+    ))
+      await p.$executeRawUnsafe(sql);
+    for (const sql of statements(
+      readFileSync(
+        'prisma/migrations/20261026140000_skip_photoless_terminal_upserts/migration.sql',
         'utf8',
       ),
     ))
@@ -70,6 +79,51 @@ async function main() {
       `INSERT INTO "Employee" VALUES ('ea','101','a','A','/uploads/a.jpg','ACTIVE',NULL,'ua')`,
     );
     assert.equal(await p.hikPersonDelivery.count(), 2);
+    await p.$executeRawUnsafe(
+      `INSERT INTO "Employee" VALUES ('no-photo','999','a','No photo',NULL,'ACTIVE',NULL,NULL)`,
+    );
+    assert.equal(
+      await p.hikPersonDelivery.count({ where: { employeeId: 'no-photo' } }),
+      0,
+    );
+    assert.equal((await qa.status('a', 'no-photo')).withoutPhoto, 1);
+    await p.$executeRawUnsafe(
+      `UPDATE "Employee" SET "photoUrl"='/uploads/new.jpg' WHERE id='no-photo'`,
+    );
+    assert.equal(
+      await p.hikPersonDelivery.count({ where: { employeeId: 'no-photo' } }),
+      2,
+    );
+    await p.$executeRawUnsafe(
+      `UPDATE "Employee" SET "photoUrl"=NULL WHERE id='no-photo'`,
+    );
+    assert.equal(
+      await p.hikPersonDelivery.count({
+        where: { employeeId: 'no-photo', state: 'SKIPPED' },
+      }),
+      2,
+    );
+    assert.equal((await qa.status('a', 'no-photo')).total, 0);
+    await p.$executeRawUnsafe(
+      `UPDATE "Employee" SET status='INACTIVE' WHERE id='no-photo'`,
+    );
+    assert.equal(
+      await p.hikPersonDelivery.count({
+        where: { employeeId: 'no-photo', action: 'BLOCK', state: 'WAITING' },
+      }),
+      2,
+    );
+    await p.$executeRawUnsafe(`DELETE FROM "Employee" WHERE id='no-photo'`);
+    assert.equal(
+      await p.hikPersonDelivery.count({
+        where: { employeeId: 'no-photo', action: 'DELETE' },
+      }),
+      2,
+    );
+    await p.hikPersonDelivery.deleteMany({ where: { employeeId: 'no-photo' } });
+    console.log(
+      'PASS no-photo creates no tasks, photo queues, removal skips; block/delete still queued; count is distinct employees',
+    );
     console.log(
       'PASS employee creation queues each configured terminal including disabled; other tenant excluded',
     );

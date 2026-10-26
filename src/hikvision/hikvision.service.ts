@@ -1063,6 +1063,8 @@ export class HikvisionService implements OnModuleInit, OnModuleDestroy {
     task: HikPersonDelivery,
     fence: () => Promise<void>,
   ) {
+    if (task.action === 'UPSERT' && !task.photoUrl?.trim())
+      throw Error('SKIP:NO_PHOTO');
     const terminal = await this.prisma.hikTerminal.findFirst({
       where: {
         id: task.terminalId,

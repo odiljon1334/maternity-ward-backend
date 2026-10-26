@@ -83,11 +83,13 @@ describe('Durable employee terminal delivery', () => {
       'hali tasdiqlanmadi',
     );
   });
-  it('missing profile image is visible after person write; not falsely complete', async () => {
+  it('photo-less employee causes zero terminal requests', async () => {
     const { svc } = setup();
     await expect(
       svc.deliverPerson({ ...task, photoUrl: null }, jest.fn()),
-    ).rejects.toThrow('yuz rasmi');
+    ).rejects.toThrow('SKIP:NO_PHOTO');
+    expect(svc.getTerminalStatusSnapshot).not.toHaveBeenCalled();
+    expect(svc.digestRequest).not.toHaveBeenCalled();
   });
   it('BLOCK deletes device access and waits for absence readback', async () => {
     const { svc } = setup();

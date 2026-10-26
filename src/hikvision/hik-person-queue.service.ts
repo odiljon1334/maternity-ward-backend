@@ -118,8 +118,13 @@ export class HikPersonQueueService implements OnModuleDestroy {
       await this.prisma.hikPersonDelivery.updateMany({
         where: { id: task.id, leaseOwner: owner, revision: task.revision },
         data: {
-          state: permanent ? 'ERROR' : 'WAITING',
-          lastError: message,
+          state:
+            reason === 'SKIP:NO_PHOTO'
+              ? 'SKIPPED'
+              : permanent
+                ? 'ERROR'
+                : 'WAITING',
+          lastError: reason === 'SKIP:NO_PHOTO' ? null : message,
           availableAt: new Date(
             Date.now() +
               Math.min(300_000, 5000 * 2 ** Math.min(task.attempts, 6)),
@@ -148,8 +153,12 @@ export class HikPersonQueueService implements OnModuleDestroy {
   }
 
   async status(hospitalId: string, employeeId?: string, page = 1) {
-    const where = { hospitalId, ...(employeeId ? { employeeId } : {}) };
-    const [items, total, groups, terminals] = await Promise.all([
+    const where = {
+      hospitalId,
+      ...(employeeId ? { employeeId } : {}),
+      state: { not: 'SKIPPED' },
+    };
+    const [items, total, groups, terminals, withoutPhoto] = await Promise.all([
       this.prisma.hikPersonDelivery.findMany({
         where,
         orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }],
@@ -181,6 +190,18 @@ export class HikPersonQueueService implements OnModuleDestroy {
         where: { hospitalId },
         select: { id: true, name: true, isActive: true },
       }),
+      this.prisma.employee.count({
+        where: {
+          hospitalId,
+          ...(employeeId ? { id: employeeId } : {}),
+          firedAt: null,
+          status: { in: ['ACTIVE', 'ON_LEAVE'] },
+          AND: [
+            { OR: [{ photoUrl: null }, { photoUrl: '' }] },
+            { OR: [{ userId: null }, { user: { status: 'ACTIVE' } }] },
+          ],
+        },
+      }),
     ]);
     return {
       items: items.map((i) => ({
@@ -190,6 +211,7 @@ export class HikPersonQueueService implements OnModuleDestroy {
           'Uzilgan terminal',
       })),
       total,
+      withoutPhoto,
       page,
       pageSize: 30,
       counts: Object.fromEntries(groups.map((g) => [g.state, g._count])),
