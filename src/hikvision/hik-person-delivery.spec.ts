@@ -4,11 +4,23 @@ import * as fs from 'fs';
 function setup() {
   const prisma = {
     hikTerminal: {
+      findUnique: jest
+        .fn()
+        .mockResolvedValue({ id: 't', hospitalId: 'h', devIndex: 'd' }),
       findFirst: jest
         .fn()
         .mockResolvedValue({ id: 't', hospitalId: 'h', devIndex: 'd' }),
     },
     employee: {
+      findUnique: jest
+        .fn()
+        .mockResolvedValue({
+          id: 'e',
+          hospitalId: 'h',
+          status: 'ACTIVE',
+          photoUrl: null,
+          user: null,
+        }),
       findMany: jest.fn().mockResolvedValue([{ id: 'e', photoUrl: null }]),
     },
     $executeRaw: jest.fn().mockResolvedValue(1),
@@ -41,6 +53,15 @@ const task: any = {
 afterEach(() => jest.restoreAllMocks());
 
 describe('Durable employee terminal delivery', () => {
+  it('explicit person API does not claim a photo-less employee was queued', async () => {
+    const { svc, prisma } = setup();
+    await expect(svc.queueDevicePerson('d', '101')).resolves.toEqual({
+      queued: false,
+      reason: 'NO_PHOTO',
+    });
+    expect(prisma.$executeRaw).not.toHaveBeenCalled();
+  });
+
   it('offline terminal cannot receive a write or confirmation', async () => {
     const { svc } = setup();
     svc.getTerminalStatusSnapshot.mockResolvedValue({ d: 'offline' });

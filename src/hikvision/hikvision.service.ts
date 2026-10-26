@@ -996,6 +996,8 @@ export class HikvisionService implements OnModuleInit, OnModuleDestroy {
           (employee.user && employee.user.status !== 'ACTIVE')
         ? 'BLOCK'
         : 'UPSERT';
+    if (action === 'UPSERT' && !employee.photoUrl?.trim())
+      return { queued: false, reason: 'NO_PHOTO' };
     await this.prisma
       .$executeRaw`SELECT staffplus_queue_person(${employee.id},${employeeNo},${terminal.hospitalId},${employee.fullName},${employee.photoUrl},${action},${terminal.id})`;
     return { queued: true };
