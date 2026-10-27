@@ -291,6 +291,29 @@ export class EmployeesController {
     return result;
   }
 
+  @Post(':id/photo/validate')
+  @RequirePermission('employees.edit')
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.ASSISTANT_ADMIN,
+    UserRole.ADMIN,
+    UserRole.DIRECTOR,
+  )
+  @UseInterceptors(FileInterceptor('photo', imageUpload(10)))
+  async validatePhoto(
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File,
+    @CurrentUser('hospitalId') hospitalId: string,
+    @Query('targetHospitalId') targetHospitalId?: string,
+  ) {
+    if (!file) throw new BadRequestException('Rasm yuklanmadi');
+    return this.service.validatePhoto(
+      id,
+      file.buffer,
+      resolveHospitalId(hospitalId, targetHospitalId),
+    );
+  }
+
   @Post(':id/photo')
   @RequirePermission('employees.edit')
   @Roles(

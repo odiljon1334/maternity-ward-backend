@@ -535,6 +535,13 @@ export class EmployeesService {
     return normalized.value;
   }
 
+  /** Validate a preview without writing files, employee data or delivery tasks. */
+  async validatePhoto(id: string, imageBuffer: Buffer, hospitalId: string) {
+    await this.findOne(id, hospitalId);
+    await this.hikvision.validateProfilePhoto(imageBuffer);
+    return { valid: true };
+  }
+
   // ─── 2. updatePhoto — terminal sync to'liq qayta yozildi ─────────────────────
   async updatePhoto(id: string, imageBuffer: Buffer, hospitalId: string) {
     await this.findOne(id, hospitalId);
